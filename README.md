@@ -1,4 +1,4 @@
-# Labor Market Analytics (study project)
+# Labor Market Analytics
 
 Проект аналитики IT-рынка труда: сбор вакансий (сначала HeadHunter), нормализация, анализ зарплат и спроса по ролям/регионам, тренды; позже — AI-анализ.
 
