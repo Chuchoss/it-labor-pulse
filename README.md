@@ -61,34 +61,30 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 
 Позже: UI `:3000`, API `:8080`. Контракты уже есть: [`api/openapi.yaml`](./api/openapi.yaml), [`libs/proto/lma/`](./libs/proto/lma/).
 
-## API docs
+## Документация API / API documentation
 
-Канон контракта: [`api/openapi.yaml`](./api/openapi.yaml).
-
-Публичный HTML (GitHub Pages, после push в `main`):
+Публичная HTML-документация REST (GitHub Pages):
 
 | | |
 |--|--|
-| Redoc | `https://<user-or-org>.github.io/<repo>/` |
-| Swagger UI | `https://<user-or-org>.github.io/<repo>/swagger.html` |
+| **Redoc** | https://chuchoss.github.io/it-labor-pulse/ |
+| **Swagger UI** | https://chuchoss.github.io/it-labor-pulse/swagger.html |
 
-Статика: [`docs/api-site/`](./docs/api-site/). Workflow: [`.github/workflows/docs-pages.yml`](./.github/workflows/docs-pages.yml).  
-Один раз: Settings → Pages → Source = **GitHub Actions**. Подробнее: [ADR 008](./docs/architecture/adr/008-github-pages-openapi.md), [03-api.md](./docs/architecture/03-api.md).
+Канон контракта в репозитории: [`api/openapi.yaml`](./api/openapi.yaml).  
+Статика сайта: [`docs/api-site/`](./docs/api-site/). Workflow: [`.github/workflows/docs-pages.yml`](./.github/workflows/docs-pages.yml).  
+Подробнее: [03-api.md](./docs/architecture/03-api.md), [ADR 008](./docs/architecture/adr/008-github-pages-openapi.md).
 
-Локально (нужен интернет — Redoc/Swagger с jsDelivr): скопируй yaml в site и открой HTML, например:
+Локальный preview (нужен интернет — Redoc/Swagger с jsDelivr):
 
 ```bash
 cp api/openapi.yaml docs/api-site/openapi.yaml
 # затем открой docs/api-site/index.html в браузере (или любой static server)
 ```
 
-## Документация
+## Архитектура
 
-Полный архитектурный пакет:
-
-👉 **[docs/architecture/](./docs/architecture/)**
-
-Рекомендуемый порядок чтения: [docs/architecture/README.md](./docs/architecture/README.md).
+Полный архитектурный пакет: **[docs/architecture/](./docs/architecture/)**.  
+Порядок чтения: [docs/architecture/README.md](./docs/architecture/README.md).
 
 Полезное рядом:
 

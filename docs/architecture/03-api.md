@@ -404,10 +404,10 @@ components:
 
 Полный OpenAPI: [`api/openapi.yaml`](../../api/openapi.yaml) (канонический путь; держать в синхроне с этим документом).
 
-**Публичная HTML-документация (GitHub Pages):** после push в `main` и включения Pages (Source = GitHub Actions) —
+**Публичная HTML-документация (GitHub Pages):**
 
-- Redoc (landing): `https://<user-or-org>.github.io/<repo>/`
-- Swagger UI: `https://<user-or-org>.github.io/<repo>/swagger.html`
+- Redoc (landing): https://chuchoss.github.io/it-labor-pulse/
+- Swagger UI: https://chuchoss.github.io/it-labor-pulse/swagger.html
 
 Статика: [`docs/api-site/`](../../api-site/); workflow копирует yaml на build — см. [ADR 008](./adr/008-github-pages-openapi.md), [10-cicd.md](./10-cicd.md).
 

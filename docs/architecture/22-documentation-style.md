@@ -81,7 +81,7 @@ Header `info.description` держи кратким: что это за конт
 | Статика | [`docs/api-site/`](../api-site/): Redoc (`index.html`) + Swagger UI (`swagger.html`) |
 | CI | [`.github/workflows/docs-pages.yml`](../../.github/workflows/docs-pages.yml) копирует yaml → `docs/api-site/openapi.yaml` и деплоит artifact |
 | CDN | Redoc / Swagger UI с **jsDelivr**; для просмотра нужна сеть (offline не цель) |
-| URL | `https://<user-or-org>.github.io/<repo>/` — см. [03-api.md](./03-api.md), [ADR 008](./adr/008-github-pages-openapi.md) |
+| URL | https://chuchoss.github.io/it-labor-pulse/ (Redoc), …/swagger.html (Swagger UI) — см. [03-api.md](./03-api.md), [ADR 008](./adr/008-github-pages-openapi.md) |
 | Включение | Repo Settings → Pages → Source = **GitHub Actions** (один раз после появления репо на GitHub) |
 
 ---
