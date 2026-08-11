@@ -24,4 +24,4 @@ curl -X POST http://localhost:8080/api/v1/admin/ingest/runs \
 
 ## Attribution
 
-В UI и README: данные вакансий принадлежат площадкам (HH и др.); учебный проект; соблюдать ToS.
+В UI и README: данные вакансий принадлежат площадкам (HH и др.); соблюдать ToS.

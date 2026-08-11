@@ -8,9 +8,9 @@ info:
     AI- и Perspectives («Тенденции»)-маршруты помечены x-lifecycle: target.
   version: 1.0.0
   contact:
-    name: LMA study project
+    name: LMA
   license:
-    name: Proprietary study project
+    name: Proprietary
 
 servers:
   - url: http://localhost:8080
