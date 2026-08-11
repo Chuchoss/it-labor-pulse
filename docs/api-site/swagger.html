@@ -3,58 +3,115 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LMA API — Swagger UI</title>
+    <!-- Project Pages live under /<repo>/ — required so ./openapi.yaml resolves correctly without a trailing slash. -->
+    <base href="/it-labor-pulse/" />
+    <title>IT Labor Pulse API — Swagger UI</title>
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"
     />
     <style>
+      :root {
+        --nav-bg: #0f172a;
+        --nav-fg: #f8fafc;
+        --nav-muted: #94a3b8;
+        --nav-link: #7dd3fc;
+        --nav-link-hover: #e0f2fe;
+        --accent: #38bdf8;
+      }
       body {
         margin: 0;
         padding: 0;
       }
       .api-site-nav {
-        font-family: system-ui, sans-serif;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px 20px;
+        font-family: "Segoe UI", system-ui, sans-serif;
         font-size: 14px;
-        padding: 10px 16px;
-        background: #1f2937;
-        color: #f9fafb;
+        padding: 12px 20px;
+        background: var(--nav-bg);
+        color: var(--nav-fg);
+        border-bottom: 1px solid #1e293b;
+      }
+      .api-site-brand {
+        font-weight: 700;
+        font-size: 15px;
+        letter-spacing: 0.01em;
+        margin-right: 8px;
+      }
+      .api-site-brand span {
+        color: var(--accent);
+      }
+      .api-site-tabs {
+        display: flex;
+        align-items: center;
+        gap: 4px;
       }
       .api-site-nav a {
-        color: #93c5fd;
-        margin-right: 16px;
+        color: var(--nav-link);
+        text-decoration: none;
+        padding: 4px 10px;
+        border-radius: 6px;
       }
       .api-site-nav a:hover {
-        color: #dbeafe;
+        color: var(--nav-link-hover);
+        background: rgba(125, 211, 252, 0.08);
       }
       .api-site-nav .current {
-        color: #f9fafb;
+        color: var(--nav-fg);
         font-weight: 600;
-        margin-right: 16px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        background: rgba(248, 250, 252, 0.08);
       }
       .api-site-note {
-        opacity: 0.75;
+        color: var(--nav-muted);
         font-size: 12px;
+        margin-left: auto;
+      }
+      .api-site-note code {
+        color: #cbd5e1;
+        font-size: 11px;
+      }
+      /* Keep Swagger chrome from colliding with our top nav */
+      .swagger-ui .topbar {
+        display: none;
+      }
+      .swagger-ui .info .title {
+        font-size: 1.75rem;
+      }
+      @media (max-width: 720px) {
+        .api-site-note {
+          margin-left: 0;
+          width: 100%;
+        }
       }
     </style>
   </head>
   <body>
     <nav class="api-site-nav" aria-label="API docs">
-      <a href="./index.html">Redoc</a>
-      <span class="current">Swagger UI (Try it)</span>
+      <div class="api-site-brand">IT Labor Pulse <span>API</span></div>
+      <div class="api-site-tabs">
+        <a href="index.html">Redoc</a>
+        <span class="current" aria-current="page">Swagger UI</span>
+      </div>
       <span class="api-site-note">
-        Source of truth: <code>api/openapi.yaml</code> (copied here on Pages build).
-        UI scripts from CDN — offline preview needs network.
+        Spec: <code>api/openapi.yaml</code> · Try it against local/deployed servers from the spec
       </span>
     </nav>
     <div id="swagger-ui"></div>
     <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
     <script>
       window.onload = () => {
+        // Resolve via document.baseURI so project Pages base path is respected.
+        const specUrl = new URL("./openapi.yaml", document.baseURI).href;
         window.ui = SwaggerUIBundle({
-          url: "./openapi.yaml",
+          url: specUrl,
           dom_id: "#swagger-ui",
           deepLinking: true,
+          persistAuthorization: true,
           presets: [SwaggerUIBundle.presets.apis],
           layout: "BaseLayout",
         });

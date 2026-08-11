@@ -1,11 +1,14 @@
 # Publish OpenAPI docs (Redoc + Swagger UI) to GitHub Pages.
 # Docs: docs/architecture/10-cicd.md, 22-documentation-style.md, ADR 008
 #
-# Enable once (repo Settings → Pages):
+# Enable once (repo Settings → Pages → Build and deployment):
 #   Source = GitHub Actions
 #
-# URL after first successful deploy:
-#   https://<user-or-org>.github.io/<repo>/
+# Project site URL (this repo):
+#   https://chuchoss.github.io/it-labor-pulse/
+#
+# Site HTML uses <base href="/it-labor-pulse/"> and relative ./openapi.yaml
+# so the spec loads under the project Pages subpath.
 
 name: docs-pages
 
@@ -37,7 +40,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Copy OpenAPI into site (source of truth stays api/openapi.yaml)
-        run: cp api/openapi.yaml docs/api-site/openapi.yaml
+        run: |
+          cp api/openapi.yaml docs/api-site/openapi.yaml
+          test -f docs/api-site/index.html
+          test -f docs/api-site/swagger.html
+          test -f docs/api-site/openapi.yaml
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
