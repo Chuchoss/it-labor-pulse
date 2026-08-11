@@ -2,8 +2,8 @@
 # Docs: docs/architecture/10-cicd.md, 13-testing.md
 #
 # Branch model:
-#   develop → deploy-dev  (environment: development)
-#   main    → deploy-prod (environment: production, require reviewers on GitHub)
+#   developer  → deploy-dev  (environment: development)
+#   production → deploy-prod (environment: production, require reviewers on GitHub)
 #
 # Required status check for branch protection: job name "test"
 
@@ -11,9 +11,9 @@ name: ci-cd
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [developer, production]
   push:
-    branches: [develop, main]
+    branches: [developer, production]
 
 concurrency:
   group: ci-cd-${{ github.workflow }}-${{ github.ref }}
@@ -34,20 +34,52 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Block accidental .env commit
+        run: |
+          set -euo pipefail
+          if [ -f .env ]; then
+            echo "::error::.env must not be in the repository (see .gitignore / 17-secrets-management.md)"
+            exit 1
+          fi
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error::.env is tracked by git — remove it and rotate secrets"
+            exit 1
+          fi
+          echo ".env not present / not tracked — OK"
+
       - name: Check OpenAPI stub present
         run: |
+          set -euo pipefail
           test -f api/openapi.yaml
+          # Minimal shape checks (fail the gate if the contract stub is broken)
+          grep -qE '^openapi:[[:space:]]' api/openapi.yaml
+          grep -qE '^paths:|^  /' api/openapi.yaml
           echo "openapi.yaml OK"
 
-      # --- TODO (when Go modules appear): lint + unit ---
+      - name: Check env template present
+        run: |
+          set -euo pipefail
+          test -f .env.example
+          echo ".env.example OK"
+
+      - name: Go unit tests (graceful if no modules yet)
+        run: |
+          set -euo pipefail
+          if [ -f go.mod ] || [ -f go.work ] || \
+             find . -path ./.git -prune -o -name go.mod -print -quit | grep -q .; then
+            echo "Go module(s) detected — running unit tests"
+            go test ./...
+          else
+            echo "No go.mod / go.work yet — skipping go test (enable when modules land; see 13-testing.md)"
+          fi
+
+      # --- TODO (when Go modules appear): lint ---
       # - name: Setup Go
       #   uses: actions/setup-go@v5
       #   with:
       #     go-version-file: go.work   # or go.mod path
       # - name: golangci-lint
       #   uses: golangci/golangci-lint-action@v6
-      # - name: Go unit tests (no integration tag, no network)
-      #   run: go test ./...
 
       # --- TODO (when apps/web exists): frontend unit ---
       # - name: Setup Node
@@ -66,21 +98,21 @@ jobs:
       #   with:
       #     lint: true
       #     breaking: true
-      #     breaking_against: "https://github.com/${{ github.repository }}.git#branch=main"
+      #     breaking_against: "https://github.com/${{ github.repository }}.git#branch=production"
 
-      # --- TODO (push main only): integration + migrate smoke ---
+      # --- TODO (push production only): integration + migrate smoke ---
       # - name: Go integration tests
-      #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/production'
       #   run: go test -tags=integration ./...
 
-      - name: CI gate placeholder
+      - name: CI gate summary
         run: |
-          echo "TODO: enable go test / Vitest / buf when modules appear (see 10-cicd.md, 13-testing.md)"
+          echo "Gate job 'test' passed critical checks (OpenAPI, no .env, go test if modules exist)."
           echo "Suite intent:"
-          echo "  PR + develop: lint + unit + contract lite"
-          echo "  main push:    + integration (when code exists)"
-          if [ "${{ github.ref }}" = "refs/heads/main" ] && [ "${{ github.event_name }}" = "push" ]; then
-            echo "main push: stricter gate path (integration TODO)"
+          echo "  PR + developer: lint + unit + contract lite"
+          echo "  production push: + integration (when code exists)"
+          if [ "${{ github.ref }}" = "refs/heads/production" ] && [ "${{ github.event_name }}" = "push" ]; then
+            echo "production push: stricter gate path (integration TODO)"
           fi
 
   # ---------------------------------------------------------------------------
@@ -91,7 +123,7 @@ jobs:
     needs: [test]
     if: >
       github.event_name == 'push'
-      && github.ref == 'refs/heads/develop'
+      && github.ref == 'refs/heads/developer'
       && github.event.repository.fork == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -122,7 +154,7 @@ jobs:
     needs: [test]
     if: >
       github.event_name == 'push'
-      && github.ref == 'refs/heads/main'
+      && github.ref == 'refs/heads/production'
       && github.event.repository.fork == false
     runs-on: ubuntu-latest
     timeout-minutes: 45

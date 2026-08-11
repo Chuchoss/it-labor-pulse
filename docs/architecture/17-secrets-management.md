@@ -222,8 +222,8 @@ kubectl -n lma-dev create secret generic lma-secrets \
 
 | Environment (Settings → Environments) | Branch / job | Protection | Что класть |
 |---------------------------------------|--------------|------------|------------|
-| `development` | push `develop` → `deploy-dev` | auto / optional reviewers | kube/OIDC **dev**, registry write для dev tags |
-| `production` | push `main` → `deploy-prod` | **Required reviewers** | kube/OIDC **prod**, отдельный registry/cloud; **не** копировать dev-значения |
+| `development` | push `developer` → `deploy-dev` | auto / optional reviewers | kube/OIDC **dev**, registry write для dev tags |
+| `production` | push `production` → `deploy-prod` | **Required reviewers** (solo: self-approve или временно без reviewers) | kube/OIDC **prod**, отдельный registry/cloud; **не** копировать dev-значения |
 | `stage` (later) | tags / manual | optional reviewers | свои secrets |
 
 Создай Environments до первого реального деплоя. Имена должны совпадать с `environment:` в workflow (`development`, `production`).
@@ -260,7 +260,7 @@ GitHub Actions → OIDC token → Cloud IAM / GHCR → short-lived creds → kub
 | Коммит `kubeconfig` в `deploy/` | полный доступ к кластеру |
 | Передача prod DB password в каждый PR job | не нужно для unit-тестов |
 
-PR из fork: только lint/test без secrets; deploy — только из `main`/tags в trusted environment.
+PR из fork: только lint/test без secrets; deploy — только из `developer`/`production`/tags в trusted environment.
 
 ---
 

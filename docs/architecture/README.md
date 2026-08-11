@@ -42,7 +42,7 @@ IT Labor Market Analytics (LMA) — платформа аналитики рын
 | 7 | [07-messaging.md](./07-messaging.md) | Kafka topics, DLQ, idempotency |
 | 8 | [08-integrations-and-extensibility.md](./08-integrations-and-extensibility.md) | Адаптеры источников, AI, Perspectives / «Тенденции» |
 | 9 | [09-deployment.md](./09-deployment.md) | Compose + Kubernetes |
-| 10 | [10-cicd.md](./10-cicd.md) | GitHub Actions: ветки develop/main, gate test→deploy, branch protection, миграции |
+| 10 | [10-cicd.md](./10-cicd.md) | GitHub Actions: ветки developer/production, gate test→deploy, branch protection, миграции |
 | 11 | [11-observability-security.md](./11-observability-security.md) | Logs/metrics/traces, ToS, SLO lite; указатели на secrets и logging |
 | 12 | [12-local-dev.md](./12-local-dev.md) | Local DX, Compose profiles, make, troubleshooting |
 | 13 | [13-testing.md](./13-testing.md) | Стратегия тестов: пирамида, DoD, CI-матрица, план по фазам |

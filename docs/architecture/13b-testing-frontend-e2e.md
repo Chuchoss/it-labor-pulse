@@ -152,7 +152,7 @@ Base URL: `http://localhost:3000` (web), API через тот же origin proxy
 
 ## 7. Когда запускать
 
-| Suite | PR | main | Nightly |
+| Suite | PR | production | Nightly |
 |-------|----|------|---------|
 | Vitest unit/component | ✅ required | ✅ | ✅ |
 | Playwright full journeys | ❌ | опц. 1 smoke | ✅ required job |

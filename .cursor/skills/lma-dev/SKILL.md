@@ -116,7 +116,7 @@ make migrate-up
 
 5. Стиль: `docs/architecture/20-code-style.md`, `.editorconfig`, `.golangci.yml`.
 
-6. Тесты: `docs/architecture/13-testing.md` (PR = unit; main = integration; nightly = E2E).
+6. Тесты: `docs/architecture/13-testing.md` (PR = unit; production = integration; nightly = E2E).
 
 
 

@@ -35,7 +35,7 @@ LMA — production-like продукт. Тесты должны:
 
 1. **Ловить регрессии нормализации зарплат и парсинга HH до merge** — это главный риск аналитики.
 2. **Не зависеть от живого HH в CI** — только фикстуры / `httptest`.
-3. **Быть дешёвыми на PR** — unit + lint + contract lite; тяжёлое — на push `main` (перед prod) / nightly; `develop` → dev deploy после того же PR-набора.
+3. **Быть дешёвыми на PR** — unit + lint + contract lite; тяжёлое — на push `production` (перед prod) / nightly; `developer` → dev deploy после того же PR-набора.
 4. **Согласоваться с фазами** — не требовать Kafka/CH/Playwright в Phase 0.
 5. **Test-first для критичной логики Phase 0–1** — перед кодом ingest/normalize: table-driven кейсы + golden по [`testdata/hh/`](../../testdata/hh/); см. [00-overview § Test-first](./00-overview.md#test-first--тесты-до-фичи-phase-01).
 
@@ -50,7 +50,7 @@ LMA — production-like продукт. Тесты должны:
 | Go integration | [testcontainers-go](https://github.com/testcontainers/testcontainers-go) (PG, Redis; Phase 2 — Redpanda) **или** compose `local-pg` / `local-redis` в job |
 | Migrations smoke | [golang-migrate](https://github.com/golang-migrate/migrate) (`up` / `down` / `up` снова) |
 | OpenAPI | lint (`spectral` / `redocly`) + опц. [Schemathesis](https://schemathesis.readthedocs.io/) / request validation в BFF-тестах |
-| gRPC | `buf lint` + `buf breaking` (против `main`) |
+| gRPC | `buf lint` + `buf breaking` (против `production`) |
 | Frontend unit | Vitest + Testing Library + MSW |
 | E2E | Playwright против Compose stack |
 | CI | GitHub Actions — см. [10-cicd.md](./10-cicd.md) |
@@ -62,10 +62,10 @@ LMA — production-like продукт. Тесты должны:
 ```text
                     /\
                    /  \         E2E Playwright (Compose)
-                  /----\        — nightly / main post-deploy
+                  /----\        — nightly / production post-deploy
                  /      \
                 /--------\      Integration (PG, Redis, Kafka TC)
-               /          \     — push main (+ opt. PR labeled)
+               /          \     — push production (+ opt. PR labeled)
               /------------\
              /              \   Contract (OpenAPI, buf, BFF↔Query)
             /----------------\  — каждый PR (когда артефакты есть)
@@ -80,8 +80,8 @@ LMA — production-like продукт. Тесты должны:
 | **Unit TS** | formatters, API mappers, critical widgets | секунды | высокая | PR required |
 | **Adapter fixtures** | HH JSON → draft (без сети) | секунды | высокая | PR required |
 | **Contract** | OpenAPI lint/validate, buf, BFF↔Query semantics | десятки сек | высокая | PR required |
-| **Integration** | repos + migrate, Redis hit/miss, HH httptest end-to-end page | 1–5 мин | средняя | **main** (не блокер каждого PR) |
-| **E2E / Smoke** | dashboard + filter; admin ingest fixture-mode | 5–15 мин | ниже | **nightly** / post-deploy main |
+| **Integration** | repos + migrate, Redis hit/miss, HH httptest end-to-end page | 1–5 мин | средняя | **production** (не блокер каждого PR) |
+| **E2E / Smoke** | dashboard + filter; admin ingest fixture-mode | 5–15 мин | ниже | **nightly** / post-deploy production |
 
 Подробности: [13a](./13a-testing-backend.md), [13b](./13b-testing-frontend-e2e.md).
 
@@ -111,8 +111,8 @@ LMA — production-like продукт. Тесты должны:
 | Query aggregate | Unit SQL builder или integration на seeded PG |
 | React util / mapper | Vitest |
 | Critical UI widget (KPI, filters) | Testing Library + MSW |
-| User journey (dashboard) | Playwright — можно land на main/nightly, не блокер первого PR виджета |
-| Миграция PG | `migrate up/down/up` smoke в CI main |
+| User journey (dashboard) | Playwright — можно land на production/nightly, не блокер первого PR виджета |
+| Миграция PG | `migrate up/down/up` smoke в CI production |
 | Proto / OpenAPI breaking | `buf breaking` / OpenAPI lint на PR |
 
 ### До кода Phase 1 ingest
@@ -152,11 +152,11 @@ LMA — production-like продукт. Тесты должны:
 
 | Gate | Когда | При flaky |
 |------|-------|-----------|
-| lint + unit + fixtures + contract | **каждый PR** (`develop`/`main`) — merge blocker; job `test` | чинить сразу |
-| integration (testcontainers) | **push `main`** перед prod (+ опц. label `run-integration` на PR) | retry 1×; иначе quarantine issue |
-| migrate up/down/up | PR (dry/SQL lint) + main (против реального PG в job) | блокер deploy |
-| deploy | только после зелёного `test`; `develop`→dev, `main`→prod | см. [10](./10-cicd.md) |
-| Playwright E2E | **nightly** + опц. после deploy `main` | **не** required check на каждый PR |
+| lint + unit + fixtures + contract | **каждый PR** (`developer`/`production`) — merge blocker; job `test` | чинить сразу |
+| integration (testcontainers) | **push `production`** перед prod (+ опц. label `run-integration` на PR) | retry 1×; иначе quarantine issue |
+| migrate up/down/up | PR (dry/SQL lint) + production (против реального PG в job) | блокер deploy |
+| deploy | только после зелёного `test`; `developer`→dev, `production`→prod | см. [10](./10-cicd.md) |
+| Playwright E2E | **nightly** + опц. после deploy `production` | **не** required check на каждый PR |
 | Live HH dry-run | только manual / secret-protected workflow | никогда в PR |
 
 Правило: если E2E красный, а unit/integration зелёные — сначала triage окружения Compose; не отключать unit-asserts.
@@ -212,15 +212,15 @@ docs/architecture/
 
 ## 7. Матрица CI
 
-Связь с [10-cicd.md](./10-cicd.md). Канон workflow: [`.github/workflows/ci-cd.yml`](../../.github/workflows/ci-cd.yml) — job **`test`** (required check) → `deploy-dev` / `deploy-prod` только при `needs: [test]` и push в `develop` / `main`.
+Связь с [10-cicd.md](./10-cicd.md). Канон workflow: [`.github/workflows/ci-cd.yml`](../../.github/workflows/ci-cd.yml) — job **`test`** (required check) → `deploy-dev` / `deploy-prod` только при `needs: [test]` и push в `developer` / `production`.
 
-| Проверка | PR → `develop`/`main` | push `develop` → deploy **dev** | push `main` → deploy **prod** | Nightly | После deploy |
-|----------|----------------------|----------------------------------|---------------------------------|---------|--------------|
+| Проверка | PR → `developer`/`production` | push `developer` → deploy **dev** | push `production` → deploy **prod** | Nightly | После deploy |
+|----------|-------------------------------|-----------------------------------|-------------------------------------|---------|--------------|
 | `golangci-lint` / `eslint`+`tsc` | ✅ | ✅ | ✅ | ✅ | — |
 | `go test` unit + HH fixtures (без TC) | ✅ | ✅ | ✅ | ✅ | — |
 | Vitest (web) | ✅ | ✅ | ✅ | ✅ | — |
 | OpenAPI lint | ✅ | ✅ | ✅ | ✅ | — |
-| `buf lint` (+ `buf breaking` vs main) | ✅ | ✅ | ✅ | ✅ | — |
+| `buf lint` (+ `buf breaking` vs production) | ✅ | ✅ | ✅ | ✅ | — |
 | migrate SQL present / `migrate up` dry | ✅ dry | ✅ dry | ✅ against PG | ✅ | ✅ job before apps |
 | Integration PG/Redis (testcontainers) | ❌ / label | опц. | ✅ | ✅ | — |
 | Contract BFF↔Query | ✅ если пакет есть | ✅ | ✅ | ✅ | — |
@@ -236,8 +236,8 @@ docs/architecture/
 
 | Job | Бюджет |
 |-----|--------|
-| PR / develop lint+unit+contract | < 5–8 мин |
-| main + integration | < 15 мин |
+| PR / developer lint+unit+contract | < 5–8 мин |
+| production + integration | < 15 мин |
 | nightly E2E | < 25 мин |
 
 ---
@@ -285,7 +285,7 @@ docs/architecture/
 |-------|------------|
 | CI matrix как в §7 стабилизирована | required checks |
 | Post-deploy smoke | curl + opt. 1 Playwright |
-| Image scan (trivy) | recommended на main |
+| Image scan (trivy) | recommended на production |
 | Load smoke | optional, вне PR |
 
 ### Phase 4 — AI + multi-source job boards
@@ -314,7 +314,7 @@ docs/architecture/
 
 | Проверка | Когда | Как |
 |----------|-------|-----|
-| Migration smoke | main / deploy | golang-migrate up → down → up на чистой БД |
+| Migration smoke | production / deploy | golang-migrate up → down → up на чистой БД |
 | Secrets hygiene | всегда | нет `HH_*` токенов в CI env для unit; fixture mode |
 | Structured log fields (smoke) | opt. Phase 3 | не ассертить секреты/PII в log output tests |
 | Load smoke | Phase 3+ optional | k6/vegeta на summary endpoint stage — **не** PR gate |
@@ -379,16 +379,16 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  PR[PR to develop or main] --> L[lint]
+  PR[PR to developer or production] --> L[lint]
   L --> U[unit + fixtures]
   U --> C[contract + OpenAPI + buf]
   C --> OK{job test green?}
   OK -->|yes| Merge[merge allowed]
   OK -->|no| Block[no merge / no deploy]
-  PushDev[push develop] --> T1[test]
+  PushDev[push developer] --> T1[test]
   T1 --> Dev[deploy-dev]
   Dev --> S1[smoke]
-  PushMain[push main] --> T2[test + integration]
+  PushProd[push production] --> T2[test + integration]
   T2 --> Prod[deploy-prod]
   Prod --> S2[smoke]
   N[Nightly] --> E2E[Playwright journeys]

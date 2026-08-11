@@ -14,7 +14,7 @@ name: docs-pages
 
 on:
   push:
-    branches: [main]
+    branches: [production]
     paths:
       - "api/openapi.yaml"
       - "docs/api-site/**"

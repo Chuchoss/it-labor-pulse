@@ -5,9 +5,9 @@
 | Env | Назначение | Инфра | CI trigger (см. [10-cicd.md](./10-cicd.md)) |
 |-----|------------|-------|---------------------------------------------|
 | local | Разработка | Docker Compose | — |
-| dev | Интеграция | k8s namespace `lma-dev` | push `develop` после job `test` |
+| dev | Интеграция | k8s namespace `lma-dev` | push `developer` после job `test` |
 | stage | Pre-prod | `lma-stage` | tags / manual (later) |
-| prod | Production-like | `lma-prod` / managed data | push `main` после `test` + Environment approval |
+| prod | Production-like | `lma-prod` / managed data | push `production` после `test` + Environment approval |
 
 ## Local: Docker Compose layout
 

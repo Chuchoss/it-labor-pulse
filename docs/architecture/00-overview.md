@@ -232,7 +232,7 @@ gantt
 
 | До кода фичи | Вместе с фичей |
 |--------------|----------------|
-| Кейсы normalize (mid / gross / FX / outliers / role) по [15](./15-normalization-rules.md) | Integration PG/Redis на `main` |
+| Кейсы normalize (mid / gross / FX / outliers / role) по [15](./15-normalization-rules.md) | Integration PG/Redis на `production` |
 | Фикстуры HH + ожидаемые draft ([`testdata/hh/`](../../testdata/hh/)) | Contract BFF↔Query / OpenAPI |
 | Pure checkpoint: cursor только после успешной страницы | Vitest на formatters / critical widgets |
 | OpenAPI lint на затронутые пути | Playwright journeys — nightly, не каждый PR |

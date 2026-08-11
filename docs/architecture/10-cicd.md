@@ -13,31 +13,32 @@ GitLab CI — эквивалентные стадии, если репозито
 
 ---
 
-## Branch model (рекомендация)
+## Branch model
 
-Простая схема **develop → dev, main → prod** (удобно для «пушим → тесты → выкатываем»):
+Схема **`developer` → dev, `production` → prod** (удобно для «пушим → тесты → выкатываем»):
 
 | Branch | Назначение | Env после зелёного CI |
 |--------|------------|------------------------|
-| `feature/*`, `fix/*` | работа → PR | нет деплоя |
-| `develop` | интеграция | **dev** (auto) |
-| `main` | production-ready | **prod** (auto после test + Environment protection) |
+| `feature/*`, `fix/*` | работа → PR в `developer` | нет деплоя |
+| `developer` | интеграция (default branch) | **dev** (auto) |
+| `production` | production-ready | **prod** (auto после test + Environment protection) |
 | tags `vX.Y.Z` / `release/*` | опц. stage / ручной promote | **stage** (позже) |
 
 ```mermaid
 flowchart LR
-  F[feature/*] -->|PR| D[develop]
+  F[feature/*] -->|PR| D[developer]
   D -->|CI test| DEV[deploy dev]
-  D -->|PR / merge| M[main]
-  M -->|CI test + approval| PROD[deploy prod]
+  D -->|PR / merge| P[production]
+  P -->|CI test + approval| PROD[deploy prod]
 ```
 
 Правила:
 
-- В `develop` и `main` — только через PR (branch protection).
-- Merge в `develop` / `main` возможен только если required check **`test`** зелёный.
-- Hotfix: PR в `main` (и при необходимости cherry-pick / merge обратно в `develop`).
-- Долгоживущий `develop` оправдан именно связкой «dev env ≠ prod»; чистый GitHub Flow (`main` → только dev) — альтернатива, если prod ещё нет.
+- В `production` — только через PR (branch protection). В `developer` — required status check `test`; PR тоже рекомендуется.
+- Merge в `developer` / `production` возможен только если required check **`test`** зелёный.
+- Hotfix: PR в `production` (и при необходимости cherry-pick / merge обратно в `developer`).
+- Default branch репозитория: **`developer`** (дневная работа и PR). Стабильная линия — `production`.
+- Старый `main` (если остался) — не использовать; удалить после переключения default.
 
 ---
 
@@ -45,12 +46,12 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  Push[push / PR to develop or main] --> Test[job: test]
+  Push[push / PR to developer or production] --> Test[job: test]
   Test -->|fail| Stop[стоп — merge/deploy запрещены]
   Test -->|success| Branch{branch + event}
   Branch -->|PR only| Done[готово к merge]
-  Branch -->|push develop| Dev[job: deploy-dev]
-  Branch -->|push main| Prod[job: deploy-prod]
+  Branch -->|push developer| Dev[job: deploy-dev]
+  Branch -->|push production| Prod[job: deploy-prod]
   Dev --> SmokeDev[smoke]
   Prod --> SmokeProd[smoke]
 ```
@@ -61,12 +62,12 @@ flowchart TB
 | Нет деплоя при fail | GitHub не запускает downstream при failure `test` |
 | PR не деплоит | `deploy-*` только при `github.event_name == 'push'` |
 | Fork без secrets | deploy не на `pull_request` из fork; Environment secrets недоступны fork PR; см. § Forks |
-| Prod строже | suite на `main` шире; Environment `production` + required reviewers |
+| Prod строже | suite на `production` шире; Environment `production` + required reviewers |
 
-### Что гоняем на develop vs main (согласовано с [13](./13-testing.md))
+### Что гоняем на developer vs production (согласовано с [13](./13-testing.md))
 
-| Suite | PR → `develop`/`main` | push `develop` (→ deploy dev) | push `main` (→ deploy prod) | Nightly |
-|-------|----------------------|-------------------------------|-----------------------------|---------|
+| Suite | PR → `developer`/`production` | push `developer` (→ deploy dev) | push `production` (→ deploy prod) | Nightly |
+|-------|-------------------------------|----------------------------------|-----------------------------------|---------|
 | lint + unit Go/TS + HH fixtures | ✅ required | ✅ | ✅ | ✅ |
 | contract lite (OpenAPI, buf, BFF↔Query) | ✅ required | ✅ | ✅ | ✅ |
 | migrate dry / SQL present | ✅ | ✅ | ✅ | ✅ |
@@ -77,7 +78,9 @@ flowchart TB
 | Playwright E2E | ❌ | ❌ | опц. 1 smoke | ✅ required job |
 | live HH | ❌ | ❌ | ❌ | manual + secrets |
 
-Итого: **develop** = PR-набор + deploy в dev; **main** = PR-набор + integration + более строгий prod deploy.
+Итого: **developer** = PR-набор + deploy в dev; **production** = PR-набор + integration + более строгий prod deploy.
+
+**Сейчас (до появления Go/TS модулей):** job `test` обязанно падает, если нет `api/openapi.yaml` / `.env.example`, или если в репо закоммичен `.env`. `go test` запускается только при наличии `go.mod`/`go.work`, иначе skip с логом. Когда модули появятся — раскомментировать lint/Vitest/buf/integration в workflow.
 
 ---
 
@@ -96,13 +99,13 @@ flowchart LR
 | Stage | Что | Когда |
 |-------|-----|-------|
 | lint | `golangci-lint`, `eslint`/`tsc`, proto lint (`buf lint`), OpenAPI lint | каждый PR / push |
-| test (PR / develop) | Go unit + HH fixtures (без сети); Vitest; contract BFF↔Query; `buf breaking`; migrate dry | **required** check `test` |
-| test (main) | то же + integration (testcontainers PG/Redis); migrate up/down/up | push `main` перед deploy |
+| test (PR / developer) | Go unit + HH fixtures (без сети); Vitest; contract BFF↔Query; `buf breaking`; migrate dry | **required** check `test` |
+| test (production) | то же + integration (testcontainers PG/Redis); migrate up/down/up | push `production` перед deploy |
 | test (nightly) | Playwright E2E + опц. Schemathesis / load smoke | schedule, не PR-gate |
 | build | Docker multi-stage per service | после зелёного `test` на push |
-| push | GHCR / registry | push `develop` / `main`, tags |
+| push | GHCR / registry | push `developer` / `production`, tags |
 | migrate | Job `migrate-pg` / `migrate-ch` (golang-migrate) | deploy job before app rollout |
-| deploy | `kubectl`/`helm`/`kustomize` | `develop` → dev auto; `main` → prod + approval |
+| deploy | `kubectl`/`helm`/`kustomize` | `developer` → dev auto; `production` → prod + approval |
 | smoke | curl health + summary; опц. 1 Playwright | после deploy |
 
 ---
@@ -124,7 +127,7 @@ flowchart LR
 
 | | |
 |--|--|
-| Trigger | push `main` (paths: `api/openapi.yaml`, `docs/api-site/**`, сам workflow) + `workflow_dispatch` |
+| Trigger | push `production` (paths: `api/openapi.yaml`, `docs/api-site/**`, сам workflow) + `workflow_dispatch` |
 | Шаги | checkout → `cp api/openapi.yaml docs/api-site/openapi.yaml` → `upload-pages-artifact` → `deploy-pages` |
 | Permissions | `pages: write`, `id-token: write`, `contents: read` |
 | Source of truth | только `api/openapi.yaml`; копия в site — артефакт build, не коммитить |
@@ -139,19 +142,22 @@ flowchart LR
 
 | Job | Trigger | Условие | Secrets |
 |-----|---------|---------|---------|
-| `test` | `pull_request` + `push` на `develop`/`main` | всегда | нет (только fixtures / public) |
-| `deploy-dev` | push | `needs: [test]`, ref = `develop`, не fork | Environment **`development`** |
-| `deploy-prod` | push | `needs: [test]`, ref = `main`, не fork | Environment **`production`** (+ reviewers) |
+| `test` | `pull_request` + `push` на `developer`/`production` | всегда | нет (только fixtures / public) |
+| `deploy-dev` | push | `needs: [test]`, ref = `developer`, не fork | Environment **`development`** |
+| `deploy-prod` | push | `needs: [test]`, ref = `production`, не fork | Environment **`production`** (+ reviewers) |
 
-Шаги `test` (сейчас stubs с TODO — зелёные на пустом репо; по мере появления модулей раскомментировать):
+Шаги `test` (критичные проверки уже реальные; остальное — TODO до модулей):
 
 1. Checkout  
-2. OpenAPI present / lint stub  
-3. TODO: Setup Go → `golangci-lint` → `go test ./...` (unit; **без** `-tags=integration`)  
-4. TODO: Setup Node → `npm ci && npm test` (Vitest)  
-5. TODO: `buf lint` + `buf breaking --against main`  
-6. На `main` (push): TODO `go test -tags=integration ./...`  
-7. Не запускать на PR: Playwright full, live HH, deploy secrets  
+2. **Fail**, если `.env` в дереве / tracked  
+3. OpenAPI present + минимальная структура (`openapi:`, paths)  
+4. `.env.example` present  
+5. `go test ./...` если есть `go.mod`/`go.work`, иначе skip  
+6. TODO: Setup Go → `golangci-lint`  
+7. TODO: Setup Node → `npm ci && npm test` (Vitest)  
+8. TODO: `buf lint` + `buf breaking --against production`  
+9. На `production` (push): TODO `go test -tags=integration ./...`  
+10. Не запускать на PR: Playwright full, live HH, deploy secrets  
 
 Шаги `deploy-*` (stubs, Phase 3+):
 
@@ -165,18 +171,57 @@ flowchart LR
 
 ## Branch protection (включить на GitHub)
 
-Settings → Branches → Branch protection rules для **`develop`** и **`main`**:
+Settings → Branches → Branch protection rules для **`developer`** и **`production`**:
 
-| Настройка | Значение |
-|-----------|----------|
-| Require a pull request before merging | ✅ |
-| Require status checks to pass before merging | ✅ |
-| Status checks that are required | **`test`** (имя job из `ci-cd.yml`) |
-| Require branches to be up to date before merging | ✅ (желательно) |
-| Do not allow bypassing the above settings | ✅ для `main` |
-| Restrict who can push | опц.; без прямого push в `main` |
+| Настройка | `developer` | `production` |
+|-----------|-------------|--------------|
+| Require a pull request before merging | рекомендуется ✅ | ✅ обязательно |
+| Require status checks to pass before merging | ✅ | ✅ |
+| Status checks that are required | **`test`** | **`test`** |
+| Require branches to be up to date before merging | ✅ (желательно) | ✅ |
+| Do not allow bypassing the above settings | желательно | ✅ |
+| Restrict who can push | опц. | без прямого push |
 
-После первого успешного прогона Actions check `test` появится в списке — выбери его как required.
+### Ручные клики (если `gh` недоступен)
+
+1. Открой https://github.com/Chuchoss/it-labor-pulse/settings/branches  
+2. **Add rule** → Branch name pattern: `production`  
+   - ✅ Require a pull request before merging (1 approval — для solo можно 0, но PR обязателен)  
+   - ✅ Require status checks to pass before merging → после первого зелёного CI выбери check **`test`**  
+   - ✅ Require branches to be up to date before merging  
+   - ✅ Do not allow bypassing the above settings  
+   - Save  
+3. **Add rule** → pattern: `developer`  
+   - ✅ Require status checks → **`test`**  
+   - PR before merge — рекомендуется (для solo можно выключить, если нужен прямой push)  
+   - Save  
+4. После первого успешного Actions-прогона check `test` появится в списке — выбери его как required (если ещё серый).
+
+### CLI (`gh`), когда установлен и залогинен
+
+```bash
+gh api repos/Chuchoss/it-labor-pulse/branches/production/protection \
+  --method PUT \
+  --input - <<'EOF'
+{
+  "required_status_checks": { "strict": true, "contexts": ["test"] },
+  "enforce_admins": true,
+  "required_pull_request_reviews": { "required_approving_review_count": 0 },
+  "restrictions": null
+}
+EOF
+
+gh api repos/Chuchoss/it-labor-pulse/branches/developer/protection \
+  --method PUT \
+  --input - <<'EOF'
+{
+  "required_status_checks": { "strict": true, "contexts": ["test"] },
+  "enforce_admins": true,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
+EOF
+```
 
 Environments (Settings → Environments):
 
@@ -184,6 +229,10 @@ Environments (Settings → Environments):
 |-------------|------------|-------------------------------------|
 | `development` | без reviewers (или optional) | `KUBE_CONFIG` / cloud OIDC role, registry — **dev** |
 | `production` | **Required reviewers** (1+) | отдельный kube/OIDC, registry — **prod**; не шарить с dev |
+
+**Solo / pet:** на Environment `production` можно временно не ставить required reviewers (иначе деплой зависнет без второго аккаунта) или добавить себя как reviewer и self-approve. Имена Environments должны совпадать с `environment:` в workflow.
+
+Создать Environments вручную: https://github.com/Chuchoss/it-labor-pulse/settings/environments → New environment → `development`, затем `production`.
 
 Подробнее про Environment secrets: [17 §6](./17-secrets-management.md#6-cicd-github-actions), кратко в [21](./21-external-services.md).
 
@@ -195,7 +244,7 @@ Environments (Settings → Environments):
 |---------|--------|------------|---------|
 | PR из той же репы | ✅ | ❌ (`if: push` only) | нет в test |
 | PR из **fork** | ✅ (public checks) | ❌ | Environment / repo secrets **не** доступны fork PR |
-| push в `develop`/`main` на origin | ✅ | ✅ после test | только Environment |
+| push в `developer`/`production` на origin | ✅ | ✅ после test | только Environment |
 
 Никогда не использовать `pull_request_target` для деплоя с checkout кода PR.  
 Deploy jobs дополнительно: `github.event.repository.fork == false` и только trusted refs.
@@ -206,9 +255,9 @@ Deploy jobs дополнительно: `github.event.repository.fork == false` 
 
 | Env | Trigger | Protection |
 |-----|---------|------------|
-| development (dev) | push `develop` после `test` | auto |
+| development (dev) | push `developer` после `test` | auto |
 | stage | tag `v*` или manual (later) | reviewers optional |
-| production (prod) | push `main` после `test` | required reviewers, отдельные secrets |
+| production (prod) | push `production` после `test` | required reviewers (или skip для solo), отдельные secrets |
 
 Secrets per environment: `KUBE_CONFIG` / cloud creds, `REGISTRY_TOKEN`. DB URLs лучше в cluster Secrets (CI не обязан знать пароли, если миграции — Job с SA).
 
@@ -257,8 +306,8 @@ sequenceDiagram
 
 ## Quality gates
 
-| Gate | PR | develop (push) | main (push) | Nightly |
-|------|----|----------------|-------------|---------|
+| Gate | PR | developer (push) | production (push) | Nightly |
+|------|----|------------------|-------------------|---------|
 | lint + unit + fixtures + contract | **required** (`test`) | required | required | required |
 | coverage floor (normalize >80%) | optional warn | optional | optional | — |
 | integration (PG/Redis) | label only | optional | **required** (когда есть) | required |

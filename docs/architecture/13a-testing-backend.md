@@ -31,7 +31,7 @@
 | Часы | интерфейс `Clock` + fake (`now` фиксирован) — **без** `time.Now()` в политике FX/date |
 | Integration DB/cache | `testcontainers-go` modules postgres/redis **или** сервисы из Compose в CI service containers |
 | Migrations | `golang-migrate` CLI в job + вызов из integration setup |
-| Proto | `buf lint`, `buf breaking --against '.git#branch=main'` |
+| Proto | `buf lint`, `buf breaking --against '.git#branch=production'` |
 | OpenAPI | lint в CI; опц. schemathesis nightly; validation middleware тестируется unit/integration |
 
 Теги:
@@ -184,7 +184,7 @@ go test -tags=integration ./apps/ingest/internal/store/...
 | version bump / key prefix change | miss после инвалидации |
 | Redis down | Query degrade to PG (не обязательный 5xx) — если реализовано |
 
-Fake redis (`miniredis`) допустим для unit cache layer; **хотя бы один** testcontainers/redis integration на main.
+Fake redis (`miniredis`) допустим для unit cache layer; **хотя бы один** testcontainers/redis integration на production.
 
 ---
 
@@ -194,7 +194,7 @@ Fake redis (`miniredis`) допустим для unit cache layer; **хотя б
 
 1. `httptest.NewServer` отдаёт JSON из `testdata/hh/`.
 2. Ingest client: `HH_BASE_URL=server.URL`, UA тестовый.
-3. Run page → drafts → normalize → PG (можно sqlmock только если не проверяете SQL; лучше real PG на main).
+3. Run page → drafts → normalize → PG (можно sqlmock только если не проверяете SQL; лучше real PG на production).
 
 | Сценарий | Assert |
 |----------|--------|
@@ -203,7 +203,7 @@ Fake redis (`miniredis`) допустим для unit cache layer; **хотя б
 | 500 × N | run partial/fail per policy |
 | Fixture mode admin trigger | `POST /admin/ingest/runs` создаёт run без внешнего HH |
 
-Живой HH в CI — **запрещён** для автоматических PR/main gates.
+Живой HH в CI — **запрещён** для автоматических PR/production gates.
 
 ---
 
@@ -228,7 +228,7 @@ Fake redis (`miniredis`) допустим для unit cache layer; **хотя б
 |----------|-------|
 | Lint (spectral/redocly) | каждый PR |
 | BFF: request validation против схемы (middleware) | unit/integration handlers |
-| Response shape golden / schemathesis | main или nightly |
+| Response shape golden / schemathesis | production или nightly |
 | Breaking change detection | review + lint; major → `/api/v2` |
 
 Минимальные пути для контрактных тестов Phase 1:
@@ -247,7 +247,7 @@ Fake redis (`miniredis`) допустим для unit cache layer; **хотя б
 
 ```bash
 buf lint
-buf breaking --against '.git#branch=main'
+buf breaking --against '.git#branch=production'
 ```
 
 | Фаза | Ожидание |

@@ -27,6 +27,15 @@ cp .env.example .env   # PowerShell: Copy-Item .env.example .env
 
 Дальше — только [локальный DX](./docs/architecture/12-local-dev.md) (Compose-профили, migrate, cloud vs local).
 
+## Ветки и CI
+
+| Branch | Роль |
+|--------|------|
+| `developer` | интеграция (default), auto deploy → **dev** после зелёного `test` |
+| `production` | релизы, auto deploy → **prod** после `test` (+ Environment) |
+
+Feature → PR в `developer` → PR в `production`. Gate: [`.github/workflows/ci-cd.yml`](./.github/workflows/ci-cd.yml) — сначала job **`test`**, потом deploy. Подробнее: [10-cicd.md](./docs/architecture/10-cicd.md).
+
 ## Статус
 
 | Сейчас | Дальше |
