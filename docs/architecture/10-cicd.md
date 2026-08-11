@@ -132,6 +132,7 @@ flowchart LR
 | Permissions | `pages: write`, `id-token: write`, `contents: read` |
 | Source of truth | только `api/openapi.yaml`; копия в site — артефакт build, не коммитить |
 | Включить Pages | Settings → Pages → Source = **GitHub Actions** |
+| Environment `github-pages` | Settings → Environments → **github-pages** → Deployment branches: разрешить **`production`** (раньше мог быть только `main`) |
 | URL | https://chuchoss.github.io/it-labor-pulse/ (Redoc), https://chuchoss.github.io/it-labor-pulse/swagger.html (Swagger UI) |
 
 Решение: [ADR 008](./adr/008-github-pages-openapi.md). Стиль/контракт: [22-documentation-style.md](./22-documentation-style.md).
