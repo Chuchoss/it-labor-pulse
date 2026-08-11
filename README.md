@@ -1,108 +1,38 @@
-# Labor Market Analytics
+# IT Labor Pulse
 
-Проект аналитики IT-рынка труда: сбор вакансий (сначала HeadHunter), нормализация, анализ зарплат и спроса по ролям/регионам, тренды; позже — AI-анализ.
+Аналитика IT-рынка труда: сбор вакансий (сначала HeadHunter), нормализация, зарплаты и спрос по ролям/регионам, тренды. Учебный проект с production-like архитектурой.
 
-## Стек (target)
+## Документация
 
-- **Frontend:** React  
-- **Backend:** Go  
-- **Messaging:** Kafka (local: Redpanda)  
-- **RPC:** gRPC (internal)  
-- **OLTP:** PostgreSQL  
-- **OLAP:** ClickHouse  
-- **Cache:** Redis  
-- **Deploy:** Kubernetes + CI/CD  
-- **Later:** AI model integration  
+| | |
+|--|--|
+| **API (Redoc)** | [chuchoss.github.io/it-labor-pulse](https://chuchoss.github.io/it-labor-pulse/) |
+| **API (Swagger)** | [Swagger UI](https://chuchoss.github.io/it-labor-pulse/swagger.html) |
+| **Архитектура** | [docs/architecture/](./docs/architecture/) · [индекс](./docs/architecture/README.md) |
+| **Контракт** | [`api/openapi.yaml`](./api/openapi.yaml) · [`libs/proto/lma/`](./libs/proto/lma/) |
 
-Реализация кода — поэтапно; сначала зафиксирована архитектура.
+## Стек
+
+React · Go · PostgreSQL · Redis · Kafka · ClickHouse · gRPC · Kubernetes
 
 ## Quickstart
 
-Локальный DX (Phase 0–1): **[docs/architecture/12-local-dev.md](./docs/architecture/12-local-dev.md)**.  
-Секреты: **[docs/architecture/17-secrets-management.md](./docs/architecture/17-secrets-management.md)**.
-
-**Рекомендуется (cloud-everything):** облачный PostgreSQL (`DATABASE_URL`) + облачный Redis (`REDIS_URL`, часто `rediss://`) — Compose infra не нужна (`make up-cloud`).  
-Актуальный выбор провайдеров: [21-external-services.md](./docs/architecture/21-external-services.md) (Postgres → Supabase; Redis — кандидат).  
-Локальные контейнеры — опционально: `local-pg`, `local-redis`. Сервисы Go/React ещё не подключены.
-
 ```bash
-cp .env.example .env
-# PowerShell: Copy-Item .env.example .env
-# В .env: DATABASE_URL + REDIS_URL из кабинетов (секреты — не коммитить)
-# Либо local DSN/URL и make up-local
-
-make up-cloud         # напоминание: cloud URLs, контейнеры не стартуют
-# make up-local-redis # если нужен Redis в Docker
-# make up-local       # Redis + Postgres в Docker
-# make migrate-up     # когда появятся SQL — против DATABASE_URL
+git clone https://github.com/Chuchoss/it-labor-pulse.git
+cd it-labor-pulse
+cp .env.example .env   # PowerShell: Copy-Item .env.example .env
 ```
 
-Облачный PG: [«Облачный PostgreSQL»](./docs/architecture/12-local-dev.md#облачный-postgresql).  
-Облачный Redis: [«Облачный Redis»](./docs/architecture/12-local-dev.md#облачный-redis).
+В `.env` задайте `DATABASE_URL` (рекомендуется **Supabase**) и при необходимости `REDIS_URL`. Секреты не коммитить.
 
-Без Make (PowerShell):
-
-```powershell
-# Cloud PG + cloud Redis — Compose можно не запускать
-# Только local Redis:
-docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile local-redis up -d --wait
-# Local Redis + local Postgres:
-docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile local-redis --profile local-pg up -d --wait
-```
-
-Подключение:
-
-| | |
-|--|--|
-| Postgres (cloud) | `DATABASE_URL` из кабинета, обычно `sslmode=require`; DBeaver + SSL |
-| Postgres (local) | `localhost:5432`, user/db `lma`, `make up-local-pg` / `make psql` |
-| Redis (cloud) | `REDIS_URL` (`rediss://…` при TLS); не коммитить |
-| Redis (local) | `localhost:6379` / `REDIS_URL=redis://localhost:6379/0` (`make redis-cli`) |
-
-Позже: UI `:3000`, API `:8080`. Контракты уже есть: [`api/openapi.yaml`](./api/openapi.yaml), [`libs/proto/lma/`](./libs/proto/lma/).
-
-## Документация API / API documentation
-
-Публичная HTML-документация REST (GitHub Pages):
-
-| | |
-|--|--|
-| **Redoc** | https://chuchoss.github.io/it-labor-pulse/ |
-| **Swagger UI** | https://chuchoss.github.io/it-labor-pulse/swagger.html |
-
-Канон контракта в репозитории: [`api/openapi.yaml`](./api/openapi.yaml).  
-Статика сайта: [`docs/api-site/`](./docs/api-site/). Workflow: [`.github/workflows/docs-pages.yml`](./.github/workflows/docs-pages.yml).  
-Подробнее: [03-api.md](./docs/architecture/03-api.md), [ADR 008](./docs/architecture/adr/008-github-pages-openapi.md).
-
-Локальный preview (нужен интернет — Redoc/Swagger с jsDelivr):
-
-```bash
-cp api/openapi.yaml docs/api-site/openapi.yaml
-# затем открой docs/api-site/index.html в браузере (или любой static server)
-```
-
-## Архитектура
-
-Полный архитектурный пакет: **[docs/architecture/](./docs/architecture/)**.  
-Порядок чтения: [docs/architecture/README.md](./docs/architecture/README.md).
-
-Полезное рядом:
-
-- Нормализация зарплат: [15-normalization-rules.md](./docs/architecture/15-normalization-rules.md)  
-- Тесты: [13-testing.md](./docs/architecture/13-testing.md)  
-- Frontend IA: [16-frontend.md](./docs/architecture/16-frontend.md)  
-- Agent tooling (Cursor rules/skills/hooks): [19-agent-tooling.md](./docs/architecture/19-agent-tooling.md)  
-- Code style: [20-code-style.md](./docs/architecture/20-code-style.md)  
-- Внешние сервисы / провайдеры: [21-external-services.md](./docs/architecture/21-external-services.md)  
-- Стиль docs / OpenAPI: [22-documentation-style.md](./docs/architecture/22-documentation-style.md)  
-- Runbooks: [docs/runbooks/](./docs/runbooks/)  
-- ADR: [docs/architecture/adr/](./docs/architecture/adr/)  
-- HH fixtures: [testdata/hh/](./testdata/hh/)
+Дальше — только [локальный DX](./docs/architecture/12-local-dev.md) (Compose-профили, migrate, cloud vs local).
 
 ## Статус
 
-Сейчас: архитектурная документация, OpenAPI/proto stubs, HH-фикстуры и **локальная/cloud infra** (`deploy/compose` — опциональные `local-redis` / `local-pg`; рекомендуется cloud `DATABASE_URL` + `REDIS_URL`). Код сервисов (Go/React) — по фазам из [00-overview.md](./docs/architecture/00-overview.md).
+| Сейчас | Дальше |
+|--------|--------|
+| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra | Код сервисов по [фазам](./docs/architecture/00-overview.md) |
 
-## Дисклеймер
+## Attribution
 
-Данные вакансий принадлежат соответствующим площадкам (HH и др.). Проект учебный; при работе с API соблюдайте их ToS, лимиты и требования к User-Agent. Медианные зарплаты на дашборде — оценка по полям salary в вакансиях (offered), не survey-опросы.
+Данные вакансий принадлежат площадкам (HH и др.). Соблюдайте ToS, лимиты и User-Agent. Зарплаты на дашборде — оценка по полям salary в вакансиях, не опросы.
