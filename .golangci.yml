@@ -1,0 +1,54 @@
+# golangci-lint config for LMA / IT Labor Pulse
+# Run: golangci-lint run ./...
+# Format: gofmt + goimports (or: golangci-lint run --fix)
+
+run:
+  timeout: 3m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - errorlint
+    - contextcheck
+    - revive
+
+linters-settings:
+  goimports:
+    # Обновите prefix под реальный module path из go.mod, когда появится.
+    local-prefixes: study_project
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: error-return
+      - name: error-strings
+      - name: errorf
+      - name: exported
+        disabled: true
+      - name: package-comments
+        disabled: true
+      - name: var-naming
+  errcheck:
+    check-type-assertions: true
+  misspell:
+    locale: US
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 50
+  max-same-issues: 5
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - revive

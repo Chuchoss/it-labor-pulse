@@ -1,0 +1,9 @@
+{
+  "id": "900013",
+  "name": "Go Developer",
+  "area": { "id": "1", "name": "Москва" },
+  "salary": { "from": 100000, "to": 200000, "currency": "RUR", "gross": false },
+  "employer": { "id": "70013", "name": "Синтетический Рубль" },
+  "published_at": "2026-08-10T10:00:00+0300",
+  "archived": false
+}

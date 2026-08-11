@@ -1,0 +1,69 @@
+# LMA local stack — Phase 0–1 infra.
+# Recommended: cloud/managed PostgreSQL + cloud/managed Redis (DATABASE_URL + REDIS_URL in .env).
+# Optional local containers: profile local-pg (Postgres), profile local-redis (Redis).
+# App services (bff/query/ingest/web) появятся позже в profile mvp.
+#
+# Usage (from repo root):
+#   # Cloud PG + cloud Redis — Compose may start nothing (no profiles needed)
+#   # Local Redis only (e.g. with cloud PG):
+#   docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile local-redis up -d --wait
+#   # Full local infra (PG + Redis):
+#   docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile local-redis --profile local-pg up -d --wait
+#   make up-local-redis   # local redis
+#   make up-local         # local redis + local postgres
+#   make up-cloud         # reminder: use cloud URLs, no containers
+#
+# Profiles: local-redis | local-pg | mvp (apps later) | olap / bus / full — позже
+# Docs: docs/architecture/12-local-dev.md, 09-deployment.md
+
+name: lma
+
+services:
+  postgres:
+    profiles: ["local-pg", "full"]
+    image: postgres:16-alpine
+    container_name: lma-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lma}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lma_local_password}
+      POSTGRES_DB: ${POSTGRES_DB:-lma}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - lma
+
+  redis:
+    profiles: ["local-redis", "full"]
+    image: redis:7-alpine
+    container_name: lma-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - lma
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  lma:
+    name: lma_net

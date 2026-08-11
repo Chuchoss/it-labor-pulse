@@ -1,0 +1,123 @@
+# -----------------------------------------------------------------------------
+# Local secrets and env (never commit real values)
+# Keep committing: .env.example
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+.env.*
+!.env.example
+
+# Keys / certs / kube / cloud credentials
+*.pem
+*.key
+*.p12
+*.pfx
+kubeconfig
+*.kubeconfig
+credentials
+credentials.json
+service-account.json
+**/secrets/
+
+# -----------------------------------------------------------------------------
+# OS
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# -----------------------------------------------------------------------------
+# IDE / editors
+# Keep optional shared VS Code hints if present
+# -----------------------------------------------------------------------------
+.idea/
+*.swp
+*.swo
+*~
+.vscode/*
+!.vscode/extensions.json
+
+# -----------------------------------------------------------------------------
+# Go
+# Prefer committing go.sum; vendor/ is optional local/vendored deps
+# -----------------------------------------------------------------------------
+bin/
+dist/
+vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+*.coverprofile
+__debug_bin*
+
+# -----------------------------------------------------------------------------
+# Node / frontend
+# -----------------------------------------------------------------------------
+node_modules/
+.vite/
+.turbo/
+*.tsbuildinfo
+.npm
+.yarn/
+.pnpm-store/
+
+# Shared build / coverage (Go + Node)
+build/
+coverage/
+*.lcov
+
+# -----------------------------------------------------------------------------
+# Logs / caches / temp
+# -----------------------------------------------------------------------------
+*.log
+logs/
+.tmp/
+tmp/
+.cache/
+.testcache/
+go-testcache/
+
+# -----------------------------------------------------------------------------
+# Playwright / e2e artifacts
+# -----------------------------------------------------------------------------
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+
+# -----------------------------------------------------------------------------
+# Docker / local volume leftovers (named volumes are preferred; bind mounts)
+# -----------------------------------------------------------------------------
+.data/
+pgdata/
+postgres_data/
+redis_data/
+clickhouse_data/
+
+# -----------------------------------------------------------------------------
+# API docs site: OpenAPI is copied here only by CI / local preview
+# Source of truth: api/openapi.yaml (do not commit a duplicate)
+# -----------------------------------------------------------------------------
+docs/api-site/openapi.yaml
+
+# -----------------------------------------------------------------------------
+# Agent tooling (Cursor / Claude / Agents)
+# Keep committing: .cursor/rules/, .cursor/hooks*, .cursor/skills/lma-*
+# Do NOT commit vendor/auto-installed third-party skill dumps
+# -----------------------------------------------------------------------------
+.agents/
+.claude/
+.cursor/skills/*
+!.cursor/skills/lma-*/
+skills-lock.json
+
+.cursor/**/*.log
+.cursor/plans/
+.cursor/debug.log

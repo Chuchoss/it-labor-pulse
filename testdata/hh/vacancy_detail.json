@@ -1,0 +1,124 @@
+{
+  "id": "900001",
+  "premium": false,
+  "billing_type": {
+    "id": "standard",
+    "name": "Стандарт"
+  },
+  "relations": [],
+  "name": "Senior Go Developer",
+  "insider_interview": null,
+  "response_letter_required": false,
+  "area": {
+    "id": "1",
+    "name": "Москва",
+    "url": "https://api.hh.ru/areas/1"
+  },
+  "salary": {
+    "from": 300000,
+    "to": 400000,
+    "currency": "RUR",
+    "gross": true
+  },
+  "salary_range": {
+    "from": 300000,
+    "to": 400000,
+    "currency": "RUR",
+    "gross": true,
+    "mode": {
+      "id": "MONTH",
+      "name": "За месяц"
+    },
+    "frequency": null
+  },
+  "type": {
+    "id": "open",
+    "name": "Открытая"
+  },
+  "address": null,
+  "allow_messages": true,
+  "experience": {
+    "id": "between3And6",
+    "name": "От 3 до 6 лет"
+  },
+  "schedule": {
+    "id": "remote",
+    "name": "Удаленная работа"
+  },
+  "employment": {
+    "id": "full",
+    "name": "Полная занятость"
+  },
+  "department": null,
+  "contacts": null,
+  "description": "<p>Ищем Senior Go разработчика в команду платформы.</p><p>Стек: Go, PostgreSQL, Kafka, Redis.</p><p>Формат: удалённо по РФ.</p>",
+  "branded_description": null,
+  "vacancy_constructor_template": null,
+  "key_skills": [
+    { "name": "Go" },
+    { "name": "PostgreSQL" },
+    { "name": "Kafka" },
+    { "name": "Kubernetes" }
+  ],
+  "accept_handicapped": false,
+  "accept_kids": false,
+  "archived": false,
+  "response_url": null,
+  "specializations": [],
+  "professional_roles": [
+    {
+      "id": "96",
+      "name": "Программист, разработчик"
+    }
+  ],
+  "code": null,
+  "hidden": false,
+  "quick_responses_allowed": false,
+  "driver_license_types": [],
+  "accept_incomplete_resumes": false,
+  "employer": {
+    "id": "70001",
+    "name": "ООО Ромашка Тех",
+    "url": "https://api.hh.ru/employers/70001",
+    "alternate_url": "https://hh.ru/employer/70001",
+    "logo_urls": null,
+    "vacancies_url": "https://api.hh.ru/vacancies?employer_id=70001",
+    "accredited_it_employer": true,
+    "trusted": true
+  },
+  "published_at": "2026-08-10T10:15:00+0300",
+  "created_at": "2026-08-10T10:15:00+0300",
+  "initial_created_at": "2026-08-01T09:00:00+0300",
+  "negotiations_url": null,
+  "suitable_resumes_url": null,
+  "apply_alternate_url": "https://hh.ru/applicant/vacancy_response?vacancyId=900001",
+  "has_test": false,
+  "test": null,
+  "alternate_url": "https://hh.ru/vacancy/900001",
+  "working_days": [],
+  "working_time_intervals": [],
+  "working_time_modes": [],
+  "accept_temporary": false,
+  "languages": [],
+  "approved": true,
+  "work_format": [
+    {
+      "id": "REMOTE",
+      "name": "Удалённо"
+    }
+  ],
+  "working_hours": [
+    {
+      "id": "HOURS_8",
+      "name": "8 часов"
+    }
+  ],
+  "work_schedule_by_days": [
+    {
+      "id": "FIVE_ON_TWO_OFF",
+      "name": "5/2"
+    }
+  ],
+  "night_shifts": false,
+  "internship": false
+}

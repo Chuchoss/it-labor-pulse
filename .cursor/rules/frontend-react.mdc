@@ -1,0 +1,33 @@
+---
+description: React/TypeScript UI — BFF only, экраны из 16-frontend, без секретов
+globs: "**/web/**,**/frontend/**,**/*.{ts,tsx}"
+alwaysApply: false
+---
+
+# Frontend / React (LMA)
+
+## Контракт
+
+- Публичный API **только через BFF** (`/api/v1`). Не ходить в Query/Ingest/gRPC/PG напрямую из браузера.
+- Типы и пути сверяй с `api/openapi.yaml` и `docs/architecture/16-frontend.md`.
+- Env в клиенте: только public (`VITE_API_BASE_URL`). Никаких `ADMIN_TOKEN`, DB, HH tokens.
+
+## Экраны MVP
+
+Держись IA: Dashboard, Roles, Role detail, Regions, Trends, Vacancies (+ admin позже).  
+Не раздувай первый viewport лишними блоками вне docs.
+
+## States
+
+На каждом data-экране: loading / empty / error (с retry, `request_id` если есть) / partial.  
+Не блокируй весь layout одним медленным запросом.
+
+## TypeScript
+
+- Strict TypeScript; не отключай `strict` ради удобства.
+- Fetch/query layer централизуй; ошибки API мапь в UI-state.
+- Attribution HH — в UI/README (дисклеймер offered salaries из `15` / `16`).
+
+## Style
+
+- См. `docs/architecture/20-code-style.md`. Когда появится пакет — ESLint/Prettier по гайду.

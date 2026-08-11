@@ -1,0 +1,9 @@
+{
+  "id": "900010",
+  "name": "Backend Developer",
+  "area": { "id": "2", "name": "Санкт-Петербург" },
+  "salary": null,
+  "employer": { "id": "70010", "name": "Синтетическая Компания" },
+  "published_at": "2026-08-10T10:00:00+0300",
+  "archived": false
+}

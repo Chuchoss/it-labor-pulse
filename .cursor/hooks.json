@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "node .cursor/hooks/block-secret-commit.js",
+        "matcher": "git\\s+(commit|add)",
+        "failClosed": true,
+        "timeout": 15
+      }
+    ]
+  }
+}

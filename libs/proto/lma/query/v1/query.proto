@@ -1,0 +1,195 @@
+syntax = "proto3";
+
+package lma.query.v1;
+
+option go_package = "github.com/kolos/study_project/libs/proto/gen/lma/query/v1;queryv1";
+
+import "lma/common/v1/common.proto";
+
+// QueryService — read models for dashboard analytics (BFF → Query).
+service QueryService {
+  rpc GetDashboardSummary(GetDashboardSummaryRequest) returns (DashboardSummary);
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse);
+  rpc GetRole(GetRoleRequest) returns (RoleStat);
+  rpc ListRegions(ListRegionsRequest) returns (ListRegionsResponse);
+  rpc GetRegion(GetRegionRequest) returns (RegionStat);
+  rpc GetSalaryTrends(GetSalaryTrendsRequest) returns (SalaryTrendsResponse);
+  rpc GetDemandTrends(GetDemandTrendsRequest) returns (DemandTrendsResponse);
+  rpc GetTopSkills(GetTopSkillsRequest) returns (TopSkillsResponse);
+  rpc ListVacancies(ListVacanciesRequest) returns (ListVacanciesResponse);
+}
+
+message GetDashboardSummaryRequest {
+  lma.common.v1.Period period = 1;
+  string role_id = 2;
+  string region_id = 3;
+}
+
+message DashboardSummary {
+  lma.common.v1.Period period = 1;
+  int64 vacancies_active = 2;
+  int64 vacancies_new = 3;
+  double median_salary = 4;
+  string salary_currency = 5;
+  int64 salary_sample_size = 6;
+  string generated_at = 7;
+  bool cache_hit = 8;
+  repeated RoleCount top_roles = 9;
+  repeated RegionCount top_regions = 10;
+}
+
+message RoleCount {
+  string role_id = 1;
+  string title = 2;
+  int64 count = 3;
+}
+
+message RegionCount {
+  string region_id = 1;
+  string title = 2;
+  int64 count = 3;
+}
+
+message ListRolesRequest {
+  lma.common.v1.Period period = 1;
+  string region_id = 2;
+  lma.common.v1.PageRequest page = 3;
+  string sort = 4; // count | median_salary
+  lma.common.v1.Source source = 5;
+}
+
+message GetRoleRequest {
+  string role_id = 1;
+  lma.common.v1.Period period = 2;
+  string region_id = 3;
+}
+
+message RoleStat {
+  string role_id = 1;
+  string title = 2;
+  int64 vacancies_count = 3;
+  double median_salary = 4;
+  double p25_salary = 5;
+  double p75_salary = 6;
+  string currency = 7;
+}
+
+message ListRolesResponse {
+  repeated RoleStat roles = 1;
+  lma.common.v1.PageResponse page = 2;
+}
+
+message ListRegionsRequest {
+  lma.common.v1.Period period = 1;
+  string role_id = 2;
+  lma.common.v1.PageRequest page = 3;
+  string sort = 4;
+}
+
+message GetRegionRequest {
+  string region_id = 1;
+  lma.common.v1.Period period = 2;
+  string role_id = 3;
+}
+
+message RegionStat {
+  string region_id = 1;
+  string title = 2;
+  int64 vacancies_count = 3;
+  double median_salary = 4;
+  double p25_salary = 5;
+  double p75_salary = 6;
+  string currency = 7;
+}
+
+message ListRegionsResponse {
+  repeated RegionStat regions = 1;
+  lma.common.v1.PageResponse page = 2;
+}
+
+message GetSalaryTrendsRequest {
+  lma.common.v1.Period period = 1;
+  string role_id = 2;
+  string region_id = 3;
+  string grain = 4; // day|week|month
+}
+
+message SalaryPoint {
+  string period_start = 1;
+  double median = 2;
+  double p25 = 3;
+  double p75 = 4;
+  int64 sample_size = 5;
+}
+
+message SalaryTrendsResponse {
+  string grain = 1;
+  string currency = 2;
+  repeated SalaryPoint points = 3;
+}
+
+message GetDemandTrendsRequest {
+  lma.common.v1.Period period = 1;
+  string role_id = 2;
+  string region_id = 3;
+  string grain = 4;
+}
+
+message DemandPoint {
+  string period_start = 1;
+  int64 active_count = 2;
+  int64 new_count = 3;
+}
+
+message DemandTrendsResponse {
+  string grain = 1;
+  repeated DemandPoint points = 2;
+}
+
+message GetTopSkillsRequest {
+  lma.common.v1.Period period = 1;
+  string role_id = 2;
+  string region_id = 3;
+  int32 limit = 4;
+}
+
+message SkillStat {
+  string skill_id = 1;
+  string name = 2;
+  int64 count = 3;
+  double share = 4;
+}
+
+message TopSkillsResponse {
+  repeated SkillStat skills = 1;
+}
+
+message ListVacanciesRequest {
+  string q = 1;
+  string role_id = 2;
+  string region_id = 3;
+  bool only_active = 4;
+  lma.common.v1.PageRequest page = 5;
+  lma.common.v1.Source source = 6;
+}
+
+message Vacancy {
+  string id = 1;
+  string source = 2;
+  string external_id = 3;
+  string title = 4;
+  string role_id = 5;
+  string region_id = 6;
+  double salary_from = 7;
+  double salary_to = 8;
+  string salary_currency = 9;
+  bool salary_gross = 10;
+  string published_at = 11;
+  bool is_active = 12;
+  repeated string skills = 13;
+}
+
+message ListVacanciesResponse {
+  repeated Vacancy vacancies = 1;
+  lma.common.v1.PageResponse page = 2;
+}

@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package lma.ingest.v1;
+
+option go_package = "github.com/kolos/study_project/libs/proto/gen/lma/ingest/v1;ingestv1";
+
+import "lma/common/v1/common.proto";
+
+// IngestService — internal admin/control plane for vacancy collection runs.
+service IngestService {
+  rpc StartRun(StartRunRequest) returns (StartRunResponse);
+  rpc GetRun(GetRunRequest) returns (IngestRun);
+  rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
+}
+
+message StartRunRequest {
+  lma.common.v1.Source source = 1;
+  string mode = 2; // full | incremental
+  map<string, string> params = 3;
+  string requested_by = 4; // admin | scheduler
+}
+
+message StartRunResponse {
+  string run_id = 1;
+  string status = 2;
+}
+
+message GetRunRequest {
+  string run_id = 1;
+}
+
+message IngestRun {
+  string run_id = 1;
+  lma.common.v1.Source source = 2;
+  string mode = 3;
+  string status = 4; // queued|running|success|partial|failed
+  string started_at = 5;
+  string finished_at = 6;
+  IngestStats stats = 7;
+  string error_message = 8;
+}
+
+message IngestStats {
+  int64 fetched = 1;
+  int64 published = 2;
+  int64 errors = 3;
+}
+
+message ListRunsRequest {
+  lma.common.v1.PageRequest page = 1;
+  lma.common.v1.Source source = 2;
+}
+
+message ListRunsResponse {
+  repeated IngestRun runs = 1;
+  lma.common.v1.PageResponse page = 2;
+}

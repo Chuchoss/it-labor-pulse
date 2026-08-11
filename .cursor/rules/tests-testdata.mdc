@@ -1,0 +1,36 @@
+---
+description: Тесты и фикстуры — пирамида, HH без сети, без PII
+globs: "**/testdata/**,**/*_test.go,**/*_test.ts,**/*_test.tsx,**/tests/**"
+alwaysApply: false
+---
+
+# Tests & testdata (LMA)
+
+Канон: `docs/architecture/13-testing.md` (+ `13a` backend, `13b` frontend/E2E).
+
+## Пирамида / gates
+
+1. Unit normalize/salary + HH fixtures — **каждый PR**, без сети  
+2. Vitest utils/widgets — каждый PR  
+3. Contract OpenAPI/buf/BFF↔Query — каждый PR (когда есть артефакты)  
+4. Integration PG/Redis (testcontainers) — **main**, не обязательный PR-gate  
+5. Playwright E2E — **nightly** / post-deploy; не flaky-gate на каждый PR  
+
+Test-first для Phase 0–1 critical path — см. `00-overview.md` § Test-first.
+
+## Фикстуры HH (`testdata/hh/`)
+
+- Только анонимизированные JSON; нет ФИО, телефонов, реальных компаний.
+- При смене схемы HH — обновить фикстуру + assert, не «чинить» тесты живым API в CI.
+- Читай `testdata/hh/README.md`. Seeds E2E: `testdata/seeds/`.
+
+## Normalize
+
+- Кейсы mid/gross/FX/outliers/remote — по `15-normalization-rules.md`.
+- Offered ≠ survey: не смешивать в одном поле без дискриминатора.
+- Target coverage normalize >80% веток политик.
+
+## Инструменты (не изобретать другие без ADR)
+
+Go: `testing` + testify, httptest, testcontainers-go, golang-migrate.  
+Web: Vitest + Testing Library + MSW. E2E: Playwright в `tests/e2e/`.

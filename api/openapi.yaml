@@ -1,0 +1,892 @@
+openapi: 3.1.0
+info:
+  title: Labor Market Analytics API (LMA)
+  description: |
+    Публичный REST контракт BFF для React SPA (IT Labor Market Analytics).
+    Это канонический контракт; docs/architecture/03-api.md описывает его семантику и внутреннее отображение.
+    MVP endpoints ниже; все salary-поля и агрегаты MVP возвращаются только в RUB.
+    AI- и Perspectives («Тенденции»)-маршруты помечены x-lifecycle: target.
+  version: 1.0.0
+  contact:
+    name: LMA study project
+  license:
+    name: Proprietary study project
+
+servers:
+  - url: http://localhost:8080
+    description: Local BFF
+  - url: https://{host}
+    description: Deployed
+    variables:
+      host:
+        default: api.example.com
+
+# MVP read API is intentionally public. Admin operations override this with AdminToken.
+security: []
+
+tags:
+  - name: dashboard
+    description: Сводные показатели рынка
+  - name: roles
+    description: Аналитика по ролям
+  - name: regions
+    description: Аналитика по регионам
+  - name: trends
+    description: Временные ряды (salary/demand MVP; perspectives Target)
+  - name: skills
+    description: Востребованные навыки
+  - name: vacancies
+    description: OLTP drill-down вакансий
+  - name: admin
+    description: Управление ingest
+  - name: ai
+    description: Будущий асинхронный AI-анализ
+  - name: perspectives
+    description: «Тенденции» — multi-source composite scores (Phase 5 Target)
+  - name: health
+    description: Проверка доступности BFF
+
+paths:
+  /api/v1/health:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Публичный health
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/v1/dashboard/summary:
+    get:
+      tags: [dashboard]
+      operationId: getDashboardSummary
+      summary: Сводка для главной
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/RoleIdOptional"
+        - $ref: "#/components/parameters/RegionIdOptional"
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "502":
+          $ref: "#/components/responses/DependencyUnavailable"
+
+  /api/v1/roles:
+    get:
+      tags: [roles]
+      operationId: listRoles
+      summary: Список ролей со спросом
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/RegionIdOptional"
+        - $ref: "#/components/parameters/SourceOptional"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [count, median_salary]
+            default: count
+      responses:
+        "200":
+          description: Paginated roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleStatPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/roles/{role_id}:
+    get:
+      tags: [roles]
+      operationId: getRole
+      summary: Детали роли
+      parameters:
+        - $ref: "#/components/parameters/RoleIdPath"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/RegionIdOptional"
+      responses:
+        "200":
+          description: Role detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleStat"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/regions:
+    get:
+      tags: [regions]
+      operationId: listRegions
+      summary: Список регионов
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/RoleIdOptional"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Paginated regions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegionStatPage"
+
+  /api/v1/regions/{region_id}:
+    get:
+      tags: [regions]
+      operationId: getRegion
+      summary: Детали региона
+      parameters:
+        - $ref: "#/components/parameters/RegionIdPath"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Region detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegionStat"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/trends/salaries:
+    get:
+      tags: [trends]
+      operationId: getSalaryTrends
+      summary: Ряд медиан/перцентилей зарплат (offered)
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/RoleIdOptional"
+        - $ref: "#/components/parameters/RegionIdOptional"
+        - $ref: "#/components/parameters/Grain"
+      responses:
+        "200":
+          description: Salary series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalaryTrendsResponse"
+
+  /api/v1/trends/demand:
+    get:
+      tags: [trends]
+      operationId: getDemandTrends
+      summary: Спрос (active/new) по периодам
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/RoleIdOptional"
+        - $ref: "#/components/parameters/RegionIdOptional"
+        - $ref: "#/components/parameters/Grain"
+      responses:
+        "200":
+          description: Demand series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemandTrendsResponse"
+
+  /api/v1/trends/perspectives:
+    get:
+      tags: [trends, perspectives]
+      operationId: listPerspectives
+      summary: Рейтинг направлений «Тенденции» (composite heuristic)
+      description: |
+        Phase 5 Target. Составной score по jobs / learning / media.
+        Не путать с vacancy-only `/trends/salaries` и `/trends/demand`.
+      x-lifecycle: target
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: role_family
+          in: query
+          schema:
+            type: string
+          description: Фильтр семейства ролей (backend, data, …)
+        - name: score_version
+          in: query
+          schema:
+            type: string
+          description: Версия формулы; по умолчанию — текущая
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Ranked directions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerspectivesPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/trends/perspectives/{direction_key}:
+    get:
+      tags: [trends, perspectives]
+      operationId: getPerspectiveDirection
+      summary: Деталь направления и ряды компонентов score
+      x-lifecycle: target
+      parameters:
+        - name: direction_key
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Grain"
+        - name: score_version
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Direction detail with series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerspectiveDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/skills/top:
+    get:
+      tags: [skills]
+      operationId: getTopSkills
+      summary: Топ навыков
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/RoleIdOptional"
+        - $ref: "#/components/parameters/RegionIdOptional"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Top skills
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopSkillsResponse"
+
+  /api/v1/vacancies:
+    get:
+      tags: [vacancies]
+      operationId: listVacancies
+      summary: Список вакансий (OLTP drill-down)
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/RoleIdOptional"
+        - $ref: "#/components/parameters/RegionIdOptional"
+        - $ref: "#/components/parameters/SourceOptional"
+        - name: only_active
+          in: query
+          schema:
+            type: boolean
+            default: true
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Vacancy page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VacancyPage"
+
+  /api/v1/admin/ingest/runs:
+    post:
+      tags: [admin]
+      operationId: triggerIngest
+      summary: Ручной запуск ingest
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriggerIngestRequest"
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriggerIngestResponse"
+        "409":
+          description: Ingest already running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/admin/ingest/runs/{run_id}:
+    get:
+      tags: [admin]
+      operationId: getIngestRun
+      summary: Статус ingest run
+      security:
+        - AdminToken: []
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Run status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestRun"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/admin/ai/analyses:
+    post:
+      tags: [ai]
+      operationId: startAIAnalysis
+      summary: Запуск AI-анализа (Target)
+      x-lifecycle: target
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartAIAnalysisRequest"
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartAIAnalysisResponse"
+
+  /api/v1/ai/insights/{id}:
+    get:
+      tags: [ai]
+      operationId: getAIInsight
+      summary: Получить AI insight (Target)
+      x-lifecycle: target
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Insight
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AIInsight"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    AdminToken:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+      description: MVP admin gate; Target — Bearer JWT
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    From:
+      name: from
+      in: query
+      required: true
+      schema:
+        type: string
+        format: date
+    To:
+      name: to
+      in: query
+      required: true
+      schema:
+        type: string
+        format: date
+    RoleIdOptional:
+      name: role_id
+      in: query
+      schema:
+        type: string
+    RegionIdOptional:
+      name: region_id
+      in: query
+      schema:
+        type: string
+    RoleIdPath:
+      name: role_id
+      in: path
+      required: true
+      schema:
+        type: string
+    RegionIdPath:
+      name: region_id
+      in: path
+      required: true
+      schema:
+        type: string
+    SourceOptional:
+      name: source
+      in: query
+      schema:
+        type: string
+        enum: [hh, superjob, remotive, adzuna]
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        default: 1
+        minimum: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+    Grain:
+      name: grain
+      in: query
+      schema:
+        type: string
+        enum: [day, week, month]
+        default: week
+  responses:
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    DependencyUnavailable:
+      description: Upstream gRPC/DB unavailable
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              examples: [VALIDATION_ERROR, CONFLICT, RATE_LIMITED, DEPENDENCY_UNAVAILABLE]
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+            request_id:
+              type: string
+
+    Period:
+      type: object
+      required: [from, to]
+      properties:
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+
+    RoleCount:
+      type: object
+      properties:
+        role_id: { type: string }
+        title: { type: string }
+        count: { type: integer }
+
+    RegionCount:
+      type: object
+      properties:
+        region_id: { type: string }
+        title: { type: string }
+        count: { type: integer }
+
+    DashboardSummary:
+      type: object
+      required:
+        - period
+        - vacancies_active
+        - median_salary
+        - salary_currency
+      properties:
+        period:
+          $ref: "#/components/schemas/Period"
+        vacancies_active:
+          type: integer
+        vacancies_new:
+          type: integer
+        median_salary:
+          type: number
+          description: Медиана offered salaries (net estimate, см. docs/architecture/15-normalization-rules.md)
+        salary_currency:
+          type: string
+          enum: [RUB]
+          description: MVP всегда RUB; расширение multi-currency потребует новой версии контракта.
+        salary_sample_size:
+          type: integer
+        top_roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoleCount"
+        top_regions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegionCount"
+        generated_at:
+          type: string
+          format: date-time
+        cache:
+          type: string
+          enum: [HIT, MISS]
+
+    RoleStat:
+      type: object
+      properties:
+        role_id: { type: string }
+        title: { type: string }
+        vacancies_count: { type: integer }
+        median_salary: { type: number }
+        p25_salary: { type: number }
+        p75_salary: { type: number }
+        currency: { type: string, enum: [RUB] }
+
+    RoleStatPage:
+      type: object
+      required: [data, page, page_size, total]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoleStat"
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+
+    RegionStat:
+      type: object
+      properties:
+        region_id: { type: string }
+        title: { type: string }
+        vacancies_count: { type: integer }
+        median_salary: { type: number }
+        p25_salary: { type: number }
+        p75_salary: { type: number }
+        currency: { type: string, enum: [RUB] }
+
+    RegionStatPage:
+      type: object
+      required: [data, page, page_size, total]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegionStat"
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+
+    SalaryPoint:
+      type: object
+      properties:
+        period_start: { type: string, format: date }
+        median: { type: number }
+        p25: { type: number }
+        p75: { type: number }
+        sample_size: { type: integer }
+
+    SalaryTrendsResponse:
+      type: object
+      properties:
+        grain: { type: string }
+        currency: { type: string, enum: [RUB] }
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/SalaryPoint"
+
+    DemandPoint:
+      type: object
+      properties:
+        period_start: { type: string, format: date }
+        active_count: { type: integer }
+        new_count: { type: integer }
+
+    DemandTrendsResponse:
+      type: object
+      properties:
+        grain: { type: string }
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/DemandPoint"
+
+    PerspectiveCoverage:
+      type: object
+      properties:
+        jobs: { type: boolean }
+        edu: { type: boolean }
+        media: { type: boolean }
+
+    PerspectiveDirection:
+      type: object
+      properties:
+        direction_key: { type: string }
+        title: { type: string }
+        role_family: { type: string }
+        composite_score: { type: number }
+        demand_component: { type: number }
+        learning_component: { type: number }
+        media_component: { type: number }
+        coverage:
+          $ref: "#/components/schemas/PerspectiveCoverage"
+        delta:
+          type: number
+          description: Изменение composite_score к предыдущему окну (опц.)
+
+    PerspectivesPage:
+      type: object
+      required: [period, score_version, disclaimer, data, page, page_size, total]
+      properties:
+        period:
+          $ref: "#/components/schemas/Period"
+        score_version: { type: string }
+        disclaimer:
+          type: string
+          example: Composite heuristic from jobs, learning, and media signals — not a forecast.
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PerspectiveDirection"
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+
+    PerspectiveScorePoint:
+      type: object
+      properties:
+        period_start: { type: string, format: date }
+        composite_score: { type: number }
+        demand_component: { type: number }
+        learning_component: { type: number }
+        media_component: { type: number }
+
+    PerspectiveDetail:
+      type: object
+      properties:
+        direction_key: { type: string }
+        title: { type: string }
+        role_family: { type: string }
+        score_version: { type: string }
+        disclaimer: { type: string }
+        grain: { type: string }
+        latest:
+          $ref: "#/components/schemas/PerspectiveDirection"
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/PerspectiveScorePoint"
+
+    SkillStat:
+      type: object
+      properties:
+        skill_id: { type: string }
+        name: { type: string }
+        count: { type: integer }
+        share: { type: number }
+
+    TopSkillsResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillStat"
+
+    Vacancy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        source: { type: string }
+        external_id: { type: string }
+        title: { type: string }
+        role_id: { type: [string, "null"] }
+        region_id: { type: [string, "null"] }
+        salary_from: { type: [number, "null"] }
+        salary_to: { type: [number, "null"] }
+        salary_currency: { type: [string, "null"] }
+        salary_gross: { type: [boolean, "null"] }
+        published_at: { type: [string, "null"], format: date-time }
+        is_active: { type: boolean }
+        skills:
+          type: array
+          items: { type: string }
+
+    VacancyPage:
+      type: object
+      required: [data, page, page_size, total]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Vacancy"
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+
+    TriggerIngestRequest:
+      type: object
+      required: [source, mode]
+      properties:
+        source:
+          type: string
+          enum: [hh, superjob, remotive, adzuna]
+        mode:
+          type: string
+          enum: [full, incremental]
+        params:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            area: "1"
+            text: golang
+            date_from: "2026-08-10"
+
+    TriggerIngestResponse:
+      type: object
+      properties:
+        run_id: { type: string }
+        status: { type: string, example: queued }
+        source: { type: string }
+
+    IngestStats:
+      type: object
+      properties:
+        fetched: { type: integer }
+        published:
+          type: integer
+          description: Число записей, переданных следующему этапу pipeline (in-process в Phase 1 или Kafka в Phase 2).
+        errors: { type: integer }
+
+    IngestRun:
+      type: object
+      properties:
+        run_id: { type: string }
+        source: { type: string }
+        mode: { type: string }
+        status:
+          type: string
+          enum: [queued, running, success, partial, failed]
+        started_at:
+          type: [string, "null"]
+          format: date-time
+        finished_at:
+          type: [string, "null"]
+          format: date-time
+        stats:
+          $ref: "#/components/schemas/IngestStats"
+        error_message:
+          type: [string, "null"]
+
+    StartAIAnalysisRequest:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [role_trend, vacancy_cluster, skills_shift]
+        role_id: { type: string }
+        region_id: { type: string }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        prompt_version: { type: string }
+
+    StartAIAnalysisResponse:
+      type: object
+      properties:
+        job_id: { type: string }
+        status: { type: string }
+
+    AIInsight:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string }
+        status: { type: string }
+        summary: { type: string }
+        bullets:
+          type: array
+          items: { type: string }
+        prompt_version: { type: string }
+        model: { type: string }
+        needs_human_review: { type: boolean }
+        created_at: { type: string, format: date-time }

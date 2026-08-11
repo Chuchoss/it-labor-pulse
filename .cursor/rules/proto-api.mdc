@@ -1,0 +1,20 @@
+---
+description: Контракты API — указатель на единый стиль OpenAPI/proto
+globs: "api/**,libs/proto/**,**/*.proto,**/*openapi*.{yaml,yml,json}"
+alwaysApply: false
+---
+
+# Proto / OpenAPI (LMA)
+
+Стиль и чеклисты: **`docs/architecture/22-documentation-style.md`** и rule `docs-openapi-style.mdc`.
+
+Кратко:
+
+| Артефакт | Путь |
+|----------|------|
+| Public REST | `api/openapi.yaml` |
+| Internal gRPC | `libs/proto/lma/` |
+
+- REST `/api/v1/...`; proto `lma.<domain>.v1`.
+- Смена контракта → yaml/proto + `03-api.md` (+ `16` / `13*` при необходимости).
+- Браузер только REST BFF; gRPC internal.

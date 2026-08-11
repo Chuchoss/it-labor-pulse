@@ -1,0 +1,45 @@
+---
+description: Жёсткие правила LMA / IT Labor Pulse — фазы, секреты, источники, архитектура
+alwaysApply: true
+---
+
+# LMA — project rules
+
+## Источник правды
+
+- Архитектура и контракты: `docs/architecture/`. Не противоречь ADR и docs.
+- OpenAPI: `api/openapi.yaml`. Proto: `libs/proto/lma/`. Env names: `.env.example`.
+- Стиль docs/OpenAPI/proto: `docs/architecture/22-documentation-style.md` (rule `docs-openapi-style.mdc`).
+- Не выдумывай scope: если фичи нет в фазе/docs — спроси или зафиксируй ADR.
+
+## Фазы (не прыгай вперёд)
+
+| Phase | Можно | Не делай без явной просьбы |
+|-------|--------|----------------------------|
+| 0 | skeleton, optional Compose `local-redis`/`local-pg` или cloud `DATABASE_URL`+`REDIS_URL`, BFF health, web shell, migrate | Kafka, CH, полный gRPC |
+| 1 | HH ingest, normalize→PG, Query REST, Redis cache | OLAP как обязательный path; полный продукт «Тенденции» |
+| 2+ | Kafka, CH, gRPC BFF↔Query; опц. foundation `signals.raw` | AI / multi-source job boards без Phase 4; edu/news Perspectives без Phase 5 |
+| 4 | AI + multi-source **job boards** | Полный UI/scoring «Тенденции» (это Phase 5) |
+| 5 | Perspectives «Тенденции»: signal adapters, scores, API, UI | — |
+
+## Секреты и данные
+
+- Никогда не коммить `.env`, ключи, kubeconfig, пароли, токены. Только `.env.example`.
+- Секреты — env/K8s Secret; не в клиентском коде, не в логах, не в образах.
+- См. `docs/architecture/17-secrets-management.md`.
+
+## Язык
+
+- Документация для людей — **русский**.
+- Идентификаторы кода, API, git messages — **английский** (`snake_case`/`camelCase` по стилю слоя).
+
+## Источники вакансий
+
+- Сначала официальный **HH API**. Adapter pattern: новый source = новый adapter, без переписывания core.
+- **Запрещено:** scraping LinkedIn, Avito и любых площадок без разрешённого API/ToS.
+- HH: обязательный идентифицирующий `User-Agent`, backoff на 429, attribution в UI/README.
+- Токены HH/admin — только server-side.
+
+## Логи
+
+- Structured JSON (`slog`), поля из `18-logging-and-incidents.md`. Не логировать секреты и сырые PII.

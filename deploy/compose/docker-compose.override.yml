@@ -1,0 +1,14 @@
+# Optional local overrides (Compose merges this file automatically when present
+# next to docker-compose.yml). Keep secrets out of YAML — use root `.env`.
+#
+# Example: change host ports if 5432/6379 are busy on the host.
+#
+# services:
+#   postgres:
+#     ports:
+#       - "15432:5432"
+#   redis:
+#     ports:
+#       - "16379:6379"
+
+services: {}

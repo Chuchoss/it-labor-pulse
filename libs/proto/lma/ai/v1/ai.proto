@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package lma.ai.v1;
+
+option go_package = "github.com/kolos/study_project/libs/proto/gen/lma/ai/v1;aiv1";
+
+// AIService — Target (Phase 4). Stub for async analysis jobs / insights.
+service AIService {
+  rpc StartAnalysis(StartAnalysisRequest) returns (StartAnalysisResponse);
+  rpc GetJob(GetJobRequest) returns (AIJob);
+  rpc GetInsight(GetInsightRequest) returns (AIInsight);
+}
+
+message StartAnalysisRequest {
+  string type = 1; // role_trend | vacancy_cluster | skills_shift
+  string role_id = 2;
+  string region_id = 3;
+  string from = 4; // YYYY-MM-DD
+  string to = 5;
+  string prompt_version = 6;
+}
+
+message StartAnalysisResponse {
+  string job_id = 1;
+  string status = 2;
+}
+
+message GetJobRequest {
+  string job_id = 1;
+}
+
+message AIJob {
+  string job_id = 1;
+  string type = 2;
+  string status = 3;
+  string error_message = 4;
+  string created_at = 5;
+  string finished_at = 6;
+}
+
+message GetInsightRequest {
+  string id = 1;
+}
+
+message AIInsight {
+  string id = 1;
+  string job_id = 2;
+  string type = 3;
+  string summary = 4;
+  repeated string bullets = 5;
+  string prompt_version = 6;
+  string model = 7;
+  bool needs_human_review = 8;
+  string created_at = 9;
+}

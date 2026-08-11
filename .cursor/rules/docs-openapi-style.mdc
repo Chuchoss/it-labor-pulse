@@ -1,0 +1,51 @@
+---
+description: Единый стиль docs, OpenAPI и proto — язык, нумерация, контракты, ADR
+globs: "docs/**,api/**,libs/proto/**,**/*.proto,**/*openapi*.{yaml,yml,json}"
+alwaysApply: false
+---
+
+# Docs / OpenAPI / Proto style (LMA)
+
+Полный гайд: `docs/architecture/22-documentation-style.md`.
+
+## Source of truth
+
+| Артефакт | Путь |
+|----------|------|
+| Архитектура | `docs/architecture/` |
+| Public REST | `api/openapi.yaml` |
+| Internal gRPC | `libs/proto/lma/` |
+| Env names | `.env.example` |
+
+Не дублируй секреты — только ссылка на `17-secrets-management.md`.
+
+## Язык
+
+- Docs для людей — **русский**, кратко.
+- Идентификаторы OpenAPI/proto/кода — **английский**.
+
+## Docs
+
+- Имена: `NN-name.md` (или `NNa-…`); новый файл → строка в `docs/architecture/README.md`.
+- Кросс-ссылки относительными путями; метки **MVP** / **Target** / фазы из `00-overview.md`.
+- Диаграммы — **mermaid** предпочтительно.
+- Спорное решение → ADR (`Context` / `Decision` / `Consequences`) + `adr/README.md`.
+- Changelog light: заметка в PR; отдельный CHANGELOG — опционально позже.
+
+## OpenAPI
+
+- OpenAPI **3.1**; paths `/api/v1/...`.
+- Единая error schema (`error.code/message/details/request_id`).
+- Target-only → `x-lifecycle: target`.
+- `operationId`: `verbNoun` (`getDashboardSummary`, `listRoles`).
+- Примеры без секретов/токенов/реальных PII.
+- Публикация: GitHub Pages из `docs/api-site/` (Redoc + Swagger UI); канон остаётся `api/openapi.yaml` (CI копирует на build).
+
+## Proto
+
+- Packages: `lma.<domain>.v1` (breaking → `v2` + миграция клиентов).
+- Публичная поверхность не дрейфует от OpenAPI/`03-api.md`.
+
+## При смене API
+
+Обнови: `api/openapi.yaml` **и** `03-api.md`; экраны → `16-frontend.md`; контрактные тесты → `13` / `13a` / `13b` по необходимости. Handler/DTO не расходятся с yaml/proto «молча».

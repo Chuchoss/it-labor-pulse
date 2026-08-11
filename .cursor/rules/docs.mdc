@@ -1,0 +1,16 @@
+---
+description: Документация архитектуры — указатель на единый стиль
+globs: "docs/**"
+alwaysApply: false
+---
+
+# Docs (LMA)
+
+Стиль и чеклисты: **`docs/architecture/22-documentation-style.md`** и rule `docs-openapi-style.mdc`.
+
+Кратко:
+
+- Docs — **русский**; новый `NN-*.md` → индекс `docs/architecture/README.md`.
+- Кросс-ссылки, метки **MVP** / **Target**; не дублируй длинные куски.
+- Спорное → ADR + `adr/README.md`.
+- Контракты: `api/openapi.yaml`, `libs/proto/lma/`.

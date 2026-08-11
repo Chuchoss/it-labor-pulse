@@ -1,0 +1,149 @@
+# LMA CI/CD gate: test first, then deploy.
+# Docs: docs/architecture/10-cicd.md, 13-testing.md
+#
+# Branch model:
+#   develop → deploy-dev  (environment: development)
+#   main    → deploy-prod (environment: production, require reviewers on GitHub)
+#
+# Required status check for branch protection: job name "test"
+
+name: ci-cd
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+concurrency:
+  group: ci-cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Gate: always runs on PR + push. Deploy jobs need this to succeed.
+  # ---------------------------------------------------------------------------
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check OpenAPI stub present
+        run: |
+          test -f api/openapi.yaml
+          echo "openapi.yaml OK"
+
+      # --- TODO (when Go modules appear): lint + unit ---
+      # - name: Setup Go
+      #   uses: actions/setup-go@v5
+      #   with:
+      #     go-version-file: go.work   # or go.mod path
+      # - name: golangci-lint
+      #   uses: golangci/golangci-lint-action@v6
+      # - name: Go unit tests (no integration tag, no network)
+      #   run: go test ./...
+
+      # --- TODO (when apps/web exists): frontend unit ---
+      # - name: Setup Node
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: "22"
+      #     cache: npm
+      #     cache-dependency-path: apps/web/package-lock.json
+      # - name: Vitest
+      #   working-directory: apps/web
+      #   run: npm ci && npm test
+
+      # --- TODO (when libs/proto + buf.yaml exist): contract ---
+      # - name: buf lint / breaking
+      #   uses: bufbuild/buf-action@v1
+      #   with:
+      #     lint: true
+      #     breaking: true
+      #     breaking_against: "https://github.com/${{ github.repository }}.git#branch=main"
+
+      # --- TODO (push main only): integration + migrate smoke ---
+      # - name: Go integration tests
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      #   run: go test -tags=integration ./...
+
+      - name: CI gate placeholder
+        run: |
+          echo "TODO: enable go test / Vitest / buf when modules appear (see 10-cicd.md, 13-testing.md)"
+          echo "Suite intent:"
+          echo "  PR + develop: lint + unit + contract lite"
+          echo "  main push:    + integration (when code exists)"
+          if [ "${{ github.ref }}" = "refs/heads/main" ] && [ "${{ github.event_name }}" = "push" ]; then
+            echo "main push: stricter gate path (integration TODO)"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Deploy only after green test; never on PR / forks.
+  # ---------------------------------------------------------------------------
+  deploy-dev:
+    name: deploy-dev
+    needs: [test]
+    if: >
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/develop'
+      && github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: development
+    permissions:
+      contents: read
+      # packages: write   # TODO: when pushing to GHCR
+      # id-token: write   # TODO: when using OIDC to cloud
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to development (stub)
+        run: |
+          echo "TODO: build/push images, migrate Job, kubectl/helm to lma-dev"
+          echo "Secrets: GitHub Environment 'development' (see docs/architecture/17-secrets-management.md)"
+          echo "Never deploy on failed tests — this job has needs: [test]"
+
+      # --- TODO Phase 3+ ---
+      # - name: Build and push images
+      # - name: Configure kube / OIDC
+      # - name: Run migrate Job
+      # - name: Rollout apps
+      # - name: Smoke curl /api/v1/health
+
+  deploy-prod:
+    name: deploy-prod
+    needs: [test]
+    if: >
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+      && github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      contents: read
+      # packages: write
+      # id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to production (stub)
+        run: |
+          echo "TODO: promote same image digest, migrate, rollout lma-prod"
+          echo "Enable Required reviewers on Environment 'production' in GitHub Settings"
+          echo "Secrets: GitHub Environment 'production' only (not shared with development)"
+
+      # --- TODO Phase 3+ ---
+      # - name: Build and push images (or promote digest from dev)
+      # - name: Configure kube / OIDC
+      # - name: Run migrate Job
+      # - name: Rollout apps
+      # - name: Smoke curl /api/v1/health (+ optional 1 Playwright)

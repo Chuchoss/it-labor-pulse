@@ -1,0 +1,9 @@
+{
+  "id": "900012",
+  "name": "Data Engineer",
+  "area": { "id": "1", "name": "Москва" },
+  "salary": { "from": 4000, "to": 5000, "currency": "USD", "gross": false },
+  "employer": { "id": "70012", "name": "Синтетические Данные" },
+  "published_at": "2026-08-10T10:00:00+0300",
+  "archived": false
+}

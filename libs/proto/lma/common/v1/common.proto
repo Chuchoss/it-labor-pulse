@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package lma.common.v1;
+
+option go_package = "github.com/kolos/study_project/libs/proto/gen/lma/common/v1;commonv1";
+
+// Period is an inclusive date range (YYYY-MM-DD).
+message Period {
+  string from = 1;
+  string to = 2;
+}
+
+message PageRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+message PageResponse {
+  int32 page = 1;
+  int32 page_size = 2;
+  int64 total = 3;
+}
+
+enum Source {
+  SOURCE_UNSPECIFIED = 0;
+  SOURCE_HH = 1;
+  SOURCE_SUPERJOB = 2;
+  SOURCE_REMOTIVE = 3;
+  SOURCE_ADZUNA = 4;
+}

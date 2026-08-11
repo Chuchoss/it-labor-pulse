@@ -1,0 +1,149 @@
+{
+  "found": 2,
+  "page": 0,
+  "pages": 1,
+  "per_page": 20,
+  "items": [
+    {
+      "id": "900001",
+      "premium": false,
+      "name": "Senior Go Developer",
+      "department": null,
+      "has_test": false,
+      "response_letter_required": false,
+      "area": {
+        "id": "1",
+        "name": "Москва",
+        "url": "https://api.hh.ru/areas/1"
+      },
+      "salary": {
+        "from": 300000,
+        "to": 400000,
+        "currency": "RUR",
+        "gross": true
+      },
+      "salary_range": {
+        "from": 300000,
+        "to": 400000,
+        "currency": "RUR",
+        "gross": true,
+        "mode": {
+          "id": "MONTH",
+          "name": "За месяц"
+        }
+      },
+      "type": {
+        "id": "open",
+        "name": "Открытая"
+      },
+      "address": null,
+      "response_url": null,
+      "sort_point_distance": null,
+      "published_at": "2026-08-10T10:15:00+0300",
+      "created_at": "2026-08-10T10:15:00+0300",
+      "archived": false,
+      "apply_alternate_url": "https://hh.ru/applicant/vacancy_response?vacancyId=900001",
+      "insider_interview": null,
+      "url": "https://api.hh.ru/vacancies/900001",
+      "alternate_url": "https://hh.ru/vacancy/900001",
+      "relations": [],
+      "employer": {
+        "id": "70001",
+        "name": "ООО Ромашка Тех",
+        "url": "https://api.hh.ru/employers/70001",
+        "alternate_url": "https://hh.ru/employer/70001",
+        "logo_urls": null,
+        "vacancies_url": "https://api.hh.ru/vacancies?employer_id=70001",
+        "accredited_it_employer": true,
+        "trusted": true
+      },
+      "snippet": {
+        "requirement": "Опыт Go от 3 лет, PostgreSQL, Kafka",
+        "responsibility": "Разработка backend-сервисов"
+      },
+      "contacts": null,
+      "schedule": {
+        "id": "remote",
+        "name": "Удаленная работа"
+      },
+      "working_days": [],
+      "working_time_intervals": [],
+      "working_time_modes": [],
+      "accept_temporary": false,
+      "professional_roles": [
+        {
+          "id": "96",
+          "name": "Программист, разработчик"
+        }
+      ],
+      "accept_incomplete_resumes": false,
+      "experience": {
+        "id": "between3And6",
+        "name": "От 3 до 6 лет"
+      },
+      "employment": {
+        "id": "full",
+        "name": "Полная занятость"
+      },
+      "adv_response_url": null,
+      "is_adv_vacancy": false
+    },
+    {
+      "id": "900002",
+      "premium": false,
+      "name": "Middle Frontend Developer (React)",
+      "department": null,
+      "has_test": false,
+      "response_letter_required": false,
+      "area": {
+        "id": "2",
+        "name": "Санкт-Петербург",
+        "url": "https://api.hh.ru/areas/2"
+      },
+      "salary": null,
+      "salary_range": null,
+      "type": {
+        "id": "open",
+        "name": "Открытая"
+      },
+      "published_at": "2026-08-09T14:00:00+0300",
+      "created_at": "2026-08-09T14:00:00+0300",
+      "archived": false,
+      "url": "https://api.hh.ru/vacancies/900002",
+      "alternate_url": "https://hh.ru/vacancy/900002",
+      "employer": {
+        "id": "70002",
+        "name": "АО Северный Код",
+        "url": "https://api.hh.ru/employers/70002",
+        "alternate_url": "https://hh.ru/employer/70002",
+        "logo_urls": null,
+        "vacancies_url": "https://api.hh.ru/vacancies?employer_id=70002",
+        "accredited_it_employer": false,
+        "trusted": true
+      },
+      "snippet": {
+        "requirement": "React, TypeScript",
+        "responsibility": "UI личного кабинета"
+      },
+      "contacts": null,
+      "schedule": {
+        "id": "fullDay",
+        "name": "Полный день"
+      },
+      "professional_roles": [
+        {
+          "id": "96",
+          "name": "Программист, разработчик"
+        }
+      ],
+      "experience": {
+        "id": "between1And3",
+        "name": "От 1 года до 3 лет"
+      },
+      "employment": {
+        "id": "full",
+        "name": "Полная занятость"
+      }
+    }
+  ]
+}

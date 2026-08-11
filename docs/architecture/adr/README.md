@@ -1,0 +1,17 @@
+# Architecture Decision Records (ADR)
+
+Короткие решения для LMA / IT Labor Market Analytics. Формат: Context → Decision → Consequences.
+
+| ADR | Тема |
+|-----|------|
+| [001](./001-json-vs-avro.md) | Формат Kafka messages: JSON vs Avro |
+| [002](./002-migrate-tool.md) | Инструмент миграций PostgreSQL |
+| [003](./003-redpanda-local.md) | Redpanda как локальный брокер (optional) |
+| [004](./004-bff-vs-direct-query.md) | BFF vs прямой доступ UI → Query |
+| [005](./005-clickhouse-phase2.md) | ClickHouse не в Phase 1 |
+| [006](./006-cache-strategy.md) | Cache-aside + version bump |
+| [007](./007-multi-source-trend-signals.md) | Multi-source «Тенденции» vs vacancy-only metrics |
+| [008](./008-github-pages-openapi.md) | GitHub Pages + Redoc/Swagger UI для OpenAPI |
+
+Новый ADR: скопировать структуру, следующий номер, ссылка в эту таблицу.
+Связь с обзором: [00-overview.md](../00-overview.md).

@@ -1,0 +1,43 @@
+---
+description: Конвенции Go для сервисов LMA (layout, errors, slog, migrate)
+globs: "**/*.go,**/go.mod,**/go.work"
+alwaysApply: false
+---
+
+# Go (LMA)
+
+## Layout
+
+- Бинари: `cmd/<service>/main.go` (тонкий main).
+- Логика: `internal/...` (не экспортировать наружу модуля без нужды).
+- Общее: `libs/go-common/...`. Сервисы: `apps/<name>/` (или согласованная структура монорепо из docs).
+
+## Errors & context
+
+```go
+// ❌ BAD
+return err
+panic("unreachable") // в library-коде
+
+// ✅ GOOD
+return fmt.Errorf("normalize salary: %w", err)
+```
+
+- Прокидывай `context.Context` первым аргументом в I/O и RPC.
+- Не глотай ошибки; на границах HTTP/gRPC — map в статус + log с полями.
+- `panic` только в `main` при фатальном bootstrap; в libs/workers — нет.
+
+## Logging
+
+- `log/slog` JSON; обязательные поля: `service`, `env`, `msg`; по ситуации `trace_id`/`request_id`, `ingest_run_id`, `source`, `vacancy_external_id`.
+- Не логировать токены, DSN с паролем, полные HH/AI payload на info.
+
+## DB & migrate
+
+- Схема PG — только через **golang-migrate** SQL (ADR 002), не ad-hoc DDL в prod path.
+- Запросы: параметризованные; ownership таблиц — по `02-services.md`.
+
+## Style
+
+- `gofmt` + `goimports`; линтер — `.golangci.yml`.
+- Table-driven tests; HH adapter — фикстуры из `testdata/hh/`, без сети в unit/CI.
