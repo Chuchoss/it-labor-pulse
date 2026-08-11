@@ -38,6 +38,8 @@ Feature → PR в `developer` → PR в `production`. Gate: [`.github/workflows/
 
 ## Статус
 
+CI: GitHub Actions (`test` required on PRs).
+
 | Сейчас | Дальше |
 |--------|--------|
 | Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra | Код сервисов по [фазам](./docs/architecture/00-overview.md) |
