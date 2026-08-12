@@ -51,7 +51,7 @@ go test -tags=integration ./...         # с Docker
 
 ## 2. Unit: normalize и pure logic
 
-**Пакет (целевой):** `libs/go-common/normalize` (или `apps/normalizer/internal/...` на Phase 1 — один канон, без дублирования правил).
+**Пакет:** [`libs/go-common/normalize`](../../libs/go-common/normalize) (один канон shared rules; ingest/normalizer сервис вызывает его, не дублирует).
 
 ### Обязательные table-driven кейсы
 

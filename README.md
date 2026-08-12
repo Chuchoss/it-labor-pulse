@@ -50,7 +50,7 @@ CI: GitHub Actions (`test` required on PRs).
 
 | Сейчас | Дальше |
 |--------|--------|
-| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra, Phase 0 BFF (`GET /api/v1/health`) | Query/ingest и дальше по [фазам](./docs/architecture/00-overview.md) |
+| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra, Phase 0 BFF (`GET /api/v1/health`), shared normalize (`libs/go-common/normalize`) | Query/ingest и дальше по [фазам](./docs/architecture/00-overview.md) |
 
 ## Attribution
 

@@ -3,6 +3,8 @@
 Канонические правила преобразования сырых вакансий (сначала HH) в модель из [05-data-model.md](./05-data-model.md).  
 Используются normalizer'ом и unit-тестами ([13-testing.md](./13-testing.md)).
 
+**Пакет (Phase 1):** чистая реализация shared rules — [`libs/go-common/normalize`](../../libs/go-common/normalize) (`Draft` / `CanonicalVacancy` / `Normalize` / injectable FX и alias maps). Без сети и без записи в PG; ingest вызывает пакет позже. Тесты: `go test ./libs/go-common/normalize/...` (+ фикстуры [`testdata/hh`](../../testdata/hh)).
+
 **Продуктовый принцип:** на дашборде по умолчанию показываем **предлагаемые зарплаты из вакансий (offered)**, не survey-бенчмарки. Смешение — только с явной пометкой серии.
 
 ---
@@ -180,8 +182,8 @@ Skip upsert body если hash совпал (touch `collected_at` опциона
 
 ## Чеклист реализации
 
-- [ ] Table-driven tests на mid / gross / FX / outliers  
-- [ ] Фикстура HH detail с salary и без  
-- [ ] Метрики unmapped role / invalid salary / fx miss  
+- [x] Table-driven tests на mid / gross / FX / outliers (`libs/go-common/normalize`)  
+- [x] Фикстура HH detail с salary и без (`testdata/hh`)  
+- [x] Метрики unmapped role / invalid salary / fx miss (флаги `Metrics` в результате)  
 - [ ] UI copy: offered, net estimate, attribution HH  
 - [ ] Не смешивать survey в `median_salary`  
