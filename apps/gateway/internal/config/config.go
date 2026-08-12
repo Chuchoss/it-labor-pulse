@@ -2,45 +2,50 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 )
 
-// Config holds BFF runtime settings from environment.
+// Config holds gateway runtime settings from environment.
 type Config struct {
 	HTTPAddr    string
-	DatabaseURL string
+	BFFUpstream string
 	AppEnv      string
 	LogLevel    string
 }
 
-// Load reads BFF config from env.
-// Listen address precedence: BFF_HTTP_ADDR, then PORT / BFF_PORT (bare port or :port), default :8081.
-// Public edge is gateway (:8080); BFF is internal. DATABASE_URL optional for health ping.
+// Load reads gateway config from env.
+// Listen: GATEWAY_HTTP_ADDR, then PORT / GATEWAY_PORT, default :8080.
+// Upstream: BFF_UPSTREAM, default http://127.0.0.1:8081
 func Load() (Config, error) {
 	cfg := Config{
 		HTTPAddr:    resolveHTTPAddr(),
-		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		BFFUpstream: envOr("BFF_UPSTREAM", "http://127.0.0.1:8081"),
 		AppEnv:      envOr("APP_ENV", "local"),
 		LogLevel:    envOr("LOG_LEVEL", "info"),
 	}
 	if cfg.HTTPAddr == "" {
 		return Config{}, fmt.Errorf("http listen address is empty")
 	}
+	u, err := url.Parse(cfg.BFFUpstream)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return Config{}, fmt.Errorf("invalid BFF_UPSTREAM %q: need absolute URL", cfg.BFFUpstream)
+	}
 	return cfg, nil
 }
 
 func resolveHTTPAddr() string {
-	if v := strings.TrimSpace(os.Getenv("BFF_HTTP_ADDR")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("GATEWAY_HTTP_ADDR")); v != "" {
 		return normalizeAddr(v)
 	}
-	if v := strings.TrimSpace(os.Getenv("BFF_PORT")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("GATEWAY_PORT")); v != "" {
 		return normalizeAddr(v)
 	}
 	if v := strings.TrimSpace(os.Getenv("PORT")); v != "" {
 		return normalizeAddr(v)
 	}
-	return ":8081"
+	return ":8080"
 }
 
 func normalizeAddr(v string) string {

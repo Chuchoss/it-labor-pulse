@@ -1,6 +1,6 @@
 # 16. Frontend IA (MVP + Target Perspectives)
 
-React SPA (`web`) — дашборд аналитики IT-рынка труда. Публичный API только через BFF (`/api/v1`), контракт: [03-api.md](./03-api.md), [`api/openapi.yaml`](../../api/openapi.yaml).
+React SPA (`web`) — дашборд аналитики IT-рынка труда. Публичный API только через **gateway** → BFF (`/api/v1`), контракт: [03-api.md](./03-api.md), [`api/openapi.yaml`](../../api/openapi.yaml), [ADR 010](./adr/010-api-gateway.md).
 
 ---
 
@@ -131,7 +131,7 @@ Nav: пункт «Тенденции» не добавлять в MVP shell до
 
 ## Техзаметки
 
-- Base URL: `VITE_API_BASE_URL` (см. `.env.example`).
+- Base URL: `VITE_API_BASE_URL` → **gateway** (`http://localhost:8080/api/v1`, см. `.env.example`).
 - `request_id` из error body — в UI error state.
 - OpenAPI → опциональная генерация типов (`openapi-typescript`) в Phase 1.
 - Auth MVP отсутствует; admin token только если появится admin UI.

@@ -12,6 +12,8 @@
 | [006](./006-cache-strategy.md) | Cache-aside + version bump |
 | [007](./007-multi-source-trend-signals.md) | Multi-source «Тенденции» vs vacancy-only metrics |
 | [008](./008-github-pages-openapi.md) | GitHub Pages + Redoc/Swagger UI для OpenAPI |
+| [009](./009-otel-loki-tempo.md) | OpenTelemetry + Loki + Tempo (корреляция `trace_id`) |
+| [010](./010-api-gateway.md) | Отдельный API Gateway (edge) + BFF |
 
 Новый ADR: скопировать структуру, следующий номер, ссылка в эту таблицу.
 Связь с обзором: [00-overview.md](../00-overview.md).

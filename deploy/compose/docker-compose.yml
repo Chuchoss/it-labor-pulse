@@ -13,8 +13,8 @@
 #   make up-local         # local redis + local postgres
 #   make up-cloud         # reminder: use cloud URLs, no containers
 #
-# Profiles: local-redis | local-pg | mvp (apps later) | olap / bus / full — позже
-# Docs: docs/architecture/12-local-dev.md, 09-deployment.md
+# Profiles: local-redis | local-pg | mvp (apps later) | observability|obs | olap / bus / full — позже
+# Docs: docs/architecture/12-local-dev.md, 23-observability-tracing.md, 09-deployment.md
 
 name: lma
 
@@ -60,9 +60,107 @@ services:
     networks:
       - lma
 
+  # --- Observability (opt-in): Loki + Tempo + Grafana + Alloy + Prometheus ---
+  # docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile observability up -d
+  # Alias profile: obs. Does not start with mvp / local-redis / local-pg alone.
+  loki:
+    profiles: ["observability", "obs"]
+    image: grafana/loki:3.4.2
+    container_name: lma-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./observability/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - lma
+
+  tempo:
+    profiles: ["observability", "obs"]
+    image: grafana/tempo:2.7.1
+    container_name: lma-tempo
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo-config.yaml"]
+    volumes:
+      - ./observability/tempo-config.yaml:/etc/tempo/tempo-config.yaml:ro
+      - tempo_data:/var/tempo
+    networks:
+      - lma
+
+  alloy:
+    profiles: ["observability", "obs"]
+    image: grafana/alloy:v1.7.1
+    container_name: lma-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=0.0.0.0:12345
+    ports:
+      - "${OTEL_HOST_PORT_GRPC:-4317}:4317"
+      - "${OTEL_HOST_PORT_HTTP:-4318}:4318"
+    volumes:
+      - ./observability/alloy-config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+      - tempo
+    networks:
+      - lma
+
+  prometheus:
+    profiles: ["observability", "obs"]
+    image: prom/prometheus:v3.2.1
+    container_name: lma-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - lma
+
+  grafana:
+    profiles: ["observability", "obs"]
+    image: grafana/grafana:11.5.2
+    container_name: lma-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    ports:
+      # 3001 default — avoid clash with future web:3000
+      - "${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - loki
+      - tempo
+      - prometheus
+    networks:
+      - lma
+
 volumes:
   postgres_data:
   redis_data:
+  loki_data:
+  tempo_data:
+  alloy_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   lma:

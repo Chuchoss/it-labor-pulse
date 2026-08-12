@@ -6,13 +6,14 @@
 |--------|-----|--------|
 | Logging | structured JSON stdout | + centralized (Loki/ELK) |
 | Metrics | Prometheus `/metrics` | Grafana dashboards + alerts |
-| Tracing | request_id propagation | OpenTelemetry → Jaeger/Tempo |
+| Tracing | `trace_id` + `request_id` в JSON | OpenTelemetry → Tempo (+ Loki link) |
 
 ## Logging
 
-**Полный дизайн** (куда писать по фазам, Loki, поиск LogQL, playbook инцидентов, чеклист внедрения): **[18-logging-and-incidents.md](./18-logging-and-incidents.md)**.
+**Полный дизайн логов** (куда писать по фазам, LogQL, playbook инцидентов): **[18-logging-and-incidents.md](./18-logging-and-incidents.md)**.  
+**Tracing / поиск по `trace_id` / Loki↔Tempo:** **[23-observability-tracing.md](./23-observability-tracing.md)** ([ADR 009](./adr/009-otel-loki-tempo.md)).
 
-Кратко здесь — контракт формата; детали и ops не дублируем.
+Кратко здесь — контракт формата и pillars; детали tracing/ops не дублируем.
 
 **Формат:** JSON, одна строка = одно событие → **stdout** (Phase 1: `docker logs`; Phase 2/3: Loki + Grafana).
 
@@ -24,7 +25,8 @@
 | `level` | info/warn/error |
 | `msg` | short |
 | `service` | bff/query/ingest/... |
-| `trace_id` / `request_id` | ULID |
+| `trace_id` | 32 hex (W3C); см. [23](./23-observability-tracing.md) |
+| `request_id` | ULID (`X-Request-Id`) |
 | `ingest_run_id` | когда релевантно |
 | `source` / `external_id` | ingest/normalize; `external_id` — единственное имя для внешнего id вакансии |
 | `error` | string + type |
@@ -58,9 +60,12 @@
 
 ## Tracing
 
+Полный дизайн (корреляция, стек Loki/Tempo/Grafana, LogQL, Compose profile, чеклист Go): **[23-observability-tracing.md](./23-observability-tracing.md)**.
+
 ```mermaid
 flowchart LR
-  UI --> BFF
+  UI --> Gateway
+  Gateway --> BFF
   BFF --> Query
   Query --> Redis
   Query --> CH
@@ -72,9 +77,10 @@ flowchart LR
   Norm --> CH
 ```
 
-- W3C `traceparent` на HTTP; gRPC metadata propagation  
-- Span names: `HH.GetVacancies`, `Redis.Get`, `CH.QuerySummary`  
-- Sampling: 100% dev; 5–20% prod + always on errors  
+- W3C `traceparent` → поле лога `trace_id`; отдельно `request_id` (`X-Request-Id`)  
+- HTTP / gRPC / Kafka: propagate context; spans: `HH.GetVacancies`, `Redis.Get`, `CH.QuerySummary`  
+- Sampling: 100% local; 5–20% prod + always on errors  
+- Grafana: `{service="bff"} | json | trace_id="…"` → derived field → Tempo  
 
 ## Health & alerting
 
@@ -181,7 +187,8 @@ gRPC: остаётся внутри кластера; service-to-service mTLS �
 
 - Validate all query params (dates, enums, page_size max)  
 - Timeouts на все outbound HTTP/gRPC  
-- Body size limits на BFF  
+- Body size limits на gateway (edge)  
+
 - Dependency scanning в CI (Target)  
 - Non-root containers  
 - Read-only root FS where possible  
@@ -207,6 +214,6 @@ gRPC: остаётся внутри кластера; service-to-service mTLS �
 - [ ] HH User-Agent с контактом  
 - [ ] Секреты не в репозитории  
 - [ ] Admin endpoints закрыты  
-- [ ] Rate limit на публичное API  
+- [ ] Rate limit на публичное API (gateway)  
 - [ ] README с дисклеймером источника данных  
 - [ ] Нет хранения лишних персональных контактов из описаний  

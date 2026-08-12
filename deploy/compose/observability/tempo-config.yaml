@@ -1,0 +1,46 @@
+# Minimal Tempo for local profile observability / obs.
+# Docs: docs/architecture/23-observability-tracing.md
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 48h
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
+
+query_frontend:
+  search:
+    duration_slo: 5s
+    throughput_bytes_slo: 1.073741824e+09
+
+metrics_generator:
+  processor:
+    local_blocks:
+      filter_server_spans: false
+  storage:
+    path: /var/tempo/generator/wal
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: []

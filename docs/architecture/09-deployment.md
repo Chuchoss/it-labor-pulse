@@ -23,8 +23,9 @@ deploy/compose/
 | Service | Image / build | Ports |
 |---------|---------------|-------|
 | `web` | React (nginx) | 3000→80 |
-| `bff` | Go | 8080 |
-| `query` | Go | 8081, 9091 |
+| `gateway` | Go | 8080 (public) |
+| `bff` | Go | 8081 (internal) |
+| `query` | Go | 8083, 9091 |
 | `ingest` | Go | 8082, 9092 |
 | `normalizer` | Go | — |
 | `scheduler` | Go или profile off + ручной curl | — |
@@ -37,7 +38,8 @@ deploy/compose/
 ```mermaid
 flowchart TB
   subgraph compose [docker compose]
-    web --> bff
+    web --> gateway
+    gateway --> bff
     bff --> query
     bff --> ingest
     scheduler --> ingest
@@ -52,8 +54,8 @@ flowchart TB
   end
 ```
 
-**Сейчас в `deploy/compose`:** profile `local-redis` — опциональный Redis; profile `local-pg` — опциональный Postgres; profile `mvp` — зарезервирован под приложения. Рекомендуемый cloud path: managed Postgres (`DATABASE_URL`) + managed Redis (`REDIS_URL`, часто `rediss://`) — Compose infra может быть пустой (см. [12-local-dev.md](./12-local-dev.md)).  
-**Цель Phase 1 local:** + bff + query + ingest(+normalize in-process) + web.  
+**Сейчас в `deploy/compose`:** profile `local-redis` — опциональный Redis; profile `local-pg` — опциональный Postgres; profile `mvp` — зарезервирован под приложения; profile `observability` / `obs` — Loki + Tempo + Alloy + Prometheus + Grafana (opt-in, [23](./23-observability-tracing.md)). Рекомендуемый cloud path: managed Postgres (`DATABASE_URL`) + managed Redis (`REDIS_URL`, часто `rediss://`) — Compose infra может быть пустой (см. [12-local-dev.md](./12-local-dev.md)).  
+**Цель Phase 1 local:** + gateway + bff + query + ingest(+normalize in-process) + web.  
 Kafka/CH — Phase 2 (`olap` / `bus`) без смены публичного API.
 
 ## Production-like: Kubernetes
@@ -63,7 +65,8 @@ Kafka/CH — Phase 2 (`olap` / `bus`) без смены публичного API
 | Component | Kind | Replicas (start) | Notes |
 |-----------|------|------------------|-------|
 | `web` | Deployment | 2 | nginx + static |
-| `bff` | Deployment | 2 | HPA |
+| `gateway` | Deployment | 2 | HPA; public Ingress |
+| `bff` | Deployment | 2 | HPA; ClusterIP |
 | `query` | Deployment | 2 | HPA |
 | `ingest` | Deployment | 1–2 | не масштабировать агрессивно из-за HH limits |
 | `normalizer` | Deployment | 2+ | scale by Kafka lag |
@@ -75,14 +78,15 @@ Kafka/CH — Phase 2 (`olap` / `bus`) без смены публичного API
 ### Services
 
 - `ClusterIP` для всех app-сервисов
-- `Ingress` → `web` (`/`) + `bff` (`/api`)
+- `Ingress` → `web` (`/`) + `gateway` (`/api`); BFF без public Ingress
 - gRPC **не** через public Ingress
 
 ```mermaid
 flowchart LR
   Inet[Internet] --> Ing[Ingress TLS]
   Ing -->|/| Web[web svc]
-  Ing -->|/api| BFF[bff svc]
+  Ing -->|/api| GW[gateway svc]
+  GW --> BFF[bff svc]
   BFF --> Query
   BFF --> Ingest
 ```

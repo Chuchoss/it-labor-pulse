@@ -1,7 +1,7 @@
 # 21. Внешние сервисы и провайдеры
 
 Живой реестр внешних сервисов / managed-провайдеров для LMA (IT Labor Pulse).  
-Внутренние микросервисы проекта (BFF, Query, Ingest) — в [02-services.md](./02-services.md).
+Внутренние микросервисы проекта (Gateway, BFF, Query, Ingest) — в [02-services.md](./02-services.md).
 
 **Не хранить здесь:** пароли, токены, реальные connection strings, kubeconfig. Только имена env-переменных и публичные ссылки. Секреты — [17-secrets-management.md](./17-secrets-management.md), шаблон имён — [`.env.example`](../../.env.example).
 
@@ -41,7 +41,9 @@
 | Edu platform (курсы) | Skillbox | **кандидат** (Phase 5) | RU learning signals | TBD | ToS / публичные данные | API **unknown**; не утверждать наличие контракта |
 | News / RSS | TBD (официальные RSS / news API) | **кандидат** (Phase 5) | Media-attention mentions технологий/ролей | TBD | [08 § Perspectives](./08-integrations-and-extensibility.md) | Предпочитать RSS/официальные API; Google News и аналоги — только после проверки ToS |
 | Articles | Habr | **кандидат** (Phase 5) | Упоминания в статьях / тегах | TBD | ToS / API если есть | Без обхода ToS; attribution обязательна |
-| Observability (логи) | Loki / Grafana (ориентир) | **later** | Централизованные логи, дашборды | TBD | [18-logging-and-incidents.md](./18-logging-and-incidents.md), [11-observability-security.md](./11-observability-security.md) | Стек наблюдаемости не зафиксирован как cloud-провайдер |
+| Observability (logs/traces UI) | Grafana + Loki + Tempo (self-host) | **кандидат** | Централизованные логи + traces, поиск по `trace_id` | `OTEL_*`, `GRAFANA_*`, `LOKI_PORT` | [23-observability-tracing.md](./23-observability-tracing.md), [18](./18-logging-and-incidents.md), [ADR 009](./adr/009-otel-loki-tempo.md) | Local: Compose profile `observability` / `obs`. Cloud-провайдер стека — не locked |
+| Observability (managed) | [Grafana Cloud](https://grafana.com/products/cloud/) | **кандидат** | Free tier Logs/Traces/Metrics без self-host | `OTEL_EXPORTER_OTLP_ENDPOINT`, `GRAFANA_CLOUD_*` (имена в `.env.example`) | [23 § Local vs cloud](./23-observability-tracing.md) | Секреты только env/K8s Secret ([17](./17-secrets-management.md)); выбор self-host vs Cloud — later |
+| Observability (agent) | Grafana Alloy (local Compose) | local fallback | OTLP ingest + scrape → Loki/Tempo/Prometheus | `OTEL_HOST_PORT_HTTP=4318` | `deploy/compose/observability/` | Opt-in; не входит в `make up-mvp` |
 | CI/CD | GitHub Actions | **выбрано** | lint/test gate → deploy | — (секреты в GitHub Environments, не в `.env`) | [10-cicd.md](./10-cicd.md), [17 §6](./17-secrets-management.md#6-cicd-github-actions), [`.github/workflows/ci-cd.yml`](../../.github/workflows/ci-cd.yml) | Environments: `development` (push `developer`), `production` (push `production` + reviewers). Deploy-секреты только в Environments; fork PR без secrets |
 | API docs hosting | GitHub Pages | **выбрано** | Публичный Redoc + Swagger UI для `api/openapi.yaml` | — (секретов нет) | [10-cicd.md](./10-cicd.md) (`docs-pages.yml`), [22-documentation-style.md](./22-documentation-style.md), [ADR 008](./adr/008-github-pages-openapi.md), [`docs/api-site/`](../api-site/) | Live: [Redoc](https://chuchoss.github.io/it-labor-pulse/), [Swagger UI](https://chuchoss.github.io/it-labor-pulse/swagger.html). jsDelivr CDN для UI; yaml копируется в site только на build |
 

@@ -2,7 +2,7 @@
 
 Цель: поднять **Phase 0–1** локально за ~15 минут и понять, что делать при типичных сбоях.
 
-Связанные документы: [00-overview.md](./00-overview.md) (фазы), [09-deployment.md](./09-deployment.md) (Compose), [11-observability-security.md](./11-observability-security.md) (HH User-Agent).  
+Связанные документы: [00-overview.md](./00-overview.md) (фазы), [09-deployment.md](./09-deployment.md) (Compose), [11-observability-security.md](./11-observability-security.md) (HH User-Agent), [23-observability-tracing.md](./23-observability-tracing.md) (profile `observability`).  
 Актуальный выбор провайдеров (Supabase, Redis candidates и т.д.): [21-external-services.md](./21-external-services.md).
 
 ---
@@ -100,14 +100,21 @@ make migrate-up
 7. Подключиться к БД/Redis (облако или local — см. [ниже](#подключение-к-postgres--redis), [Облачный PostgreSQL](#облачный-postgresql), [Облачный Redis](#облачный-redis)).
 
 **Сейчас в Compose:** Redis — опционально (`local-redis`); Postgres — опционально (`local-pg`). Profile `mvp` зарезервирован под приложения Phase 0–1.  
-**Дальше Phase 0:** + bff hello, web shell → тогда `wait-ready` начнёт дергать `curl -sf http://localhost:8080/api/v1/health`.  
+**Дальше Phase 0:** + gateway + bff hello, web shell → health: `curl -sf http://localhost:8080/api/v1/health` (через gateway).  
 **Phase 1:** + ingest/normalize (in-process), query, ручной admin ingest.
 
-Когда появятся приложения:
+Локальный API (два процесса):
 
 ```bash
-# UI / API (ещё не в compose)
+# терминал 1 — BFF (internal)
+make run-bff          # :8081
+
+# терминал 2 — gateway (public)
+make run-gateway      # :8080 → BFF_UPSTREAM
+
+# UI / API
 # http://localhost:3000
+# http://localhost:8080/api/v1/health
 # http://localhost:8080/api/v1/dashboard/summary?from=2026-07-01&to=2026-08-01
 
 curl -X POST http://localhost:8080/api/v1/admin/ingest/runs \
@@ -115,6 +122,8 @@ curl -X POST http://localhost:8080/api/v1/admin/ingest/runs \
   -H "X-Admin-Token: $ADMIN_TOKEN" \
   -d '{"source":"hh","mode":"incremental","params":{"area":"1","text":"golang"}}'
 ```
+
+Подсказка: `make run-api` печатает порядок запуска. См. [ADR 010](./adr/010-api-gateway.md).
 
 ---
 
@@ -130,13 +139,13 @@ deploy/compose/
 
 | Profile | Что поднимает | Когда |
 |---------|---------------|-------|
-| `mvp` | **цель Phase 0–1:** bff, query, ingest(+normalize in-process), web (пока пусто) | приложения; data plane — cloud или local-* |
+| `mvp` | **цель Phase 0–1:** gateway, bff, query, ingest(+normalize in-process), web (пока пусто) | приложения; data plane — cloud или local-* |
 | `local-redis` | контейнер `redis` (опционально) | если не используете облачный Redis |
 | `local-pg` | контейнер `postgres` (опционально) | если не используете облачный PG |
 | `olap` | + clickhouse | Phase 2, перед чтением трендов из CH |
 | `bus` | + redpanda/kafka, normalizer как отдельный consumer | Phase 2 |
 | `full` | mvp + local-redis + local-pg + olap + bus (+ scheduler, ai-analyzer stub) | локальная «почти prod» проверка |
-| `obs` | + prometheus/grafana (опционально) | отладка метрик |
+| `observability` / `obs` | Loki + Tempo + Alloy + Prometheus + Grafana | opt-in; поиск логов по `trace_id` — [23](./23-observability-tracing.md) |
 
 Примеры:
 
@@ -146,6 +155,9 @@ deploy/compose/
 docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile local-redis up -d --wait
 # полный local data plane
 docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile local-redis --profile local-pg up -d --wait
+# optional observability stack (Grafana http://localhost:3001):
+# docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile observability up -d
+# make up-obs
 # позже:
 # docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile mvp --profile olap up -d
 # docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile full up -d
@@ -171,12 +183,16 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `REDIS_HOST` / `REDIS_PORT` | нет | localhost / 6379 | Host-порт для Compose publish / GUI |
 | `REDIS_ADDR` | fallback | `localhost:6379` | `host:port`, если клиент не читает URL |
 | `REDIS_PASSWORD` | нет | пусто | Local обычно без пароля; cloud — в URL или отдельно |
-| `BFF_HTTP_ADDR` | нет | `:8080` | Публичный REST |
-| `QUERY_HTTP_ADDR` / `QUERY_GRPC_ADDR` | нет | `:8081` / `:9091` | Query |
+| `GATEWAY_HTTP_ADDR` | нет | `:8080` | Публичный edge (gateway) |
+| `BFF_HTTP_ADDR` | нет | `:8081` | Internal BFF |
+| `BFF_UPSTREAM` | нет | `http://127.0.0.1:8081` | Куда gateway проксирует `/api/*` |
+| `QUERY_HTTP_ADDR` / `QUERY_GRPC_ADDR` | нет | `:8083` / `:9091` | Query (HTTP debug) |
 | `INGEST_HTTP_ADDR` / `INGEST_GRPC_ADDR` | нет | `:8082` / `:9092` | Ingest admin |
 | `KAFKA_BROKERS` | Phase 2 | `localhost:9092` | Redpanda/Kafka |
 | `CLICKHOUSE_DSN` | Phase 2 | — | OLAP |
 | `LOG_LEVEL` | нет | `info` | `debug` для локальной отладки |
+| `OTEL_SERVICE_NAME` / `OTEL_EXPORTER_OTLP_ENDPOINT` | Phase 2–3 | — / `http://localhost:4318` | OTLP → Alloy; см. [23](./23-observability-tracing.md) |
+| `GRAFANA_PORT` | нет | `3001` | host-порт Grafana (profile `observability`) |
 | `CACHE_TTL_SUMMARY_SEC` | нет | `300` | TTL summary |
 | `INGEST_LOCK_TTL_SEC` | нет | `2700` | TTL `lock:ingest:{source}` |
 
@@ -197,11 +213,15 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `make up-local` | local-redis + local-pg | **есть** |
 | `make down` | Compose down (local-redis + local-pg) | **есть** |
 | `make logs` / `make ps` | логи / статус | **есть** |
-| `make wait-ready` | health local Redis; позже + BFF `/api/v1/health` | **есть** (infra) |
+| `make wait-ready` | health local Redis; позже + gateway `/api/v1/health` | **есть** (infra) |
+| `make run-bff` | BFF на `:8081` | **есть** |
+| `make run-gateway` | gateway на `:8080` | **есть** |
+| `make run-api` | подсказка: поднять bff + gateway | **есть** |
 | `make psql` / `make redis-cli` | shell в контейнеры (`local-pg` / `local-redis`) | **есть** |
 | `make migrate-up` / `migrate-down` | golang-migrate по `DATABASE_URL` (Docker image) | stub (нет SQL пока) |
 | `make bust-cache` | `INCR meta:cache_version` (local Redis) | **есть** |
 | `make up-full` | `--profile full` | позже (Phase 2+) |
+| `make up-obs` | Compose `--profile observability` (Loki/Tempo/Grafana) | **есть** (stub) |
 | `make proto` / `openapi-lint` / `test*` / `smoke` / `ingest-hh` / `fmt` / `lint` | по мере появления кода | planned |
 
 **Windows без Make** (PowerShell, из корня репо):

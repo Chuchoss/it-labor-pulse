@@ -20,7 +20,7 @@ IT Labor Market Analytics (LMA) — платформа аналитики рын
 
 | Артефакт | Путь |
 |----------|------|
-| OpenAPI (публичный REST BFF) | [`api/openapi.yaml`](../../api/openapi.yaml) |
+| OpenAPI (BFF REST; клиент → gateway → BFF) | [`api/openapi.yaml`](../../api/openapi.yaml) |
 | OpenAPI HTML (GitHub Pages) | [`docs/api-site/`](../api-site/) → [Redoc](https://chuchoss.github.io/it-labor-pulse/) / [Swagger UI](https://chuchoss.github.io/it-labor-pulse/swagger.html) ([ADR 008](./adr/008-github-pages-openapi.md)) |
 | Protobuf (internal gRPC) | [`libs/proto/lma/`](../../libs/proto/lma/) |
 | Env example | [`.env.example`](../../.env.example) |
@@ -43,7 +43,7 @@ IT Labor Market Analytics (LMA) — платформа аналитики рын
 | 8 | [08-integrations-and-extensibility.md](./08-integrations-and-extensibility.md) | Адаптеры источников, AI, Perspectives / «Тенденции» |
 | 9 | [09-deployment.md](./09-deployment.md) | Compose + Kubernetes |
 | 10 | [10-cicd.md](./10-cicd.md) | GitHub Actions: ветки developer/production, gate test→deploy, branch protection, миграции |
-| 11 | [11-observability-security.md](./11-observability-security.md) | Logs/metrics/traces, ToS, SLO lite; указатели на secrets и logging |
+| 11 | [11-observability-security.md](./11-observability-security.md) | Logs/metrics/traces, ToS, SLO lite; указатели на 17 / 18 / 23 |
 | 12 | [12-local-dev.md](./12-local-dev.md) | Local DX, Compose profiles, make, troubleshooting |
 | 13 | [13-testing.md](./13-testing.md) | Стратегия тестов: пирамида, DoD, CI-матрица, план по фазам |
 | 13a | [13a-testing-backend.md](./13a-testing-backend.md) | Go: unit, integration (PG/Redis/Kafka), OpenAPI/gRPC contract |
@@ -56,6 +56,7 @@ IT Labor Market Analytics (LMA) — платформа аналитики рын
 | 20 | [20-code-style.md](./20-code-style.md) | Единый стиль: Go, TS/React, SQL, proto, commits |
 | 21 | [21-external-services.md](./21-external-services.md) | Реестр внешних сервисов / провайдеров (Supabase, Redis candidates, HH…) |
 | 22 | [22-documentation-style.md](./22-documentation-style.md) | Единый стиль docs, OpenAPI, proto, ADR и чеклист смены API |
+| 23 | [23-observability-tracing.md](./23-observability-tracing.md) | Tracing, корреляция `trace_id`, Loki↔Tempo, Grafana UX ([ADR 009](./adr/009-otel-loki-tempo.md)) |
 | ADR | [adr/](./adr/) | Короткие архитектурные решения |
 | Ops | [../runbooks/](../runbooks/) | Ingest failed, DLQ replay, cache/locks |
 

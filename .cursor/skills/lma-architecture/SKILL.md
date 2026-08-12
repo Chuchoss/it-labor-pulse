@@ -42,7 +42,7 @@ description: >-
 | Тема | Файл |
 |------|------|
 | Vision, фазы | `docs/architecture/00-overview.md` |
-| Сервисы / порты | `02-services.md` |
+| Сервисы / порты | `02-services.md` (gateway edge + bff; ADR 010) |
 | REST/gRPC | `03-api.md` + OpenAPI/proto |
 | Данные PG/CH | `05-data-model.md` |
 | Kafka | `07-messaging.md` |
@@ -57,6 +57,7 @@ description: >-
 | Code style | `20-code-style.md` |
 | Внешние провайдеры | `21-external-services.md` |
 | Стиль docs / OpenAPI / proto | `22-documentation-style.md` |
+| Tracing / Grafana `trace_id` | `23-observability-tracing.md` (+ ADR 009) |
 | Решения | `docs/architecture/adr/` |
 | Ops | `docs/runbooks/` |
 

@@ -34,8 +34,11 @@ func Middleware(log *slog.Logger) func(http.Handler) http.Handler {
 			ctx = withTraceID(ctx, traceID)
 			r = r.WithContext(ctx)
 
+			// Echo to client and forward to upstream (e.g. gateway → bff).
 			w.Header().Set(headerRequestID, requestID)
 			w.Header().Set(headerTraceparent, traceparent)
+			r.Header.Set(headerRequestID, requestID)
+			r.Header.Set(headerTraceparent, traceparent)
 
 			reqLog := log.With(
 				"request_id", requestID,

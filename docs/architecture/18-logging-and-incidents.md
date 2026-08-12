@@ -5,15 +5,16 @@
 Связанные документы:
 
 - [11-observability-security.md](./11-observability-security.md) — метрики, SLO lite, краткий обзор логов  
+- [23-observability-tracing.md](./23-observability-tracing.md) — **канон tracing / поиска по `trace_id` в Grafana** (OTel, Loki↔Tempo, Compose `observability`)  
 - [17-secrets-management.md](./17-secrets-management.md) — redaction секретов в логах  
 - [09-deployment.md](./09-deployment.md) — Compose / K8s runtime  
 - [10-cicd.md](./10-cicd.md) — не светить секреты в CI логах  
 - [02-services.md](./02-services.md) — сервисы и failure modes  
 - Runbooks: [ingest-failed](../runbooks/ingest-failed.md), [dlq-replay](../runbooks/dlq-replay.md), [cache-and-locks](../runbooks/cache-and-locks.md)
 
-**Хороший минимум сейчас (Phase 0–1):** structured JSON → stdout → `docker logs`.  
-**Рекомендуемый путь Phase 2/3:** Grafana Loki + Promtail/Alloy + Grafana (+ Prometheus для метрик из [11](./11-observability-security.md)).  
-**Не day‑1:** полный ELK/EFK, коммерческий APM, 100% tracing в prod.
+**Хороший минимум сейчас (Phase 0–1):** structured JSON → stdout → `docker logs` (поля `trace_id` + `request_id`).  
+**Рекомендуемый путь Phase 2/3:** Grafana Loki + Alloy + Tempo + Grafana (+ Prometheus из [11](./11-observability-security.md)) — детали в [23](./23-observability-tracing.md), [ADR 009](./adr/009-otel-loki-tempo.md).  
+**Не day‑1:** полный ELK/EFK, коммерческий APM, 100% sampling traces в prod.
 
 ---
 
@@ -36,7 +37,7 @@
 |-----------------|-----------------|
 | Полный APM (Datadog/New Relic) | если появится реальный prod и бюджет |
 | ELK/EFK как обязательный стек | только если Loki перестанет хватать (сложные full-text кейсы) |
-| 100% distributed tracing в prod | OpenTelemetry + Tempo/Jaeger — Phase 3+, sampling |
+| 100% distributed tracing в prod | OTel + Tempo — [23](./23-observability-tracing.md); sampling Phase 3+ |
 | Долгое хранение всех debug-логов | retention короткий; debug локально |
 | Логирование каждого тела вакансии | никогда на info; sampling + redaction на debug |
 | Централизованные логи фронтенда (RUM) | позже; browser console ≠ backend pipeline |
@@ -63,7 +64,8 @@
 | `msg` | короткий стабильный текст | всегда |
 | `service` | `bff` / `query` / `ingest` / `normalizer` / `scheduler` / `ai-analyzer` | всегда |
 | `env` | `local` / `dev` / `stage` / `prod` | всегда (`APP_ENV`) |
-| `trace_id` или `request_id` | ULID/UUID | HTTP/gRPC цепочки; генерировать на edge (BFF), если нет |
+| `trace_id` | 32 hex (W3C) | HTTP/gRPC/Kafka; из `traceparent`; **не** ULID — см. [23](./23-observability-tracing.md) |
+| `request_id` | ULID/UUID | `X-Request-Id` для клиентов/error body; рядом с `trace_id`, не вместо |
 | `ingest_run_id` | UUID | ingest / normalize / scheduler вокруг run |
 | `source` | `hh` / … | ingest/normalize |
 | `external_id` | string | когда событие про конкретную вакансию |
@@ -120,22 +122,24 @@ Raw payload: только `debug` + redaction + sampling (например 1/N �
 
 ### Correlation
 
+Кратко здесь; полная модель (W3C, Kafka headers, Grafana LogQL по `trace_id`, mermaid) — **[23-observability-tracing.md](./23-observability-tracing.md)**.
+
 ```text
 Client / UI
-  → BFF: принять или сгенерировать X-Request-Id; принять traceparent (W3C)
-  → gRPC metadata: request_id / traceparent → query, ingest
-  → Workers (Kafka): headers request_id, ingest_run_id, source, external_id
-  → Логи: те же поля в каждом JSON-событии
+  → Gateway: принять или сгенерировать traceparent + X-Request-Id → BFF
+  → gRPC metadata: traceparent / x-request-id → query, ingest
+  → Workers (Kafka): headers traceparent, request_id, ingest_run_id, source, external_id
+  → Логи: trace_id + request_id (+ ingest_run_id) в каждом JSON-событии
 ```
 
 | Канал | Заголовки / metadata |
 |-------|----------------------|
-| HTTP (публичный) | `X-Request-Id` (обязательный ответный); опц. `traceparent` |
-| gRPC | metadata `x-request-id`, `traceparent` |
-| Kafka | headers: `request_id`, `ingest_run_id`, `source`, `external_id`, `content_hash` |
-| Outbound HH | не слать наши секреты; correlation остаётся во внутренних логах |
+| HTTP (публичный) | `traceparent` + `X-Request-Id` (оба в ответе) |
+| gRPC | metadata `traceparent`, `x-request-id` (otelgrpc) |
+| Kafka | headers: `traceparent`, `request_id`, `ingest_run_id`, `source`, `external_id`, `content_hash` |
+| Outbound HH | не слать наши секреты; correlation только во внутренних логах/spans |
 
-Правило: **один `request_id` на синхронный user/admin запрос**; **один `ingest_run_id` на весь async pipeline** этого прогона (даже если `request_id` у scheduler-тика другой).
+Правило: **один `trace_id` + один `request_id` на синхронный user/admin запрос**; **один `ingest_run_id` на весь async pipeline** этого прогона (даже если `request_id` у scheduler-тика другой).
 
 ---
 
@@ -156,7 +160,7 @@ Client / UI
 | Альтернатива | ELK/EFK (Elasticsearch + Fluent Bit/Fluentd + Kibana) | Тяжелее для соло; overkill day‑1 |
 | Cloud | Grafana Cloud free tier / аналог | Когда лень держать Loki локально на VPS |
 | Метрики | **Prometheus + Grafana** (см. [11](./11-observability-security.md)) | Рядом с Loki в той же Grafana |
-| Трейсы | OpenTelemetry → Tempo/Jaeger | Optional Phase 3+; не блокер MVP |
+| Трейсы | OpenTelemetry → **Tempo** (+ Loki link) | Design: [23](./23-observability-tracing.md); export Phase 2–3; не блокер MVP |
 
 **Почему Loki, а не ELK для соло:** меньше ресурсов, проще compose-profile, индексирование по labels (`service`, `env`, `level`) совпадает с нашей JSON-схемой; полнотекст Elasticsearch нужен редко.
 
@@ -269,9 +273,16 @@ flowchart TB
 
 ## 6. Как искать
 
-Предполагается Loki + LogQL. Локально без Loki: `docker compose logs ingest 2>&1 | jq -c 'select(.ingest_run_id=="...")'`.
+Предполагается Loki + LogQL. Локально без Loki: `docker compose logs ingest 2>&1 | jq -c 'select(.ingest_run_id=="...")'`.  
+Поиск по **`trace_id`** и связка Loki↔Tempo — канон в [23 § Grafana UX](./23-observability-tracing.md).
 
 ### Рецепты LogQL
+
+**Все логи по `trace_id` (главный ключ в Grafana):**
+
+```logql
+{service=~".+"} | json | trace_id="4bf92f3577b34da6a3ce929d0e0e4736"
+```
 
 **Все логи по `request_id`:**
 
@@ -350,7 +361,7 @@ sequenceDiagram
 
 1. **Detect** — алерт (см. §8), красный smoke после deploy, жалоба «дашборд пустой/вчерашний», admin API `status=failed|partial`.
 2. **Scope** — `env`, сервисы (`ingest` vs `query`), окно времени (начало симптомов ±30m), последний deploy/migrate.
-3. **Correlate** — взять `request_id` из ответа API / `ingest_run_id` из admin; для async — Kafka headers / `external_id`; собрать цепочку BFF → ingest → Kafka → normalizer.
+3. **Correlate** — взять `trace_id` / `request_id` из ответа API / `ingest_run_id` из admin; в Grafana — LogQL по `trace_id` ([23](./23-observability-tracing.md)); для async — Kafka headers / `external_id`; собрать цепочку BFF → ingest → Kafka → normalizer.
 4. **Check dependencies**
    - PG: `readyz`, миграции, locks в `ingest_runs`
    - Redis: lock `lock:ingest:{source}` — [cache-and-locks](../runbooks/cache-and-locks.md)
@@ -428,23 +439,23 @@ flowchart LR
 
 1. [ ] Общий logger в `libs/go-common`: slog JSON, поля `service`, `env`, `ts`
 2. [ ] `LOG_LEVEL` / `APP_ENV` из env
-3. [ ] BFF middleware: extract/generate `X-Request-Id`, писать в context + response header
-4. [ ] gRPC interceptors: прокидывать `request_id` / `traceparent`
-5. [ ] Kafka producer/consumer: headers correlation + логировать summary
+3. [ ] BFF middleware: extract/generate `traceparent` + `X-Request-Id`; JSON с `trace_id` + `request_id` — см. [23 § checklist](./23-observability-tracing.md)
+4. [ ] gRPC interceptors: прокидывать `traceparent` / `x-request-id`
+5. [ ] Kafka producer/consumer: headers correlation (+ `traceparent`) + логировать summary
 6. [ ] Redaction helpers: никогда не логировать token/DSN/AI key (согласовано с [17](./17-secrets-management.md))
 7. [ ] События taxonomy §4 для ingest (start/end/429/produce) — highest value first
 8. [ ] `/metrics` Prometheus (параллельно, см. [11](./11-observability-security.md))
-9. [ ] Compose profile `obs`: Loki + Alloy/Promtail + Grafana (Phase 2)
-10. [ ] Grafana dashboard: errors + ingest duration
+9. [ ] Compose profile `observability` / `obs`: Loki + Alloy + Tempo + Grafana (stub уже в `deploy/compose/`)
+10. [ ] Grafana: derived field Loki→Tempo + dashboard errors / ingest duration
 11. [ ] 4 lite alerts (§8)
 12. [ ] K8s: не менять формат логов; добавить DaemonSet agent → Loki
-13. [ ] Optional: OpenTelemetry SDK + Tempo (Phase 3+)
+13. [ ] OTel SDK + OTLP → Tempo (Phase 2–3; [23](./23-observability-tracing.md), [ADR 009](./adr/009-otel-loki-tempo.md))
 14. [ ] AI service: логи job/model/tokens без prompt dump
 
 ---
 
 ## Итог одной строкой
 
-**Phase 1:** JSON stdout + `docker logs` + `request_id`/`ingest_run_id`.  
-**Phase 2/3:** тот же формат → **Loki + Grafana** (Promtail/Alloy); метрики в Prometheus.  
+**Phase 1:** JSON stdout + `docker logs` + `trace_id`/`request_id`/`ingest_run_id`.  
+**Phase 2/3:** тот же формат → **Loki + Tempo + Grafana** (Alloy); метрики в Prometheus; поиск по `trace_id` — [23](./23-observability-tracing.md).  
 **Инцидент:** detect → scope → correlate ids → deps → mitigate (runbook) → postmortem lite.

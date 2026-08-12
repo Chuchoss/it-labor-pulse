@@ -10,6 +10,8 @@
 
 Стиль docs / OpenAPI / proto: `22-documentation-style.md`.
 
+Tracing / поиск по `trace_id`: `23-observability-tracing.md`.
+
 ## Ключевые ADR
 
 | ADR | Решение |
@@ -22,6 +24,7 @@
 | 006 | Cache-aside + version bump |
 | 007 | Multi-source Perspectives / «Тенденции» vs vacancy-only |
 | 008 | GitHub Pages + Redoc/Swagger UI для OpenAPI |
+| 009 | OpenTelemetry + Loki + Tempo (`trace_id` correlation) |
 
 ## Шаблон ADR
 

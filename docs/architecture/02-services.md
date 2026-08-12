@@ -5,8 +5,9 @@
 | Service | Язык | Публично | Внутри | Фаза |
 |---------|------|----------|--------|------|
 | `web` (React) | TS/React | static via Ingress/CDN | — | MVP |
-| `bff` | Go | HTTP `:8080` | вызывает gRPC | MVP |
-| `query` | Go | HTTP `:8081` (debug) | gRPC `:9091` | MVP |
+| `gateway` | Go | HTTP `:8080` | reverse proxy → bff | MVP |
+| `bff` | Go | — (через gateway) | HTTP `:8081`; вызывает gRPC | MVP |
+| `query` | Go | HTTP `:8083` (debug) | gRPC `:9091` | MVP |
 | `ingest` | Go | HTTP admin `:8082` | gRPC `:9092` | MVP |
 | `normalizer` | Go | — | Kafka consumer | Phase 2 (Phase 1: in-process) |
 | `scheduler` | Go / CronJob | — | HTTP/gRPC → ingest | MVP |
@@ -16,13 +17,22 @@
 
 ## Responsibilities
 
-### BFF / API Gateway (`bff`)
+### API Gateway (`gateway`) — edge
 
-- Единственная публичная HTTP поверхность для React (`/api/v1/...`)
-- Auth stub → JWT/API key (Target)
+- **Единственная публичная HTTP поверхность** для React (`/api/*` → BFF)
+- Edge: routing / reverse proxy, CORS, rate-limit stub, `request_id` / `traceparent` propagation
+- TLS termination — позже (Ingress / gateway)
+- Auth stub — позже на edge (не блокирует Phase 0–1)
+- **Не** содержит business logic и OpenAPI handlers ([ADR 010](./adr/010-api-gateway.md))
+- Local liveness: `GET /healthz`; product health — через proxy `GET /api/v1/health` → BFF
+
+### BFF (`bff`) — product API
+
+- OpenAPI business routes `/api/v1/...` (контракт `api/openapi.yaml`)
 - Агрегация/адаптация DTO под UI
-- Edge rate limiting, request id
+- Вызовы Query / Ingest (gRPC с Phase 2; Phase 1 — HTTP/internal)
 - Не пишет бизнес-данные напрямую в PG/CH (кроме опционально session/cache keys)
+- Слушает **internal** `:8081` (не публиковать Ingress напрямую в prod-like)
 
 ### Query / Analytics (`query`)
 
@@ -30,7 +40,7 @@
 - Cache-aside через Redis
 - Владеет **read-моделями** (не ingest)
 - gRPC: `QueryService`
-- HTTP debug/metrics на отдельном порту
+- HTTP debug/metrics на отдельном порту (`:8083`)
 
 ### Ingest (`ingest`)
 
@@ -40,7 +50,7 @@
 - В Phase 1 передаёт versioned source-neutral drafts в in-process normalizer; сам не выполняет shared normalization
 - Сохраняет checkpoint страницы только после успешной нормализации и сохранения **всех** её drafts
 - Уважает rate limits, backoff, pagination HH
-- Admin: trigger run, статус
+- Admin: trigger run, статус (снаружи — только через gateway→BFF admin paths + auth)
 
 ### Normalizer / Worker (`normalizer`)
 
@@ -89,11 +99,12 @@
 
 | Service | Port | Protocol | Exposure |
 |---------|------|----------|----------|
-| bff | 8080 | HTTP/JSON | Ingress |
+| gateway | 8080 | HTTP/JSON | Ingress (public) |
+| bff | 8081 | HTTP/JSON | ClusterIP (via gateway) |
 | query | 9091 | gRPC | ClusterIP |
-| query | 8081 | HTTP health/metrics | ClusterIP |
+| query | 8083 | HTTP health/metrics | ClusterIP |
 | ingest | 9092 | gRPC | ClusterIP |
-| ingest | 8082 | HTTP admin/health | ClusterIP (Ingress только admin path + auth) |
+| ingest | 8082 | HTTP admin/health | ClusterIP (Ingress только admin path + auth via gateway→bff) |
 | normalizer | — | Kafka | — |
 | ai-analyzer | 8085 | HTTP health | ClusterIP |
 | postgres | 5432 | SQL | ClusterIP / managed |
@@ -103,7 +114,8 @@
 
 ```mermaid
 flowchart LR
-  React -->|HTTP :8080| BFF
+  React -->|HTTP :8080| GW[gateway]
+  GW -->|HTTP :8081| BFF
   BFF -->|gRPC :9091| Query
   BFF -->|gRPC :9092| Ingest
   Sched -->|HTTP/gRPC| Ingest
@@ -141,6 +153,7 @@ flowchart LR
 | Redis down | Cache miss path | Query идёт в CH/PG; degrade latency, не 5xx обязательно |
 | Ingest overlap | Два daily run | Redis lock `lock:ingest:{source}` TTL; second run → 409 Conflict |
 | AI provider 429 | Cost/rate | Backoff job; status `retrying` |
+| Gateway → BFF down | Upstream | 502/503 + problem+json |
 | BFF → gRPC down | Dependency | 502/503 + problem+json |
 
 ### Retry policy (рекомендация)
@@ -161,8 +174,9 @@ flowchart LR
 
 | Endpoint | Liveness | Readiness |
 |----------|----------|-----------|
-| `/healthz` | process up | — |
-| `/readyz` | — | PG/Kafka/Redis connectivity as needed |
+| `gateway` `GET /healthz` | process up | — |
+| `gateway` `GET /api/v1/health` | — | proxy → BFF (и далее PG ping, если настроен) |
+| `/healthz` / `/readyz` (прочие сервисы) | process up | PG/Kafka/Redis connectivity as needed |
 
 - `normalizer` ready: Kafka + PG (+ CH)
 - `query` ready: PG + CH (Redis optional)
@@ -173,6 +187,7 @@ flowchart LR
 ```
 /apps
   /web
+  /gateway
   /bff
   /query
   /ingest
@@ -185,7 +200,7 @@ flowchart LR
   /proto/lma          # канон: common|ingest|query|ai /v1/*.proto
   /go-common
 /api
-  openapi.yaml        # публичный REST BFF
+  openapi.yaml        # REST BFF (проксируется gateway)
 /testdata
   /hh
   /seeds              # synthetic SQL/JSON for integration + E2E

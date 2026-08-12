@@ -13,7 +13,7 @@ func TestResolveHTTPAddr(t *testing.T) {
 		env  map[string]string
 		want string
 	}{
-		{name: "default", want: ":8080"},
+		{name: "default", want: ":8081"},
 		{name: "bff_http_addr", env: map[string]string{"BFF_HTTP_ADDR": ":18080"}, want: ":18080"},
 		{name: "bff_port", env: map[string]string{"BFF_PORT": "9090"}, want: ":9090"},
 		{name: "port", env: map[string]string{"PORT": "7070"}, want: ":7070"},
