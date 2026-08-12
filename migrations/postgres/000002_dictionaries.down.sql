@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS employers;
+DROP TABLE IF EXISTS skill_aliases;
+DROP TABLE IF EXISTS skills;
+DROP TABLE IF EXISTS role_aliases;
+DROP TABLE IF EXISTS roles;
+DROP TABLE IF EXISTS region_external_ids;
+DROP TABLE IF EXISTS regions;

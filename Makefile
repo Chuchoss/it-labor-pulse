@@ -90,7 +90,7 @@ redis-cli:
 	$(COMPOSE) --profile local-redis exec redis redis-cli
 
 # golang-migrate via official image; needs at least one *.up.sql under migrations/postgres.
-# Cloud: uses DATABASE_URL as-is (container needs outbound internet; sslmode=require ok).
+# Cloud: DATABASE_URL as-is + sslmode/connect_timeout if missing (Supabase session pooler :5432).
 # Local compose PG: if DATABASE_URL/host points at localhost, rewrite to service "postgres" on lma_net.
 migrate-up: $(ENV_FILE)
 	@set -a; . ./$(ENV_FILE); set +a; \
@@ -107,6 +107,12 @@ migrate-up: $(ENV_FILE)
 		echo "migrate-up: local compose postgres via lma_net"; \
 	else \
 		echo "migrate-up: using DATABASE_URL (cloud/remote)"; \
+		echo "$$DB_URL" | grep -Eq 'sslmode=' || { \
+			case "$$DB_URL" in *\?*) DB_URL="$${DB_URL}&sslmode=require";; *) DB_URL="$${DB_URL}?sslmode=require";; esac; \
+		}; \
+		echo "$$DB_URL" | grep -Eq 'connect_timeout=' || { \
+			case "$$DB_URL" in *\?*) DB_URL="$${DB_URL}&connect_timeout=60";; *) DB_URL="$${DB_URL}?connect_timeout=60";; esac; \
+		}; \
 	fi; \
 	docker run --rm $$NETWORK_ARGS \
 		-v "$(CURDIR)/migrations/postgres:/migrations:ro" \
@@ -122,6 +128,13 @@ migrate-down: $(ENV_FILE)
 	if [ -z "$$DB_URL" ] || echo "$$DB_URL" | grep -Eq '@(localhost|127\.0\.0\.1)(:|/|\?)'; then \
 		NETWORK_ARGS="--network lma_net"; \
 		DB_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_DB}?sslmode=disable"; \
+	else \
+		echo "$$DB_URL" | grep -Eq 'sslmode=' || { \
+			case "$$DB_URL" in *\?*) DB_URL="$${DB_URL}&sslmode=require";; *) DB_URL="$${DB_URL}?sslmode=require";; esac; \
+		}; \
+		echo "$$DB_URL" | grep -Eq 'connect_timeout=' || { \
+			case "$$DB_URL" in *\?*) DB_URL="$${DB_URL}&connect_timeout=60";; *) DB_URL="$${DB_URL}?connect_timeout=60";; esac; \
+		}; \
 	fi; \
 	docker run --rm $$NETWORK_ARGS \
 		-v "$(CURDIR)/migrations/postgres:/migrations:ro" \
