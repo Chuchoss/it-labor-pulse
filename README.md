@@ -25,7 +25,15 @@ cp .env.example .env   # PowerShell: Copy-Item .env.example .env
 
 В `.env` задайте `DATABASE_URL` (рекомендуется **Supabase**) и при необходимости `REDIS_URL`. Секреты не коммитить.
 
-Дальше — только [локальный DX](./docs/architecture/12-local-dev.md) (Compose-профили, migrate, cloud vs local).
+### Phase 0 BFF
+
+```bash
+make run-bff
+# или: go run ./apps/bff/cmd/bff
+curl -s http://localhost:8080/api/v1/health
+```
+
+Слушает `BFF_HTTP_ADDR` (default `:8080`; также `BFF_PORT` / `PORT`). Если задан `DATABASE_URL`, health пингует Postgres (`status: degraded` при недоступности БД). Подробнее — [локальный DX](./docs/architecture/12-local-dev.md).
 
 ## Ветки и CI
 
@@ -42,7 +50,7 @@ CI: GitHub Actions (`test` required on PRs).
 
 | Сейчас | Дальше |
 |--------|--------|
-| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra | Код сервисов по [фазам](./docs/architecture/00-overview.md) |
+| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra, Phase 0 BFF (`GET /api/v1/health`) | Query/ingest и дальше по [фазам](./docs/architecture/00-overview.md) |
 
 ## Attribution
 

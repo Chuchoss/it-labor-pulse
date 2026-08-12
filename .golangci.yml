@@ -24,8 +24,7 @@ linters:
 
 linters-settings:
   goimports:
-    # Обновите prefix под реальный module path из go.mod, когда появится.
-    local-prefixes: study_project
+    local-prefixes: github.com/Chuchoss/it-labor-pulse
   revive:
     rules:
       - name: blank-imports
