@@ -72,13 +72,22 @@ func retryTransient(ctx context.Context, attempts int, op func(context.Context) 
 		if err == nil || !isTransientDBErr(err) {
 			return err
 		}
+		// Backoff for flaky managed poolers / mid-flight TCP drops.
+		backoff := time.Duration(1<<min(i, 4)) * time.Second
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Duration(i+1) * 400 * time.Millisecond):
+		case <-time.After(backoff):
 		}
 	}
 	return err
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // Close closes the pool.
@@ -98,7 +107,7 @@ func (s *PG) CreateRun(ctx context.Context, run Run) error {
 	if params == nil {
 		params = []byte("{}")
 	}
-	err = retryTransient(ctx, 5, func(ctx context.Context) error {
+	err = retryTransient(ctx, 8, func(ctx context.Context) error {
 		_, err := s.pool.Exec(ctx, `
 			INSERT INTO ingest_runs (id, source, mode, status, params, requested_by, started_at, created_at)
 			VALUES ($1, $2, $3, $4, $5::jsonb, NULLIF($6, ''), $7, now())
@@ -146,7 +155,7 @@ func (s *PG) RecordError(ctx context.Context, runID, externalID, stage, message 
 // GetCheckpoint reads ingest_checkpoints.
 func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (string, bool, error) {
 	var cursor *string
-	err := retryTransient(ctx, 5, func(ctx context.Context) error {
+	err := retryTransient(ctx, 8, func(ctx context.Context) error {
 		return s.pool.QueryRow(ctx, `
 			SELECT cursor FROM ingest_checkpoints WHERE source = $1 AND scope_hash = $2
 		`, source, scopeHash).Scan(&cursor)
@@ -165,12 +174,23 @@ func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (strin
 
 // SavePage upserts vacancies and advances checkpoint atomically.
 func (s *PG) SavePage(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
-	var tx pgx.Tx
-	err := retryTransient(ctx, 5, func(ctx context.Context) error {
-		var beginErr error
-		tx, beginErr = s.pool.Begin(ctx)
-		return beginErr
+	var upserted, unchanged int
+	err := retryTransient(ctx, 8, func(ctx context.Context) error {
+		u, un, err := s.savePageOnce(ctx, source, scopeHash, nextCursor, items)
+		if err != nil {
+			return err
+		}
+		upserted, unchanged = u, un
+		return nil
 	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return upserted, unchanged, nil
+}
+
+func (s *PG) savePageOnce(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, 0, fmt.Errorf("store begin: %w", err)
 	}
