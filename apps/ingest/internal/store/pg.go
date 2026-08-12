@@ -27,18 +27,58 @@ func Open(ctx context.Context, databaseURL string) (*PG, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: parse database url: %w", err)
 	}
-	cfg.MaxConns = 5
+	// Keep pool small for managed session poolers (e.g. Supabase ~15 slots shared).
+	cfg.MaxConns = 2
+	cfg.MinConns = 0
+	cfg.MaxConnIdleTime = 30 * time.Second
+	cfg.HealthCheckPeriod = 15 * time.Second
+	if cfg.ConnConfig.ConnectTimeout == 0 {
+		cfg.ConnConfig.ConnectTimeout = 15 * time.Second
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("store: connect: %w", err)
 	}
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	pingCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("store: ping: %w", err)
 	}
 	return &PG{pool: pool}, nil
+}
+
+func isTransientDBErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"wsarecv", "i/o timeout", "connection reset", "broken pipe",
+		"unexpected eof", "server closed the connection", "conn closed",
+		"max clients reached", "eof",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func retryTransient(ctx context.Context, attempts int, op func(context.Context) error) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		err = op(ctx)
+		if err == nil || !isTransientDBErr(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(i+1) * 400 * time.Millisecond):
+		}
+	}
+	return err
 }
 
 // Close closes the pool.
@@ -58,10 +98,13 @@ func (s *PG) CreateRun(ctx context.Context, run Run) error {
 	if params == nil {
 		params = []byte("{}")
 	}
-	_, err = s.pool.Exec(ctx, `
-		INSERT INTO ingest_runs (id, source, mode, status, params, requested_by, started_at, created_at)
-		VALUES ($1, $2, $3, $4, $5::jsonb, NULLIF($6, ''), $7, now())
-	`, run.ID, run.Source, run.Mode, run.Status, params, run.RequestedBy, run.StartedAt)
+	err = retryTransient(ctx, 5, func(ctx context.Context) error {
+		_, err := s.pool.Exec(ctx, `
+			INSERT INTO ingest_runs (id, source, mode, status, params, requested_by, started_at, created_at)
+			VALUES ($1, $2, $3, $4, $5::jsonb, NULLIF($6, ''), $7, now())
+		`, run.ID, run.Source, run.Mode, run.Status, params, run.RequestedBy, run.StartedAt)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("store create run: %w", err)
 	}
@@ -103,9 +146,11 @@ func (s *PG) RecordError(ctx context.Context, runID, externalID, stage, message 
 // GetCheckpoint reads ingest_checkpoints.
 func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (string, bool, error) {
 	var cursor *string
-	err := s.pool.QueryRow(ctx, `
-		SELECT cursor FROM ingest_checkpoints WHERE source = $1 AND scope_hash = $2
-	`, source, scopeHash).Scan(&cursor)
+	err := retryTransient(ctx, 5, func(ctx context.Context) error {
+		return s.pool.QueryRow(ctx, `
+			SELECT cursor FROM ingest_checkpoints WHERE source = $1 AND scope_hash = $2
+		`, source, scopeHash).Scan(&cursor)
+	})
 	if err == pgx.ErrNoRows {
 		return "", false, nil
 	}
@@ -120,7 +165,12 @@ func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (strin
 
 // SavePage upserts vacancies and advances checkpoint atomically.
 func (s *PG) SavePage(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
-	tx, err := s.pool.Begin(ctx)
+	var tx pgx.Tx
+	err := retryTransient(ctx, 5, func(ctx context.Context) error {
+		var beginErr error
+		tx, beginErr = s.pool.Begin(ctx)
+		return beginErr
+	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("store begin: %w", err)
 	}
