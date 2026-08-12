@@ -3,7 +3,7 @@
 Цель: поднять **Phase 0–1** локально за ~15 минут и понять, что делать при типичных сбоях.
 
 Связанные документы: [00-overview.md](./00-overview.md) (фазы), [09-deployment.md](./09-deployment.md) (Compose), [11-observability-security.md](./11-observability-security.md) (HH User-Agent), [23-observability-tracing.md](./23-observability-tracing.md) (profile `observability`).  
-Актуальный выбор провайдеров (Supabase, Redis candidates и т.д.): [21-external-services.md](./21-external-services.md).
+Актуальный выбор провайдеров (Supabase, Upstash и т.д.): [21-external-services.md](./21-external-services.md).
 
 ---
 
@@ -285,56 +285,56 @@ make up-local-redis
 
 ## Облачный Redis
 
-Паттерн крупных компаний для stage/prod: **managed Redis** (не «случайный» Docker Redis в проде). Local Docker Redis по-прежнему нормален для pet/dev.
+Рекомендуемый путь: **[Upstash](https://upstash.com)** (serverless, free tier friendly, `rediss://`).  
+Статус и альтернативы: **[21-external-services.md](./21-external-services.md)**.  
+Docker profile `local-redis` — только optional fallback, не основной DX.
 
-### Провайдеры (пет-проект)
+Тарифы меняются — **проверь актуальный free tier** на сайте.
 
-Провайдер **ещё не выбран** — кандидаты и статус в **[21-external-services.md](./21-external-services.md)**.  
-Тарифы и free tier меняются — **проверь актуальные условия** на сайте. Ориентиры (не гарантия бесплатности):
-
-| Провайдер | Зачем смотреть | Заметки |
-|-----------|----------------|---------|
-| [Upstash](https://upstash.com) | serverless Redis, часто есть free tier | обычно TLS → URL вида `rediss://…` |
-| [Redis Cloud](https://redis.io/cloud/) | managed от Redis Inc., часто trial/free | бери connection string из кабинета |
-| Yandex Managed Service for Redis | ближе к RU-инфре | trial/квоты — смотри текущие условия |
-| AWS ElastiCache / GCP Memorystore / Azure Cache for Redis | «enterprise» managed | чаще VPC; с ноутбука может понадобиться VPN/bastion |
+| Провайдер | Статус | Заметки |
+|-----------|--------|---------|
+| [Upstash](https://upstash.com) | **выбрано** | TLS → `rediss://…`; регион ближе к тебе / к Supabase |
+| [Redis Cloud](https://redis.io/cloud/) | альтернатива | connection string из кабинета, часто тоже `rediss://` |
 
 Регистрацию делаешь **сам** — репозиторий не создаёт облачные аккаунты.
 
-### Шаги
+### Шаги (Upstash)
 
-1. Создай Redis DB у провайдера (регион ближе к тебе / к Postgres).
-2. Скопируй connection URL. Если дают host + port + password — собери URL сам.
-3. В **своём** `.env` (не коммитить):
+1. Зарегистрируйся на [upstash.com](https://upstash.com) (GitHub/Google ok).
+2. **Create Database** → Redis → регион (ближе к тебе / к Postgres) → Free / подходящий план.
+3. В карточке БД скопируй **Redis URL** (часто кнопка рядом с endpoint; схема должна быть `rediss://…` с TLS).
+4. В **своём** `.env` (не коммитить):
 
 ```text
-# TLS (типичный managed):
-REDIS_URL=rediss://default:PASSWORD@HOST:PORT
-# или с DB index:
-# REDIS_URL=rediss://default:PASSWORD@HOST:PORT/0
+# Upstash (TLS обязателен):
+REDIS_URL=rediss://default:PASSWORD@REGION.upstash.io:PORT
 
-# Без TLS (редко у cloud; local Docker):
+# Local Docker fallback (не основной путь):
 # REDIS_URL=redis://localhost:6379/0
 ```
 
 `rediss://` — Redis over TLS (две буквы **s**). Спецсимволы в пароле — URL-encode.
 
-4. При cloud PG + cloud Redis контейнеры не нужны:
+5. При cloud PG + Upstash контейнеры не нужны:
 
 ```bash
 make up-cloud
+make run-bff
+curl -s http://localhost:8080/api/v1/health
+# ожидай checks.redis: "up" (и checks.database при DATABASE_URL)
 ```
 
-5. Опционально заполни `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_ADDR` теми же значениями для клиентов/GUI, которые не читают URL.
+6. Опционально заполни `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_ADDR` для GUI, которые не читают URL.
 
-6. Проверка с хоста (если установлен `redis-cli` с TLS):
+7. Проверка с хоста (если есть `redis-cli` с TLS):
 
 ```bash
-# пример; флаги зависят от версии redis-cli / провайдера
 # redis-cli -u "$REDIS_URL" PING
 ```
 
-**Tradeoffs managed Redis:** стоимость и квоты; latency до облака с ноутбука; политика eviction (память); TLS/`rediss://`; иногда только VPC (ElastiCache и аналоги). Для учебного hybrid без VPC удобнее Upstash / Redis Cloud с публичным endpoint + TLS.
+**Phase 0:** BFF не падает без Redis — без `REDIS_URL` check просто отсутствует; при заданном URL и недоступном Redis — `status: degraded`, `checks.redis: down`. Cache-aside — Phase 1.
+
+**Tradeoffs:** квоты free tier; latency до облака с ноутбука; eviction; TLS. VPC-only кластеры (ElastiCache и аналоги) с ноутбука без VPN неудобны — поэтому Upstash.
 
 Не коммить `REDIS_URL` с паролем. См. [17-secrets-management.md](./17-secrets-management.md).
 

@@ -54,15 +54,27 @@ paths:
       summary: Публичный health
       responses:
         "200":
-          description: OK
+          description: |
+            OK. Phase 0: HTTP 200 даже при degraded deps.
+            checks.database / checks.redis — только если заданы DATABASE_URL / REDIS_URL.
           content:
             application/json:
               schema:
                 type: object
+                required: [status]
                 properties:
                   status:
                     type: string
+                    enum: [ok, degraded]
                     example: ok
+                  checks:
+                    type: object
+                    additionalProperties:
+                      type: string
+                      enum: [up, down]
+                    example:
+                      database: up
+                      redis: up
 
   /api/v1/dashboard/summary:
     get:

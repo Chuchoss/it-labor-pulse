@@ -54,7 +54,7 @@ IT Labor Market Analytics (LMA) — платформа аналитики рын
 | 18 | [18-logging-and-incidents.md](./18-logging-and-incidents.md) | Логи по фазам, Loki, поиск, playbook инцидентов |
 | 19 | [19-agent-tooling.md](./19-agent-tooling.md) | Cursor rules / skills / hooks для агентов |
 | 20 | [20-code-style.md](./20-code-style.md) | Единый стиль: Go, TS/React, SQL, proto, commits |
-| 21 | [21-external-services.md](./21-external-services.md) | Реестр внешних сервисов / провайдеров (Supabase, Redis candidates, HH…) |
+| 21 | [21-external-services.md](./21-external-services.md) | Реестр внешних сервисов / провайдеров (Supabase, Upstash, HH…) |
 | 22 | [22-documentation-style.md](./22-documentation-style.md) | Единый стиль docs, OpenAPI, proto, ADR и чеклист смены API |
 | 23 | [23-observability-tracing.md](./23-observability-tracing.md) | Tracing, корреляция `trace_id`, Loki↔Tempo, Grafana UX ([ADR 009](./adr/009-otel-loki-tempo.md)) |
 | ADR | [adr/](./adr/) | Короткие архитектурные решения |

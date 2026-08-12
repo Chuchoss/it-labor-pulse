@@ -25,7 +25,7 @@
 - Вызовы Query / Ingest (gRPC с Phase 2; Phase 1 — HTTP/internal)
 - Edge MVP: CORS/корреляция/`request_id` по мере появления кода
 - Не пишет бизнес-данные напрямую в PG/CH (кроме опционально session/cache keys)
-- Local: `GET /api/v1/health` (PG ping, если настроен `DATABASE_URL`)
+- Local: `GET /api/v1/health` (опц. PG/`DATABASE_URL` и Redis/`REDIS_URL` ping; degraded ok)
 
 ### API Gateway (`gateway`) — Target Phase 3+
 
@@ -171,7 +171,7 @@ flowchart LR
 
 | Endpoint | Liveness | Readiness |
 |----------|----------|-----------|
-| `bff` `GET /api/v1/health` | process up | PG ping (если `DATABASE_URL` задан) |
+| `bff` `GET /api/v1/health` | process up | PG ping (если `DATABASE_URL`); Redis ping (если `REDIS_URL`); иначе без check |
 | `/healthz` / `/readyz` (прочие сервисы) | process up | PG/Kafka/Redis connectivity as needed |
 
 - `normalizer` ready: Kafka + PG (+ CH)

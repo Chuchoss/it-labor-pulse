@@ -25,30 +25,78 @@ func TestHealth(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	tests := []struct {
-		name       string
-		db         DBPinger
-		wantStatus string
-		wantDB     string
-		wantChecks bool
+		name        string
+		db          DBPinger
+		rdb         RedisPinger
+		wantStatus  string
+		wantDB      string
+		wantRedis   string
+		wantChecks  bool
+		wantDBKey   bool
+		wantRedisKey bool
 	}{
 		{
-			name:       "ok_without_db",
+			name:       "ok_without_deps",
 			wantStatus: "ok",
 			wantChecks: false,
 		},
 		{
-			name:       "ok_with_db",
-			db:         stubPinger{},
-			wantStatus: "ok",
-			wantDB:     "up",
-			wantChecks: true,
+			name:         "ok_with_db",
+			db:           stubPinger{},
+			wantStatus:   "ok",
+			wantDB:       "up",
+			wantChecks:   true,
+			wantDBKey:    true,
+			wantRedisKey: false,
 		},
 		{
-			name:       "degraded_db_down",
-			db:         stubPinger{err: errors.New("connection refused")},
-			wantStatus: "degraded",
-			wantDB:     "down",
-			wantChecks: true,
+			name:         "ok_with_redis",
+			rdb:          stubPinger{},
+			wantStatus:   "ok",
+			wantRedis:    "up",
+			wantChecks:   true,
+			wantDBKey:    false,
+			wantRedisKey: true,
+		},
+		{
+			name:         "ok_with_both",
+			db:           stubPinger{},
+			rdb:          stubPinger{},
+			wantStatus:   "ok",
+			wantDB:       "up",
+			wantRedis:    "up",
+			wantChecks:   true,
+			wantDBKey:    true,
+			wantRedisKey: true,
+		},
+		{
+			name:         "degraded_db_down",
+			db:           stubPinger{err: errors.New("connection refused")},
+			wantStatus:   "degraded",
+			wantDB:       "down",
+			wantChecks:   true,
+			wantDBKey:    true,
+			wantRedisKey: false,
+		},
+		{
+			name:         "degraded_redis_down",
+			rdb:          stubPinger{err: errors.New("connection refused")},
+			wantStatus:   "degraded",
+			wantRedis:    "down",
+			wantChecks:   true,
+			wantDBKey:    false,
+			wantRedisKey: true,
+		},
+		{
+			name:         "degraded_redis_down_db_up",
+			db:           stubPinger{},
+			rdb:          stubPinger{err: errors.New("timeout")},
+			wantStatus:   "degraded",
+			wantDB:       "up",
+			wantRedis:    "down",
+			wantChecks:   true,
+			wantDBKey:    true,
+			wantRedisKey: true,
 		},
 	}
 
@@ -58,7 +106,7 @@ func TestHealth(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 			rec := httptest.NewRecorder()
-			Health(log, tt.db).ServeHTTP(rec, req)
+			Health(log, tt.db, tt.rdb).ServeHTTP(rec, req)
 
 			require.Equal(t, http.StatusOK, rec.Code)
 			require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
@@ -66,10 +114,21 @@ func TestHealth(t *testing.T) {
 			var got HealthResponse
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 			require.Equal(t, tt.wantStatus, got.Status)
-			if tt.wantChecks {
+			if !tt.wantChecks {
+				require.Empty(t, got.Checks)
+				return
+			}
+			if tt.wantDBKey {
 				require.Equal(t, tt.wantDB, got.Checks["database"])
 			} else {
-				require.Empty(t, got.Checks)
+				_, ok := got.Checks["database"]
+				require.False(t, ok)
+			}
+			if tt.wantRedisKey {
+				require.Equal(t, tt.wantRedis, got.Checks["redis"])
+			} else {
+				_, ok := got.Checks["redis"]
+				require.False(t, ok)
 			}
 		})
 	}

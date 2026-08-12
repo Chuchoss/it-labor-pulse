@@ -97,7 +97,7 @@ cp .env.example .env
 
 **Cloud Postgres:** connection string из Neon/Supabase/Yandex/Timeweb и т.п. храни только в `.env` или password manager. Утечка DSN = полный доступ к учебной БД — ротация пароля в кабинете провайдера (см. §8). Hybrid DX: [12-local-dev.md — Облачный PostgreSQL](./12-local-dev.md#облачный-postgresql).
 
-**Cloud Redis:** URL из Upstash / Redis Cloud / Yandex Managed Redis и т.п. — только в `.env` или password manager (`rediss://` при TLS). Утечка = доступ к cache/locks. DX: [12-local-dev.md — Облачный Redis](./12-local-dev.md#облачный-redis).
+**Cloud Redis:** выбран [Upstash](https://upstash.com) (`REDIS_URL` вида `rediss://…`) — только в `.env` или password manager. Альтернатива: Redis Cloud. Утечка = доступ к cache/locks. DX: [12-local-dev.md — Облачный Redis](./12-local-dev.md#облачный-redis), реестр: [21](./21-external-services.md).
 
 Проверка: корневой [`.gitignore`](../../.gitignore) должен содержать как минимум `.env` / `.env.*` / `.env.local` (с исключением `!.env.example`), `*.pem` / `*.key`, `kubeconfig`, `credentials*`, `**/secrets/`; после `git init` — `git check-ignore -v .env`.
 

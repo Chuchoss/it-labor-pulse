@@ -15,6 +15,7 @@ import (
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/config"
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/db"
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/httpserver"
+	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/redisx"
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/logging"
 )
 
@@ -35,7 +36,7 @@ func main() {
 	})
 	slog.SetDefault(log)
 
-	var pinger db.Pinger
+	var dbPinger db.Pinger
 	if cfg.DatabaseURL != "" {
 		p, err := db.Open(cfg.DatabaseURL)
 		if err != nil {
@@ -43,17 +44,33 @@ func main() {
 			log.Error("database_open_failed", "err", err.Error())
 			os.Exit(1)
 		}
-		pinger = p
-		defer func() { _ = pinger.Close() }()
+		dbPinger = p
+		defer func() { _ = dbPinger.Close() }()
 		log.Info("database_configured")
 	} else {
 		log.Info("database_not_configured")
 	}
 
+	var redisPinger redisx.Pinger
+	if cfg.RedisURL != "" {
+		p, err := redisx.Open(cfg.RedisURL)
+		if err != nil {
+			// URL itself is never logged (may contain password).
+			log.Error("redis_open_failed", "err", err.Error())
+			os.Exit(1)
+		}
+		redisPinger = p
+		defer func() { _ = redisPinger.Close() }()
+		log.Info("redis_configured")
+	} else {
+		log.Info("redis_not_configured")
+	}
+
 	srv := httpserver.New(httpserver.Options{
-		Addr: cfg.HTTPAddr,
-		Log:  log,
-		DB:   pinger,
+		Addr:  cfg.HTTPAddr,
+		Log:   log,
+		DB:    dbPinger,
+		Redis: redisPinger,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
