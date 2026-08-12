@@ -23,7 +23,7 @@ cd it-labor-pulse
 cp .env.example .env   # PowerShell: Copy-Item .env.example .env
 ```
 
-В `.env` задайте `DATABASE_URL` (**Supabase**) и `REDIS_URL` (**Upstash**, `rediss://`). Секреты не коммитить. Local Docker Redis — optional fallback.
+В `.env` задайте `DATABASE_URL` (**Supabase**) и `REDIS_URL` (cloud Redis/Valkey, обычно `rediss://`; **preferred для РФ — Yandex Managed Valkey**). Секреты не коммитить. Upstash может быть недоступен из РФ. Local Docker Redis — optional fallback.
 
 ### Phase 0 API (BFF)
 
@@ -33,7 +33,7 @@ make run-bff   # public :8080
 curl -s http://localhost:8080/api/v1/health
 ```
 
-Публичный вход — `BFF_HTTP_ADDR` (default `:8080`). Отдельный gateway — Target Phase 3+ ([ADR 010](./docs/architecture/adr/010-api-gateway.md)). Если заданы `DATABASE_URL` / `REDIS_URL`, health пингует Postgres и Redis (`checks.*`, `status: degraded` при недоступности; процесс не падает). См. [локальный DX](./docs/architecture/12-local-dev.md) · [Upstash](./docs/architecture/12-local-dev.md#облачный-redis).
+Публичный вход — `BFF_HTTP_ADDR` (default `:8080`). Отдельный gateway — Target Phase 3+ ([ADR 010](./docs/architecture/adr/010-api-gateway.md)). Если заданы `DATABASE_URL` / `REDIS_URL`, health пингует Postgres и Redis (`checks.*`, `status: degraded` при недоступности; процесс не падает). См. [локальный DX](./docs/architecture/12-local-dev.md) · [облачный Redis](./docs/architecture/12-local-dev.md#облачный-redis).
 
 ## Ветки и CI
 

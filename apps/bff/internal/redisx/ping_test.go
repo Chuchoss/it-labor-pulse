@@ -26,6 +26,13 @@ func TestOpenInvalidURL(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestOpenWithMissingTLSCAFile(t *testing.T) {
+	t.Parallel()
+
+	_, err := OpenWithTLSCA("rediss://:pass@example.com:6380/0", "nonexistent-ca.pem")
+	require.Error(t, err)
+}
+
 func TestPingDown(t *testing.T) {
 	t.Parallel()
 

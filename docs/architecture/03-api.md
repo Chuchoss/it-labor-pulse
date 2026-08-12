@@ -353,7 +353,7 @@ HTTP **200** всегда в Phase 0 (удобный liveness). Тело:
 |------|----------|
 | `status` | `ok` или `degraded` (если настроенный Postgres/Redis не отвечает) |
 | `checks.database` | `up` / `down` — только если задан `DATABASE_URL` |
-| `checks.redis` | `up` / `down` — только если задан `REDIS_URL` (Upstash `rediss://` или local) |
+| `checks.redis` | `up` / `down` — только если задан `REDIS_URL` (cloud `rediss://` или local) |
 
 Без `REDIS_URL` / `DATABASE_URL` соответствующий check не включается; процесс стартует (Phase 0 optional deps).
 

@@ -34,7 +34,7 @@
 | Adzuna / Remotive keys | later | secret | Secret | По мере подключения источников |
 | `POSTGRES_PASSWORD` / `DATABASE_URL` | 0+ | secret | `.env` / K8s Secret | Local: слабый ok; **cloud/managed PG:** пароль и полный DSN — secret (не в git, не в issues); stage/prod: сильный, свой |
 | `REDIS_PASSWORD` / `REDIS_URL` | 0+ | secret | `.env` / K8s Secret | Local часто без пароля / `redis://localhost…`; **cloud/managed Redis:** полный URL (`rediss://…`) — secret; не в git |
-
+| `REDIS_TLS_CA_FILE` | 0+ | path (не secret) | `.env` (local path) | Опционально: PEM CA для TLS (Yandex Valkey). Путь к файлу, не сам сертификат в git |
 | Kafka SASL user/pass (или TLS keystore) | 2–3+ | secret | позже | Local Redpanda обычно без auth |
 | `CLICKHOUSE_PASSWORD` / DSN | 2+ | secret | `.env` / Secret | `default` без пароля — только local |
 | `ADMIN_TOKEN` | 1+ | secret → high-risk в prod | `.env` / Secret | Закрывает `/api/v1/admin/**` |
@@ -97,7 +97,7 @@ cp .env.example .env
 
 **Cloud Postgres:** connection string из Neon/Supabase/Yandex/Timeweb и т.п. храни только в `.env` или password manager. Утечка DSN = полный доступ к учебной БД — ротация пароля в кабинете провайдера (см. §8). Hybrid DX: [12-local-dev.md — Облачный PostgreSQL](./12-local-dev.md#облачный-postgresql).
 
-**Cloud Redis:** выбран [Upstash](https://upstash.com) (`REDIS_URL` вида `rediss://…`) — только в `.env` или password manager. Альтернатива: Redis Cloud. Утечка = доступ к cache/locks. DX: [12-local-dev.md — Облачный Redis](./12-local-dev.md#облачный-redis), реестр: [21](./21-external-services.md).
+**Cloud Redis:** статус **кандидат**; preferred для РФ — [Yandex Managed Valkey](https://yandex.cloud/ru/docs/managed-valkey/) (`REDIS_URL` вида `rediss://…`, опц. `REDIS_TLS_CA_FILE`). Upstash **может быть недоступен из РФ** — не primary. Альтернативы: Selectel / Timeweb / VK Cloud / Redis Cloud (если доступен). Утечка = доступ к cache/locks. DX: [12-local-dev.md — Облачный Redis](./12-local-dev.md#облачный-redis), реестр: [21](./21-external-services.md).
 
 Проверка: корневой [`.gitignore`](../../.gitignore) должен содержать как минимум `.env` / `.env.*` / `.env.local` (с исключением `!.env.example`), `*.pem` / `*.key`, `kubeconfig`, `credentials*`, `**/secrets/`; после `git init` — `git check-ignore -v .env`.
 

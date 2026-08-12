@@ -3,7 +3,7 @@
 Цель: поднять **Phase 0–1** локально за ~15 минут и понять, что делать при типичных сбоях.
 
 Связанные документы: [00-overview.md](./00-overview.md) (фазы), [09-deployment.md](./09-deployment.md) (Compose), [11-observability-security.md](./11-observability-security.md) (HH User-Agent), [23-observability-tracing.md](./23-observability-tracing.md) (profile `observability`).  
-Актуальный выбор провайдеров (Supabase, Upstash и т.д.): [21-external-services.md](./21-external-services.md).
+Актуальный выбор провайдеров (Supabase, Yandex Valkey/Redis и т.д.): [21-external-services.md](./21-external-services.md).
 
 ---
 
@@ -176,6 +176,7 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `DATABASE_URL` | **да** (предпочтительно) | local DSN / cloud DSN | OLTP; cloud: обычно `sslmode=require` |
 | `POSTGRES_HOST` / `PORT` / `USER` / `PASSWORD` / `DB` | для local-pg / GUI | localhost / 5432 / lma / … / lma | дискретный fallback; пароль — секрет |
 | `REDIS_URL` | **да** (предпочтительно) | `redis://localhost:6379/0` / cloud URL | Cache + locks; cloud TLS: `rediss://` |
+| `REDIS_TLS_CA_FILE` | нет | путь к PEM CA | Yandex Valkey TLS; иначе обычно не нужен |
 | `REDIS_HOST` / `REDIS_PORT` | нет | localhost / 6379 | Host-порт для Compose publish / GUI |
 | `REDIS_ADDR` | fallback | `localhost:6379` | `host:port`, если клиент не читает URL |
 | `REDIS_PASSWORD` | нет | пусто | Local обычно без пароля; cloud — в URL или отдельно |
@@ -285,37 +286,63 @@ make up-local-redis
 
 ## Облачный Redis
 
-Рекомендуемый путь: **[Upstash](https://upstash.com)** (serverless, free tier friendly, `rediss://`).  
-Статус и альтернативы: **[21-external-services.md](./21-external-services.md)**.  
-Docker profile `local-redis` — только optional fallback, не основной DX.
+**Preferred для РФ:** [Yandex Managed Service for Valkey™](https://yandex.cloud/ru/docs/managed-valkey/) (ранее Managed Redis; протокол Redis-compatible).  
+Статус в реестре — **кандидат** (не «выбрано»): [21-external-services.md](./21-external-services.md).  
+Docker profile `local-redis` — только optional fallback, не основной DX при cloud path.
 
-Тарифы меняются — **проверь актуальный free tier** на сайте.
+Клиент везде один: `REDIS_URL` (`rediss://` при TLS). Тарифы меняются — **смотри актуальные цены в кабинете**, free tier здесь не обещаем.
 
-| Провайдер | Статус | Заметки |
-|-----------|--------|---------|
-| [Upstash](https://upstash.com) | **выбрано** | TLS → `rediss://…`; регион ближе к тебе / к Supabase |
-| [Redis Cloud](https://redis.io/cloud/) | альтернатива | connection string из кабинета, часто тоже `rediss://` |
+| Провайдер | Роль | Заметки |
+|-----------|------|---------|
+| [Yandex Managed Valkey](https://yandex.cloud/ru/docs/managed-valkey/) | **preferred (РФ)** | Карты/доступ из РФ; TLS порт часто `6380`; нужен CA + публичный доступ к хостам для laptop |
+| [Selectel](https://docs.selectel.ru/managed-databases/redis/) / [Timeweb Cloud](https://timeweb.cloud/) / [VK Cloud](https://cloud.vk.com/) | альтернативы РФ | Тот же `REDIS_URL`; публичный доступ/ACL — по доке провайдера |
+| [Redis Cloud](https://redis.io/cloud/) | опционально | Если кабинет/endpoint доступны из твоей сети |
+| [Upstash](https://upstash.com) | не primary для РФ | **Может быть недоступен из РФ** — не рекомендовать как основной путь |
 
 Регистрацию делаешь **сам** — репозиторий не создаёт облачные аккаунты.
 
-### Шаги (Upstash)
+### Шаги (Yandex Managed Valkey / Redis)
 
-1. Зарегистрируйся на [upstash.com](https://upstash.com) (GitHub/Google ok).
-2. **Create Database** → Redis → регион (ближе к тебе / к Postgres) → Free / подходящий план.
-3. В карточке БД скопируй **Redis URL** (часто кнопка рядом с endpoint; схема должна быть `rediss://…` с TLS).
-4. В **своём** `.env` (не коммитить):
+1. Зарегистрируйся в [Yandex Cloud](https://console.yandex.cloud/) (нужен аккаунт + платёжный аккаунт / способ оплаты — по правилам Yandex Cloud).
+2. Создай каталог (folder) и сеть VPC (или сеть по умолчанию).
+3. Создай кластер **Managed Service for Valkey™**:
+   - нешардированный кластер для учебного DX;
+   - **поддержка TLS** — включить;
+   - **использовать FQDN вместо IP** — включить (иначе TLS/hostname часто ломаются);
+   - задай пароль пользователя;
+   - для работы **с ноутбука** — включи **публичный доступ** у хоста(ов); иначе кластер доступен только из VPC (VM в той же сети).
+4. Группа безопасности: разреши входящий TCP на порт TLS (обычно **6380**) с твоего IP (или временно шире — на свой риск).
+5. В карточке кластера возьми **FQDN** мастера (часто вида `c-<cluster_id>.rw.mdb.yandexcloud.net`), порт TLS и пароль.
+6. Скачай CA Yandex (нужен для TLS-клиента):
+
+```bash
+# Linux/macOS:
+mkdir -p ~/.redis
+curl -fsSL -o ~/.redis/YandexInternalRootCA.crt \
+  https://storage.yandexcloud.net/cloud-certs/CA.pem
+
+# Windows PowerShell:
+# New-Item -ItemType Directory -Force $HOME\.redis | Out-Null
+# Invoke-WebRequest -Uri https://storage.yandexcloud.net/cloud-certs/CA.pem `
+#   -OutFile $HOME\.redis\YandexInternalRootCA.crt
+```
+
+7. В **своём** `.env` (не коммитить):
 
 ```text
-# Upstash (TLS обязателен):
-REDIS_URL=rediss://default:PASSWORD@REGION.upstash.io:PORT
+# Yandex Managed Valkey (TLS, порт часто 6380):
+REDIS_URL=rediss://:PASSWORD@c-CLUSTER_ID.rw.mdb.yandexcloud.net:6380/0
+REDIS_TLS_CA_FILE=C:\Users\YOU\.redis\YandexInternalRootCA.crt
+# или: REDIS_TLS_CA_FILE=/home/YOU/.redis/YandexInternalRootCA.crt
 
 # Local Docker fallback (не основной путь):
 # REDIS_URL=redis://localhost:6379/0
 ```
 
-`rediss://` — Redis over TLS (две буквы **s**). Спецсимволы в пароле — URL-encode.
+`rediss://` — Redis/Valkey over TLS (две буквы **s**). Спецсимволы в пароле — URL-encode.  
+Пустой user в URL (`rediss://:PASSWORD@host…`) — нормальная форма, если провайдер не требует username.
 
-5. При cloud PG + Upstash контейнеры не нужны:
+8. При cloud PG + cloud Redis контейнеры не нужны:
 
 ```bash
 make up-cloud
@@ -324,17 +351,17 @@ curl -s http://localhost:8080/api/v1/health
 # ожидай checks.redis: "up" (и checks.database при DATABASE_URL)
 ```
 
-6. Опционально заполни `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_ADDR` для GUI, которые не читают URL.
+9. Опционально заполни `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_ADDR` для GUI, которые не читают URL.
 
-7. Проверка с хоста (если есть `redis-cli` с TLS):
+10. Проверка с хоста (если есть `redis-cli` с TLS):
 
 ```bash
-# redis-cli -u "$REDIS_URL" PING
+# redis-cli -h HOST -p 6380 --tls --cacert "$REDIS_TLS_CA_FILE" -a 'PASSWORD' PING
 ```
 
 **Phase 0:** BFF не падает без Redis — без `REDIS_URL` check просто отсутствует; при заданном URL и недоступном Redis — `status: degraded`, `checks.redis: down`. Cache-aside — Phase 1.
 
-**Tradeoffs:** квоты free tier; latency до облака с ноутбука; eviction; TLS. VPC-only кластеры (ElastiCache и аналоги) с ноутбука без VPN неудобны — поэтому Upstash.
+**Tradeoffs:** платный managed (смотри прайс); latency до облака; TLS + CA; публичный доступ = поверхность атаки (ограничь SG/ACL своим IP). VPC-only без публичного доступа с ноутбука неудобен.
 
 Не коммить `REDIS_URL` с паролем. См. [17-secrets-management.md](./17-secrets-management.md).
 
@@ -449,7 +476,7 @@ netstat -ano | findstr :8080
 
 ### Redis «connection refused» / TLS errors
 
-- **Cloud:** проверь `REDIS_URL` (`rediss://` при TLS), пароль URL-encoded, IP allowlist; VPC-only кластеры с ноутбука без VPN не доступны
+- **Cloud:** проверь `REDIS_URL` (`rediss://` при TLS), пароль URL-encoded, SG/ACL / публичный доступ; для Yandex — `REDIS_TLS_CA_FILE`; VPC-only без публичного доступа с ноутбука не доступны
 - **Local-redis:** `make up-local-redis`, дождаться healthy: `docker compose … --profile local-redis ps`
 - Не путать `redis://` (без TLS) и `rediss://` (с TLS)
 
