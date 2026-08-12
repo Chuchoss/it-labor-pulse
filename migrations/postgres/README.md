@@ -65,6 +65,7 @@ WHERE datname = current_database()
 ```
 
 На Windows `lib/pq` (`postgres://`) к session pooler иногда зависает — предпочтительнее образ `migrate/migrate` или CLI, собранный с тегом `pgx5`, и URL вида `pgx5://...`.  
+Если видишь `EMAXCONNSESSION` / `max clients reached in session mode` — session pooler (free tier ~15) забит orphaned-клиентами; тот же `pg_terminate_backend` в SQL Editor обязателен, иначе новые подключения не откроются.  
 Затем снова `make migrate-up` (или CLI `migrate ... up`).  
 Проверка: `SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY 1;`
 
