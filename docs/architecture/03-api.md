@@ -13,13 +13,13 @@ Deprecation: минимум один релиз с `Sunset` header / docs warnin
 
 ---
 
-## Public REST (Client → Gateway → BFF)
+## Public REST (Client → BFF)
 
-Публичная точка входа — **gateway** (`:8080` local). OpenAPI описывает **BFF product API**; gateway прозрачно проксирует `/api/*` (см. [ADR 010](./adr/010-api-gateway.md)).
+Публичная точка входа MVP — **BFF** (`:8080` local). OpenAPI описывает **BFF product API** (см. [ADR 010](./adr/010-api-gateway.md)). Отдельный gateway — **Target** Phase 3+ (optional).
 
-Base URL: `https://{host}/api/v1` (через gateway)  
+Base URL: `https://{host}/api/v1` (через BFF; local `http://localhost:8080/api/v1`)  
 Content-Type: `application/json`  
-Auth: **MVP** — отсутствует (local/dev). **Target** — edge auth stub на gateway + `Authorization: Bearer <JWT>` / `X-API-Key`.
+Auth: **MVP** — отсутствует (local/dev). **Target** — auth stub на edge (BFF или будущий gateway) + `Authorization: Bearer <JWT>` / `X-API-Key`.
 
 ### Error model
 

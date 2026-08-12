@@ -41,11 +41,10 @@ flowchart TB
 
   subgraph Edge
     Ingress[Ingress / TLS]
-    GW[API Gateway<br/>HTTP :8080]
+    BFF[BFF<br/>HTTP :8080]
   end
 
   subgraph Core["Core services (Go)"]
-    BFF[BFF<br/>HTTP :8081]
     Query[Query / Analytics<br/>gRPC + HTTP]
     Ingest[Ingest Service]
     Norm[Normalizer Worker]
@@ -70,7 +69,7 @@ flowchart TB
     LLM[AI Provider<br/>Target]
   end
 
-  UI --> Ingress --> GW --> BFF
+  UI --> Ingress --> BFF
   Admin --> Ingress
   BFF --> Query
   BFF --> Ingest
@@ -97,8 +96,8 @@ flowchart TB
 | Компонент | Ответственность | Фаза |
 |-----------|-----------------|------|
 | **React SPA** | Дашборд, фильтры роль/регион/период, графики salary/demand; позже экран «Тенденции» | MVP (+ Perspectives Phase 5) |
-| **API Gateway** | Публичный edge: proxy `/api/*` → BFF, CORS, rate-limit stub, корреляция; без business logic | MVP |
-| **BFF** | Product REST (OpenAPI), агрегация DTO под UI, вызовы Query/Ingest | MVP |
+| **BFF** | Публичный REST (OpenAPI) `:8080`, агрегация DTO под UI, вызовы Query/Ingest; edge MVP | MVP |
+| **API Gateway** | Optional edge перед BFF (auth/WAF/canary) | Target (Phase 3+) |
 | **Query / Analytics** | Чтение агрегатов из CH/PG, cache-aside Redis; позже Perspectives API | MVP (+ Phase 5) |
 | **Ingest** | Вызов source adapters (HH), публикация raw events в Kafka, backoff 429; позже signal adapters | MVP (+ Phase 5) |
 | **Normalizer Worker** | Валидация, dedup, mapping в каноническую модель, write PG + CH snapshots | MVP |
@@ -119,7 +118,7 @@ flowchart TB
 
 - Монорепо / структура сервисов (Go modules + React app)
 - Docker Compose: PostgreSQL, Redis
-- Gateway + BFF hello/health; React shell
+- BFF hello/health (`:8080`); React shell
 - Миграции PG (`golang-migrate`, см. ADR 002)
 - **Без** Kafka/ClickHouse/gRPC полного контура
 
@@ -204,15 +203,15 @@ gantt
 
 - **Logs:** JSON, `trace_id`, `ingest_run_id`, `source`, `external_id`
 - **Metrics:** ingest success/429, Kafka lag, normalize errors, cache hit ratio, query latency p95
-- **Traces:** Gateway → BFF → Query → Redis/CH/PG; Ingest → HH → Kafka
+- **Traces:** BFF → Query → Redis/CH/PG; Ingest → HH → Kafka (Target: + gateway hop)
 - Health/readiness на каждом сервисе
 
 ### Security
 
 - Secrets только через env/Secret (не в git)
-- Публичный perimeter — только gateway HTTP; BFF/Query/Ingest — internal; gRPC внутри cluster network
+- Публичный perimeter MVP — BFF HTTP; Query/Ingest — internal; gRPC внутри cluster network
 - HH: корректный User-Agent, соблюдение ToS/rate limits
-- Auth: stub в MVP (edge позже); JWT/API keys позже
+- Auth: stub в MVP; JWT/API keys / optional gateway — позже
 - AI: не отправлять PII (телефоны, ФИО контактов) в provider
 
 ### Reliability
@@ -245,7 +244,7 @@ Definition of Done и матрица CI: [13-testing.md](./13-testing.md). Backe
 
 | Решение | Выбор | Почему |
 |---------|-------|--------|
-| Публичный edge | Gateway → BFF REST | Edge отдельно от product API (ADR 010) |
+| Публичный edge | BFF REST `:8080` | Один hop для MVP; gateway — Target (ADR 010) |
 | Внутренний RPC | gRPC | Типизация, скорость между сервисами |
 | Events | Kafka | Buffer, retry, fan-out normalize/AI |
 | OLTP | PostgreSQL | Справочники, текущее состояние, jobs |
@@ -264,7 +263,7 @@ Definition of Done и матрица CI: [13-testing.md](./13-testing.md). Backe
 |------------|-------------------|
 | Ingest HH daily | ≥ 1 успешный run / сутки (`success` или приемлемый `partial`) |
 | Dashboard summary p95 | < 500 ms (cache hit); < 2 s (miss, Phase 1 PG) |
-| Availability gateway/BFF (dev/stage) | best-effort; Target 99% monthly |
+| Availability BFF (dev/stage) | best-effort; Target 99% monthly |
 | Kafka lag normalize | < 30 min age (Phase 2) |
 | Стоимость AI | budget cap / день; jobs async only (Phase 4) |
 | Локальный Compose RAM | mvp profile ≲ 2–3 GB; full выше |

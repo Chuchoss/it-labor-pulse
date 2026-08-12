@@ -42,7 +42,7 @@ description: >-
 | Тема | Файл |
 |------|------|
 | Vision, фазы | `docs/architecture/00-overview.md` |
-| Сервисы / порты | `02-services.md` (gateway edge + bff; ADR 010) |
+| Сервисы / порты | `02-services.md` (public BFF `:8080`; gateway Target; ADR 010) |
 | REST/gRPC | `03-api.md` + OpenAPI/proto |
 | Данные PG/CH | `05-data-model.md` |
 | Kafka | `07-messaging.md` |

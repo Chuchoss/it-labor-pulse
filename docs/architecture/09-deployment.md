@@ -23,8 +23,8 @@ deploy/compose/
 | Service | Image / build | Ports |
 |---------|---------------|-------|
 | `web` | React (nginx) | 3000→80 |
-| `gateway` | Go | 8080 (public) |
-| `bff` | Go | 8081 (internal) |
+| `bff` | Go | 8080 (public) |
+| `gateway` | Go | Target Phase 3+ (then public 8080; BFF internal) |
 | `query` | Go | 8083, 9091 |
 | `ingest` | Go | 8082, 9092 |
 | `normalizer` | Go | — |
@@ -38,8 +38,7 @@ deploy/compose/
 ```mermaid
 flowchart TB
   subgraph compose [docker compose]
-    web --> gateway
-    gateway --> bff
+    web --> bff
     bff --> query
     bff --> ingest
     scheduler --> ingest
@@ -55,8 +54,8 @@ flowchart TB
 ```
 
 **Сейчас в `deploy/compose`:** profile `local-redis` — опциональный Redis; profile `local-pg` — опциональный Postgres; profile `mvp` — зарезервирован под приложения; profile `observability` / `obs` — Loki + Tempo + Alloy + Prometheus + Grafana (opt-in, [23](./23-observability-tracing.md)). Рекомендуемый cloud path: managed Postgres (`DATABASE_URL`) + managed Redis (`REDIS_URL`, часто `rediss://`) — Compose infra может быть пустой (см. [12-local-dev.md](./12-local-dev.md)).  
-**Цель Phase 1 local:** + gateway + bff + query + ingest(+normalize in-process) + web.  
-Kafka/CH — Phase 2 (`olap` / `bus`) без смены публичного API.
+**Цель Phase 1 local:** + bff + query + ingest(+normalize in-process) + web.  
+Kafka/CH — Phase 2 (`olap` / `bus`) без смены публичного API. Отдельный gateway — Target Phase 3+.
 
 ## Production-like: Kubernetes
 
@@ -65,8 +64,8 @@ Kafka/CH — Phase 2 (`olap` / `bus`) без смены публичного API
 | Component | Kind | Replicas (start) | Notes |
 |-----------|------|------------------|-------|
 | `web` | Deployment | 2 | nginx + static |
-| `gateway` | Deployment | 2 | HPA; public Ingress |
-| `bff` | Deployment | 2 | HPA; ClusterIP |
+| `bff` | Deployment | 2 | HPA; public Ingress (`/api`) |
+| `gateway` | Deployment | 0–2 | Target Phase 3+; тогда BFF — ClusterIP |
 | `query` | Deployment | 2 | HPA |
 | `ingest` | Deployment | 1–2 | не масштабировать агрессивно из-за HH limits |
 | `normalizer` | Deployment | 2+ | scale by Kafka lag |
@@ -77,16 +76,15 @@ Kafka/CH — Phase 2 (`olap` / `bus`) без смены публичного API
 
 ### Services
 
-- `ClusterIP` для всех app-сервисов
-- `Ingress` → `web` (`/`) + `gateway` (`/api`); BFF без public Ingress
+- `ClusterIP` для internal app-сервисов
+- `Ingress` → `web` (`/`) + `bff` (`/api`); optional Target `gateway` перед BFF
 - gRPC **не** через public Ingress
 
 ```mermaid
 flowchart LR
   Inet[Internet] --> Ing[Ingress TLS]
   Ing -->|/| Web[web svc]
-  Ing -->|/api| GW[gateway svc]
-  GW --> BFF[bff svc]
+  Ing -->|/api| BFF[bff svc]
   BFF --> Query
   BFF --> Ingest
 ```

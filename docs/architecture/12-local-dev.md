@@ -100,17 +100,13 @@ make migrate-up
 7. Подключиться к БД/Redis (облако или local — см. [ниже](#подключение-к-postgres--redis), [Облачный PostgreSQL](#облачный-postgresql), [Облачный Redis](#облачный-redis)).
 
 **Сейчас в Compose:** Redis — опционально (`local-redis`); Postgres — опционально (`local-pg`). Profile `mvp` зарезервирован под приложения Phase 0–1.  
-**Дальше Phase 0:** + gateway + bff hello, web shell → health: `curl -sf http://localhost:8080/api/v1/health` (через gateway).  
+**Дальше Phase 0:** + bff hello, web shell → health: `curl -sf http://localhost:8080/api/v1/health`.  
 **Phase 1:** + ingest/normalize (in-process), query, ручной admin ingest.
 
-Локальный API (два процесса):
+Локальный API (один процесс):
 
 ```bash
-# терминал 1 — BFF (internal)
-make run-bff          # :8081
-
-# терминал 2 — gateway (public)
-make run-gateway      # :8080 → BFF_UPSTREAM
+make run-bff          # public :8080
 
 # UI / API
 # http://localhost:3000
@@ -123,7 +119,7 @@ curl -X POST http://localhost:8080/api/v1/admin/ingest/runs \
   -d '{"source":"hh","mode":"incremental","params":{"area":"1","text":"golang"}}'
 ```
 
-Подсказка: `make run-api` печатает порядок запуска. См. [ADR 010](./adr/010-api-gateway.md).
+Отдельный gateway — Target Phase 3+ ([ADR 010](./adr/010-api-gateway.md)).
 
 ---
 
@@ -139,7 +135,7 @@ deploy/compose/
 
 | Profile | Что поднимает | Когда |
 |---------|---------------|-------|
-| `mvp` | **цель Phase 0–1:** gateway, bff, query, ingest(+normalize in-process), web (пока пусто) | приложения; data plane — cloud или local-* |
+| `mvp` | **цель Phase 0–1:** bff, query, ingest(+normalize in-process), web (пока пусто) | приложения; data plane — cloud или local-* |
 | `local-redis` | контейнер `redis` (опционально) | если не используете облачный Redis |
 | `local-pg` | контейнер `postgres` (опционально) | если не используете облачный PG |
 | `olap` | + clickhouse | Phase 2, перед чтением трендов из CH |
@@ -183,9 +179,7 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `REDIS_HOST` / `REDIS_PORT` | нет | localhost / 6379 | Host-порт для Compose publish / GUI |
 | `REDIS_ADDR` | fallback | `localhost:6379` | `host:port`, если клиент не читает URL |
 | `REDIS_PASSWORD` | нет | пусто | Local обычно без пароля; cloud — в URL или отдельно |
-| `GATEWAY_HTTP_ADDR` | нет | `:8080` | Публичный edge (gateway) |
-| `BFF_HTTP_ADDR` | нет | `:8081` | Internal BFF |
-| `BFF_UPSTREAM` | нет | `http://127.0.0.1:8081` | Куда gateway проксирует `/api/*` |
+| `BFF_HTTP_ADDR` | нет | `:8080` | Публичный BFF (MVP edge) |
 | `QUERY_HTTP_ADDR` / `QUERY_GRPC_ADDR` | нет | `:8083` / `:9091` | Query (HTTP debug) |
 | `INGEST_HTTP_ADDR` / `INGEST_GRPC_ADDR` | нет | `:8082` / `:9092` | Ingest admin |
 | `KAFKA_BROKERS` | Phase 2 | `localhost:9092` | Redpanda/Kafka |
@@ -213,10 +207,8 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `make up-local` | local-redis + local-pg | **есть** |
 | `make down` | Compose down (local-redis + local-pg) | **есть** |
 | `make logs` / `make ps` | логи / статус | **есть** |
-| `make wait-ready` | health local Redis; позже + gateway `/api/v1/health` | **есть** (infra) |
-| `make run-bff` | BFF на `:8081` | **есть** |
-| `make run-gateway` | gateway на `:8080` | **есть** |
-| `make run-api` | подсказка: поднять bff + gateway | **есть** |
+| `make wait-ready` | health local Redis; позже + BFF `/api/v1/health` | **есть** (infra) |
+| `make run-bff` | публичный BFF на `:8080` | **есть** |
 | `make psql` / `make redis-cli` | shell в контейнеры (`local-pg` / `local-redis`) | **есть** |
 | `make migrate-up` / `migrate-down` | golang-migrate по `DATABASE_URL` (Docker image) | stub (нет SQL пока) |
 | `make bust-cache` | `INCR meta:cache_version` (local Redis) | **есть** |
@@ -399,8 +391,8 @@ redis-cli -h localhost -p 6379 PING
 |--------|------|-------------------|
 | web | 3000 | другие SPA / Create React App |
 | bff | 8080 | Tomcat, другие API |
-| query HTTP | 8081 | альтернативные gateway |
 | ingest HTTP | 8082 | — |
+| query HTTP | 8083 | — |
 | query gRPC | 9091 | — |
 | ingest gRPC | 9092 | **Kafka/Redpanda** часто тоже 9092 |
 | postgres | 5432 | локальный PostgreSQL |

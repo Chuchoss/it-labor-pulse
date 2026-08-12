@@ -67,8 +67,7 @@ flowchart TB
 
   subgraph TrustCluster["Trust boundary: Kubernetes cluster"]
     Ingress[Ingress Controller]
-    GW[API Gateway<br/>:8080 HTTP]
-    BFF[BFF<br/>:8081 HTTP]
+    BFF[BFF<br/>:8080 HTTP]
     Query[Query Analytics<br/>:8083 HTTP / :9091 gRPC]
     Ingest[Ingest<br/>:8082 HTTP / :9092 gRPC]
     Norm[Normalizer Worker]
@@ -80,7 +79,7 @@ flowchart TB
     Redis[(Redis)]
   end
 
-  Browser --> Ingress --> GW --> BFF
+  Browser --> Ingress --> BFF
   BFF --> Query
   BFF --> Ingest
   Sched --> Ingest
@@ -127,7 +126,7 @@ flowchart TB
   end
 
   subgraph AppNet["App network (ClusterIP)"]
-    Services[Gateway, BFF, Query, Ingest, Workers]
+    Services[BFF, Query, Ingest, Workers]
   end
 
   subgraph DataNet["Data plane"]
@@ -142,8 +141,8 @@ flowchart TB
 
 | Граница | Правило |
 |---------|---------|
-| Internet → Cluster | Только Ingress (SPA static + `/api/*` → gateway). gRPC **не** публиковать наружу |
-| Gateway → BFF → internal | mTLS опционально (Target); в MVP — private network |
+| Internet → Cluster | Только Ingress (SPA static + `/api/*` → BFF). gRPC **не** публиковать наружу |
+| BFF → internal | mTLS опционально (Target); в MVP — private network. Отдельный gateway — Target Phase 3+ |
 | Egress | Allowlist: HH, будущие job APIs, edu/news (Phase 5), AI provider, registry, DNS |
 | Secrets | API tokens HH/AI только в K8s Secrets / local `.env` (gitignored) |
 | PII | Не кэшировать и не слать в LLM контактные данные кандидатов/работодателей сверх необходимости аналитики |

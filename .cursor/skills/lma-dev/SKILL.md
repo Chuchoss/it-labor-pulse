@@ -44,11 +44,11 @@ description: >-
 
 - [ ] make up-cloud (cloud PG+Redis) ИЛИ make up-local-redis / make up-local
 
-- [ ] make wait-ready → только если local-redis; позже gateway /api/v1/health
+- [ ] make wait-ready → только если local-redis; позже BFF /api/v1/health
 
 - [ ] make migrate-up (когда есть миграции) — по DATABASE_URL
 
-- [ ] UI :3000, public API :8080 (gateway); BFF internal :8081
+- [ ] UI :3000, public API :8080 (BFF)
 
 ```
 
@@ -110,7 +110,7 @@ make migrate-up
 
 2. Миграции PG — golang-migrate (ADR 002), не raw DDL в приложении.
 
-3. UI только через gateway → BFF; секреты не в клиент.
+3. UI только через BFF (`:8080`); секреты не в клиент.
 
 4. HH adapter + fixtures; ingest уважает UA и 429 backoff.
 

@@ -25,19 +25,15 @@ cp .env.example .env   # PowerShell: Copy-Item .env.example .env
 
 В `.env` задайте `DATABASE_URL` (рекомендуется **Supabase**) и при необходимости `REDIS_URL`. Секреты не коммитить.
 
-### Phase 0 API (gateway + BFF)
+### Phase 0 API (BFF)
 
 ```bash
-# терминал 1 — BFF (internal :8081)
-make run-bff
-# терминал 2 — gateway (public :8080 → BFF)
-make run-gateway
+make run-bff   # public :8080
 
 curl -s http://localhost:8080/api/v1/health
-curl -s http://localhost:8080/healthz
 ```
 
-Публичный вход — `GATEWAY_HTTP_ADDR` (default `:8080`); BFF — `BFF_HTTP_ADDR` (default `:8081`); upstream — `BFF_UPSTREAM`. Если задан `DATABASE_URL`, BFF health пингует Postgres (`status: degraded` при недоступности БД). См. [ADR 010](./docs/architecture/adr/010-api-gateway.md), [локальный DX](./docs/architecture/12-local-dev.md).
+Публичный вход — `BFF_HTTP_ADDR` (default `:8080`). Отдельный gateway — Target Phase 3+ ([ADR 010](./docs/architecture/adr/010-api-gateway.md)). Если задан `DATABASE_URL`, BFF health пингует Postgres (`status: degraded` при недоступности БД). См. [локальный DX](./docs/architecture/12-local-dev.md).
 
 ## Ветки и CI
 
@@ -54,7 +50,7 @@ CI: GitHub Actions (`test` required on PRs).
 
 | Сейчас | Дальше |
 |--------|--------|
-| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra, Phase 0 gateway+BFF (`GET /api/v1/health`) | Query/ingest и дальше по [фазам](./docs/architecture/00-overview.md) |
+| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra, Phase 0 BFF (`GET /api/v1/health`) | Query/ingest и дальше по [фазам](./docs/architecture/00-overview.md) |
 
 ## Attribution
 

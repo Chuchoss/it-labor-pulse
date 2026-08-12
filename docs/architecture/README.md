@@ -20,7 +20,7 @@ IT Labor Market Analytics (LMA) — платформа аналитики рын
 
 | Артефакт | Путь |
 |----------|------|
-| OpenAPI (BFF REST; клиент → gateway → BFF) | [`api/openapi.yaml`](../../api/openapi.yaml) |
+| OpenAPI (BFF REST; клиент → BFF `:8080`; gateway — Target) | [`api/openapi.yaml`](../../api/openapi.yaml) |
 | OpenAPI HTML (GitHub Pages) | [`docs/api-site/`](../api-site/) → [Redoc](https://chuchoss.github.io/it-labor-pulse/) / [Swagger UI](https://chuchoss.github.io/it-labor-pulse/swagger.html) ([ADR 008](./adr/008-github-pages-openapi.md)) |
 | Protobuf (internal gRPC) | [`libs/proto/lma/`](../../libs/proto/lma/) |
 | Env example | [`.env.example`](../../.env.example) |

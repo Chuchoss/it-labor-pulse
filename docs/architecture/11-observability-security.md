@@ -187,7 +187,7 @@ gRPC: остаётся внутри кластера; service-to-service mTLS �
 
 - Validate all query params (dates, enums, page_size max)  
 - Timeouts на все outbound HTTP/gRPC  
-- Body size limits на gateway (edge)  
+- Body size limits на публичном edge (BFF; Target: gateway)  
 
 - Dependency scanning в CI (Target)  
 - Non-root containers  
@@ -214,6 +214,6 @@ gRPC: остаётся внутри кластера; service-to-service mTLS �
 - [ ] HH User-Agent с контактом  
 - [ ] Секреты не в репозитории  
 - [ ] Admin endpoints закрыты  
-- [ ] Rate limit на публичное API (gateway)  
+- [ ] Rate limit на публичное API (BFF; Target: gateway)  
 - [ ] README с дисклеймером источника данных  
 - [ ] Нет хранения лишних персональных контактов из описаний  

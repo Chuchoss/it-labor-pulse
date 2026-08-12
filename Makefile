@@ -7,7 +7,7 @@ COMPOSE      := docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 # Optional local data plane; cloud PG/Redis need no Compose services.
 PROFILES_INFRA := --profile local-redis --profile local-pg
 
-.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff run-gateway run-api test
+.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff test
 
 help:
 	@echo "LMA local targets:"
@@ -18,9 +18,7 @@ help:
 	@echo "  make up-local       - start local Redis + local Postgres"
 	@echo "  make up-mvp         - reserved for Phase 0–1 apps; for now see up-cloud / up-local-*"
 	@echo "  make up-obs         - Loki + Tempo + Alloy + Prometheus + Grafana (profile observability)"
-	@echo "  make run-bff        - run BFF on :8081 (internal; loads .env)"
-	@echo "  make run-gateway    - run gateway on :8080 (proxies /api/* → BFF_UPSTREAM)"
-	@echo "  make run-api        - print how to run bff + gateway together"
+	@echo "  make run-bff        - run public BFF on :8080 (loads .env)"
 	@echo "  make test           - go test ./..."
 	@echo "  make down           - stop compose stack (local-redis + local-pg)"
 	@echo "  make wait-ready     - wait until local-redis is healthy (skip if cloud Redis)"
@@ -91,7 +89,7 @@ wait-ready: $(ENV_FILE)
 	@echo "Cloud Redis: set REDIS_URL in .env and skip this target (make up-cloud)."
 	@echo "Cloud PG: ensure DATABASE_URL in .env; migrate later with make migrate-up."
 	@echo "Local PG: make up-local-pg (or make up-local) if you need the container."
-	@echo "Note: gateway /api/v1/health (→ BFF) will be checked here once apps are wired."
+	@echo "Note: BFF /api/v1/health will be checked here once apps are wired in Compose."
 
 psql: $(ENV_FILE)
 	$(COMPOSE) --profile local-pg exec postgres \
@@ -157,22 +155,10 @@ migrate-down: $(ENV_FILE)
 bust-cache:
 	$(COMPOSE) --profile local-redis exec redis redis-cli INCR meta:cache_version
 
-# Phase 0: BFF (internal :8081) + gateway (public :8080) — ADR 010
+# Phase 0: public BFF on :8080 — ADR 010 (revised)
 run-bff: $(ENV_FILE)
 	@set -a; . ./$(ENV_FILE); set +a; \
 	go run ./apps/bff/cmd/bff
-
-run-gateway: $(ENV_FILE)
-	@set -a; . ./$(ENV_FILE); set +a; \
-	go run ./apps/gateway/cmd/gateway
-
-run-api: $(ENV_FILE)
-	@echo "Start API edge in two terminals (or background jobs):"
-	@echo "  1) make run-bff        # listens BFF_HTTP_ADDR (default :8081)"
-	@echo "  2) make run-gateway    # listens GATEWAY_HTTP_ADDR (default :8080)"
-	@echo "Public health: curl -sf http://localhost:8080/api/v1/health"
-	@echo "Gateway liveness: curl -sf http://localhost:8080/healthz"
-	@echo "Docs: docs/architecture/adr/010-api-gateway.md"
 
 test:
 	go test ./...

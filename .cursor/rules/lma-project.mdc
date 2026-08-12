@@ -16,7 +16,7 @@ alwaysApply: true
 
 | Phase | Можно | Не делай без явной просьбы |
 |-------|--------|----------------------------|
-| 0 | skeleton, optional Compose `local-redis`/`local-pg` или cloud `DATABASE_URL`+`REDIS_URL`, gateway+BFF health, web shell, migrate | Kafka, CH, полный gRPC |
+| 0 | skeleton, optional Compose `local-redis`/`local-pg` или cloud `DATABASE_URL`+`REDIS_URL`, BFF health (`:8080`), web shell, migrate | Kafka, CH, полный gRPC; отдельный gateway |
 | 1 | HH ingest, normalize→PG, Query REST, Redis cache | OLAP как обязательный path; полный продукт «Тенденции» |
 | 2+ | Kafka, CH, gRPC BFF↔Query; опц. foundation `signals.raw` | AI / multi-source job boards без Phase 4; edu/news Perspectives без Phase 5 |
 | 4 | AI + multi-source **job boards** | Полный UI/scoring «Тенденции» (это Phase 5) |

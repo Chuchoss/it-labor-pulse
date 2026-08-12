@@ -15,8 +15,8 @@ type Config struct {
 }
 
 // Load reads BFF config from env.
-// Listen address precedence: BFF_HTTP_ADDR, then PORT / BFF_PORT (bare port or :port), default :8081.
-// Public edge is gateway (:8080); BFF is internal. DATABASE_URL optional for health ping.
+// Listen address precedence: BFF_HTTP_ADDR, then PORT / BFF_PORT (bare port or :port), default :8080.
+// BFF is the public MVP edge (ADR 010). DATABASE_URL optional for health ping.
 func Load() (Config, error) {
 	cfg := Config{
 		HTTPAddr:    resolveHTTPAddr(),
@@ -40,7 +40,7 @@ func resolveHTTPAddr() string {
 	if v := strings.TrimSpace(os.Getenv("PORT")); v != "" {
 		return normalizeAddr(v)
 	}
-	return ":8081"
+	return ":8080"
 }
 
 func normalizeAddr(v string) string {

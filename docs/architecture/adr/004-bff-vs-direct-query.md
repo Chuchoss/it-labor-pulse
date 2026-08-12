@@ -6,12 +6,12 @@ Query отдаёт аналитику (gRPC + debug HTTP). Можно ли React
 
 ## Decision
 
-**UI не ходит в Query напрямую.** Публичный perimeter — **gateway** (`:8080`) → **BFF** (`:8081`) REST.  
-Query gRPC/HTTP — ClusterIP / localhost only. BFF адаптирует DTO; edge (CORS, rate-limit stub, корреляция) — на gateway ([ADR 010](./010-api-gateway.md)).
+**UI не ходит в Query напрямую.** Публичный perimeter MVP — **BFF** REST (`:8080`).  
+Query gRPC/HTTP — ClusterIP / localhost only. BFF адаптирует DTO; edge-политики (CORS/rate-limit/auth) — в BFF до появления optional gateway ([ADR 010](./010-api-gateway.md)).
 
 ## Consequences
 
-- (+) Один CORS/auth/perimeter на gateway; скрыт внутренний контракт  
+- (+) Один CORS/auth/perimeter на публичном BFF; скрыт внутренний контракт  
 - (+) Можно менять gRPC без ломки UI  
-- (−) Лишний hop gateway→BFF (+latency) — для MVP приемлемо  
+- (−) Target: отдельный gateway добавит hop — только при необходимости  
 - Запрещено публиковать Query Ingress в prod-like  

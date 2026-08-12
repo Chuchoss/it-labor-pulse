@@ -73,23 +73,21 @@ sequenceDiagram
 sequenceDiagram
   autonumber
   participant UI as React SPA
-  participant GW as Gateway
   participant BFF as BFF
   participant Q as Query
   participant Redis as Redis
   participant CH as ClickHouse
   participant PG as PostgreSQL
 
-  UI->>GW: GET /api/v1/dashboard/summary?from&to
-  GW->>BFF: proxy + request_id / traceparent
+  UI->>BFF: GET /api/v1/dashboard/summary?from&to
+  Note over BFF: MVP public edge :8080; Target may insert gateway
   BFF->>Q: GetDashboardSummary(period)
   Q->>Redis: GET cache:dashboard:summary:{hash}
 
   alt HIT
     Redis-->>Q: JSON payload
     Q-->>BFF: DashboardSummary(cache_hit=true)
-    BFF-->>GW: 200 + cache:HIT
-    GW-->>UI: 200
+    BFF-->>UI: 200 + cache:HIT
   else MISS
     Redis-->>Q: nil
     Q->>CH: aggregate active/new/median
@@ -98,8 +96,7 @@ sequenceDiagram
     end
     Q->>Redis: SETEX cache key TTL=5m
     Q-->>BFF: DashboardSummary(cache_hit=false)
-    BFF-->>GW: 200 + cache:MISS
-    GW-->>UI: 200
+    BFF-->>UI: 200 + cache:MISS
   end
 ```
 
@@ -109,37 +106,31 @@ sequenceDiagram
 sequenceDiagram
   autonumber
   participant Ops as Ops / Admin UI
-  participant GW as Gateway
   participant BFF as BFF
   participant Ing as Ingest
   participant Redis as Redis
   participant PG as PostgreSQL
   participant Kafka as Kafka
 
-  Ops->>GW: POST /api/v1/admin/ingest/runs {source,mode,params}
-  GW->>BFF: proxy
-  Note over GW,BFF: Target: edge/auth stub on gateway
+  Ops->>BFF: POST /api/v1/admin/ingest/runs {source,mode,params}
+  Note over BFF: Target: auth stub on edge (BFF or optional gateway)
   BFF->>Ing: StartRun(...)
   Ing->>Redis: SET NX lock:ingest:{source}
   alt ok
     Ing->>PG: create run queued/running
     Ing-->>BFF: run_id, status=queued
-    BFF-->>GW: 202 Accepted
-    GW-->>Ops: 202
+    BFF-->>Ops: 202 Accepted
     Ing->>Kafka: (async) fetch+produce as in daily flow
   else locked
     Ing-->>BFF: FailedPrecondition
-    BFF-->>GW: 409 CONFLICT
-    GW-->>Ops: 409
+    BFF-->>Ops: 409 CONFLICT
   end
 
-  Ops->>GW: GET /api/v1/admin/ingest/runs/{run_id}
-  GW->>BFF: proxy
+  Ops->>BFF: GET /api/v1/admin/ingest/runs/{run_id}
   BFF->>Ing: GetRun
   Ing->>PG: SELECT run
   Ing-->>BFF: status+stats
-  BFF-->>GW: 200
-  GW-->>Ops: 200
+  BFF-->>Ops: 200
 ```
 
 ## 4. Future AI analysis flow (async job)

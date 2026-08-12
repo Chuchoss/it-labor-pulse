@@ -58,7 +58,7 @@
 
 Правила:
 
-1. **Edge = gateway (публичный HTTP):** если нет валидного `traceparent` — создать; если нет `X-Request-Id` — сгенерировать; оба вернуть в response и пробросить в BFF (`traceparent`, `X-Request-Id`).
+1. **Edge = BFF (публичный HTTP, MVP):** если нет валидного `traceparent` — создать; если нет `X-Request-Id` — сгенерировать; оба вернуть в response. Target: optional gateway делает то же и пробрасывает в BFF.
 2. **`request_id` и `trace_id` живут вместе:** `request_id` — для людей/API error body; `trace_id` — для Grafana/Tempo. Не смешивать форматы (не класть ULID в `trace_id`).
 3. **Один синхронный user/admin запрос** → один `trace_id` + один `request_id`.
 4. **Один ingest run** → один `ingest_run_id` на весь async pipeline; `trace_id` scheduler-тика может отличаться — в логах workers всегда писать `ingest_run_id`, а trace context продолжать из Kafka headers когда есть.
@@ -67,7 +67,7 @@
 
 | Канал | Что прокидываем |
 |-------|-----------------|
-| HTTP (UI → gateway → BFF, admin) | `traceparent`, `tracestate` (если есть), `X-Request-Id` |
+| HTTP (UI → BFF, admin; Target: +gateway) | `traceparent`, `tracestate` (если есть), `X-Request-Id` |
 | gRPC (BFF → query/ingest) | metadata: W3C via otelgrpc; плюс `x-request-id` |
 | Kafka | headers: `traceparent` (или бинарный otel propagator), `request_id`, `ingest_run_id`, `source`, `external_id` |
 | Outbound HH | **не** обязаны слать наш `traceparent` наружу; correlation только во внутренних логах/spans (`HH.GetVacancies`) |
