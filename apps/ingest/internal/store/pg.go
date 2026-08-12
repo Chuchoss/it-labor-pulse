@@ -36,7 +36,7 @@ func Open(ctx context.Context, databaseURL string) (*PG, error) {
 		cfg.ConnConfig.ConnectTimeout = 15 * time.Second
 	}
 	// Avoid prepared-statement pin issues across pooler backends.
-	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("store: connect: %w", err)
