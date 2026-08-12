@@ -7,7 +7,7 @@ COMPOSE      := docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 # Optional local data plane; cloud PG/Redis need no Compose services.
 PROFILES_INFRA := --profile local-redis --profile local-pg
 
-.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff test
+.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff ingest-hh ingest-hh-fixture test
 
 help:
 	@echo "LMA local targets:"
@@ -19,6 +19,8 @@ help:
 	@echo "  make up-mvp         - reserved for Phase 0–1 apps; for now see up-cloud / up-local-*"
 	@echo "  make up-obs         - Loki + Tempo + Alloy + Prometheus + Grafana (profile observability)"
 	@echo "  make run-bff        - run public BFF on :8080 (loads .env)"
+	@echo "  make ingest-hh      - one-shot HH ingest → normalize → PG (needs DATABASE_URL + HH_USER_AGENT)"
+	@echo "  make ingest-hh-fixture - same path using testdata/hh (no live HH; needs DATABASE_URL)"
 	@echo "  make test           - go test ./..."
 	@echo "  make down           - stop compose stack (local-redis + local-pg)"
 	@echo "  make wait-ready     - wait until local-redis is healthy (skip if cloud Redis)"
@@ -159,6 +161,16 @@ bust-cache:
 run-bff: $(ENV_FILE)
 	@set -a; . ./$(ENV_FILE); set +a; \
 	go run ./apps/bff/cmd/bff
+
+# Phase 1: one-shot HH ingest (official API only). Requires migrate-up first.
+ingest-hh: $(ENV_FILE)
+	@set -a; . ./$(ENV_FILE); set +a; \
+	go run ./apps/ingest/cmd/ingest
+
+# Offline smoke: fixtures from testdata/hh (no live HH call).
+ingest-hh-fixture: $(ENV_FILE)
+	@set -a; . ./$(ENV_FILE); set +a; \
+	go run ./apps/ingest/cmd/ingest -fixture
 
 test:
 	go test ./...

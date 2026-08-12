@@ -35,6 +35,17 @@ curl -s http://localhost:8080/api/v1/health
 
 Публичный вход — `BFF_HTTP_ADDR` (default `:8080`). Отдельный gateway — Target Phase 3+ ([ADR 010](./docs/architecture/adr/010-api-gateway.md)). Если заданы `DATABASE_URL` / `REDIS_URL`, health пингует Postgres и Redis (`checks.*`, `status: degraded` при недоступности; процесс не падает). См. [локальный DX](./docs/architecture/12-local-dev.md) · [облачный Redis](./docs/architecture/12-local-dev.md#облачный-redis).
 
+### Phase 1 ingest (HH → normalize → Postgres)
+
+```bash
+make migrate-up
+# в .env: DATABASE_URL, HH_USER_AGENT (идентифицирующая строка с контактом)
+make ingest-hh              # live HH API
+make ingest-hh-fixture      # testdata/hh, без сети к HH
+```
+
+Сервис: `apps/ingest` (adapter `internal/hh` → `libs/go-common/normalize` → UPSERT). Параметры: `INGEST_DEFAULT_AREA`, `INGEST_DEFAULT_TEXT`, `INGEST_MAX_PAGES`, `INGEST_PAGE_DELAY_MS`. Живой вызов HH в CI не требуется — unit-тесты на фикстурах/`httptest`.
+
 ## Ветки и CI
 
 | Branch | Роль |
@@ -50,7 +61,7 @@ CI: GitHub Actions (`test` required on PRs).
 
 | Сейчас | Дальше |
 |--------|--------|
-| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra, Phase 0 BFF (`GET /api/v1/health`), shared normalize (`libs/go-common/normalize`) | Query/ingest и дальше по [фазам](./docs/architecture/00-overview.md) |
+| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra, Phase 0 BFF, shared normalize, Phase 1 HH ingest → PG (`apps/ingest`) | Query API / UI и дальше по [фазам](./docs/architecture/00-overview.md) |
 
 ## Attribution
 

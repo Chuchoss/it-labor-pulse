@@ -3,7 +3,7 @@
 Канонические правила преобразования сырых вакансий (сначала HH) в модель из [05-data-model.md](./05-data-model.md).  
 Используются normalizer'ом и unit-тестами ([13-testing.md](./13-testing.md)).
 
-**Пакет (Phase 1):** чистая реализация shared rules — [`libs/go-common/normalize`](../../libs/go-common/normalize) (`Draft` / `CanonicalVacancy` / `Normalize` / injectable FX и alias maps). Без сети и без записи в PG; ingest вызывает пакет позже. Тесты: `go test ./libs/go-common/normalize/...` (+ фикстуры [`testdata/hh`](../../testdata/hh)).
+**Пакет (Phase 1):** чистая реализация shared rules — [`libs/go-common/normalize`](../../libs/go-common/normalize) (`Draft` / `CanonicalVacancy` / `Normalize` / injectable FX и alias maps). Без сети и без записи в PG; оркестрация HH → normalize → UPSERT — [`apps/ingest`](../../apps/ingest) (`make ingest-hh` / `make ingest-hh-fixture`). Тесты: `go test ./libs/go-common/normalize/...` · `go test ./apps/ingest/...` (+ фикстуры [`testdata/hh`](../../testdata/hh)).
 
 **Продуктовый принцип:** на дашборде по умолчанию показываем **предлагаемые зарплаты из вакансий (offered)**, не survey-бенчмарки. Смешение — только с явной пометкой серии.
 

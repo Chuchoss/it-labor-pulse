@@ -215,7 +215,8 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `make bust-cache` | `INCR meta:cache_version` (local Redis) | **есть** |
 | `make up-full` | `--profile full` | позже (Phase 2+) |
 | `make up-obs` | Compose `--profile observability` (Loki/Tempo/Grafana) | **есть** (stub) |
-| `make proto` / `openapi-lint` / `test*` / `smoke` / `ingest-hh` / `fmt` / `lint` | по мере появления кода | planned |
+| `make ingest-hh` / `ingest-hh-fixture` | one-shot HH → normalize → PG (`apps/ingest`); fixture без live HH | Phase 1 |
+| `make proto` / `openapi-lint` / `test*` / `smoke` / `fmt` / `lint` | по мере появления кода | planned |
 
 **Windows без Make** (PowerShell, из корня репо):
 
