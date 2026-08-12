@@ -56,7 +56,7 @@ func isTransientDBErr(err error) bool {
 	for _, needle := range []string{
 		"wsarecv", "i/o timeout", "connection reset", "broken pipe",
 		"unexpected eof", "server closed the connection", "conn closed",
-		"max clients reached", "eof",
+		"max clients reached", "eof", "statement timeout", "57014",
 	} {
 		if strings.Contains(msg, needle) {
 			return true
