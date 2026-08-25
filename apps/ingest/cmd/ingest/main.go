@@ -98,7 +98,9 @@ func main() {
 		Log:    log,
 		Opts:   normalize.DefaultOptions(),
 	}
-	res, err := runner.Run(ctx, p)
+	runCtx, cancelRun := context.WithTimeout(ctx, cfg.RunTimeout)
+	defer cancelRun()
+	res, err := runner.Run(runCtx, p)
 	if err != nil {
 		log.Error("ingest_failed", "ingest_run_id", res.RunID, "err", err.Error(), "status", res.Status)
 		os.Exit(1)

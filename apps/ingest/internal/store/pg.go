@@ -4,13 +4,20 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+const (
+	dbOperationTimeout = 30 * time.Second
+	rollbackTimeout    = 5 * time.Second
 )
 
 // PG is a Postgres Store implementation.
@@ -23,29 +30,42 @@ func Open(ctx context.Context, databaseURL string) (*PG, error) {
 	if strings.TrimSpace(databaseURL) == "" {
 		return nil, fmt.Errorf("store: DATABASE_URL is required")
 	}
-	cfg, err := pgxpool.ParseConfig(databaseURL)
+	cfg, err := newPoolConfig(databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("store: parse database url: %w", err)
-	}
-	// Keep pool small for managed session poolers (e.g. Supabase ~15 slots shared).
-	cfg.MaxConns = 2
-	cfg.MinConns = 0
-	cfg.MaxConnIdleTime = 30 * time.Second
-	cfg.HealthCheckPeriod = 15 * time.Second
-	if cfg.ConnConfig.ConnectTimeout == 0 {
-		cfg.ConnConfig.ConnectTimeout = 15 * time.Second
+		return nil, fmt.Errorf("store: invalid database configuration")
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("store: connect: %w", err)
+		return nil, sanitizeDBError("connect", err)
 	}
 	pingCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("store: ping: %w", err)
+		return nil, sanitizeDBError("ping", err)
 	}
 	return &PG{pool: pool}, nil
+}
+
+func newPoolConfig(databaseURL string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	// The ingest pipeline is sequential. One connection prevents a retry from
+	// waiting on locks held by another transaction from this process.
+	cfg.MaxConns = 1
+	cfg.MinConns = 0
+	cfg.MaxConnIdleTime = 30 * time.Second
+	cfg.HealthCheckPeriod = 15 * time.Second
+	cfg.ConnConfig.RuntimeParams["application_name"] = "lma-ingest"
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = "30s"
+	cfg.ConnConfig.RuntimeParams["lock_timeout"] = "5s"
+	cfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = "15s"
+	if cfg.ConnConfig.ConnectTimeout == 0 {
+		cfg.ConnConfig.ConnectTimeout = 15 * time.Second
+	}
+	return cfg, nil
 }
 
 func isTransientDBErr(err error) bool {
@@ -57,6 +77,7 @@ func isTransientDBErr(err error) bool {
 		"wsarecv", "i/o timeout", "connection reset", "broken pipe",
 		"unexpected eof", "server closed the connection", "conn closed",
 		"max clients reached", "eof", "statement timeout", "57014",
+		"lock timeout", "55p03",
 	} {
 		if strings.Contains(msg, needle) {
 			return true
@@ -66,9 +87,20 @@ func isTransientDBErr(err error) bool {
 }
 
 func retryTransient(ctx context.Context, attempts int, op func(context.Context) error) error {
+	return retryTransientWithTimeout(ctx, attempts, dbOperationTimeout, op)
+}
+
+func retryTransientWithTimeout(
+	ctx context.Context,
+	attempts int,
+	timeout time.Duration,
+	op func(context.Context) error,
+) error {
 	var err error
 	for i := 0; i < attempts; i++ {
-		err = op(ctx)
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		err = op(attemptCtx)
+		cancel()
 		if err == nil || !isTransientDBErr(err) {
 			return err
 		}
@@ -81,6 +113,23 @@ func retryTransient(ctx context.Context, attempts int, op func(context.Context) 
 		}
 	}
 	return err
+}
+
+func sanitizeDBError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return fmt.Errorf("store %s: postgres error (sqlstate=%s)", operation, pgErr.Code)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("store %s: database operation timed out", operation)
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("store %s: database operation canceled", operation)
+	}
+	return fmt.Errorf("store %s: database operation failed", operation)
 }
 
 func min(a, b int) int {
@@ -107,7 +156,7 @@ func (s *PG) CreateRun(ctx context.Context, run Run) error {
 	if params == nil {
 		params = []byte("{}")
 	}
-	err = retryTransient(ctx, 8, func(ctx context.Context) error {
+	err = retryTransient(ctx, 3, func(ctx context.Context) error {
 		_, err := s.pool.Exec(ctx, `
 			INSERT INTO ingest_runs (id, source, mode, status, params, requested_by, started_at, created_at)
 			VALUES ($1, $2, $3, $4, $5::jsonb, NULLIF($6, ''), $7, now())
@@ -115,7 +164,7 @@ func (s *PG) CreateRun(ctx context.Context, run Run) error {
 		return err
 	})
 	if err != nil {
-		return fmt.Errorf("store create run: %w", err)
+		return sanitizeDBError("create run", err)
 	}
 	return nil
 }
@@ -133,9 +182,9 @@ func (s *PG) FinishRun(ctx context.Context, id, status string, stats Stats, errM
 		    stats = $3::jsonb,
 		    error_message = NULLIF($4, '')
 		WHERE id = $1
-	`, id, status, raw, errMsg)
+	`, id, status, string(raw), errMsg)
 	if err != nil {
-		return fmt.Errorf("store finish run: %w", err)
+		return sanitizeDBError("finish run", err)
 	}
 	return nil
 }
@@ -147,7 +196,7 @@ func (s *PG) RecordError(ctx context.Context, runID, externalID, stage, message 
 		VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4)
 	`, runID, externalID, stage, truncate(message, 1000))
 	if err != nil {
-		return fmt.Errorf("store record error: %w", err)
+		return sanitizeDBError("record error", err)
 	}
 	return nil
 }
@@ -155,7 +204,7 @@ func (s *PG) RecordError(ctx context.Context, runID, externalID, stage, message 
 // GetCheckpoint reads ingest_checkpoints.
 func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (string, bool, error) {
 	var cursor *string
-	err := retryTransient(ctx, 8, func(ctx context.Context) error {
+	err := retryTransient(ctx, 3, func(ctx context.Context) error {
 		return s.pool.QueryRow(ctx, `
 			SELECT cursor FROM ingest_checkpoints WHERE source = $1 AND scope_hash = $2
 		`, source, scopeHash).Scan(&cursor)
@@ -164,7 +213,7 @@ func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (strin
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("store get checkpoint: %w", err)
+		return "", false, sanitizeDBError("get checkpoint", err)
 	}
 	if cursor == nil {
 		return "", true, nil
@@ -175,7 +224,7 @@ func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (strin
 // SavePage upserts vacancies and advances checkpoint atomically.
 func (s *PG) SavePage(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
 	var upserted, unchanged int
-	err := retryTransient(ctx, 8, func(ctx context.Context) error {
+	err := retryTransient(ctx, 3, func(ctx context.Context) error {
 		u, un, err := s.savePageOnce(ctx, source, scopeHash, nextCursor, items)
 		if err != nil {
 			return err
@@ -184,17 +233,37 @@ func (s *PG) SavePage(ctx context.Context, source, scopeHash, nextCursor string,
 		return nil
 	})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, sanitizeDBError("save page", err)
 	}
 	return upserted, unchanged, nil
 }
 
 func (s *PG) savePageOnce(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
-	tx, err := s.pool.Begin(ctx)
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("store acquire: %w", err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			conn.Release()
+		}
+	}()
+
+	tx, err := conn.Conn().Begin(ctx)
 	if err != nil {
 		return 0, 0, fmt.Errorf("store begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+		defer cancel()
+		if rollbackErr := tx.Rollback(cleanupCtx); rollbackErr != nil &&
+			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			rawConn := conn.Hijack()
+			released = true
+			_ = rawConn.Close(cleanupCtx)
+		}
+	}()
 
 	upserted, unchanged := 0, 0
 	for _, item := range items {
@@ -281,7 +350,7 @@ func upsertVacancy(ctx context.Context, tx pgx.Tx, item VacancyWrite) (changed b
 
 	var raw any
 	if len(item.RawPayload) > 0 && json.Valid(item.RawPayload) {
-		raw = item.RawPayload
+		raw = string(item.RawPayload)
 	}
 
 	var roleID any

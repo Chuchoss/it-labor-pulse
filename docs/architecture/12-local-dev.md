@@ -190,6 +190,7 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `GRAFANA_PORT` | нет | `3001` | host-порт Grafana (profile `observability`) |
 | `CACHE_TTL_SUMMARY_SEC` | нет | `300` | TTL summary |
 | `INGEST_LOCK_TTL_SEC` | нет | `2700` | TTL `lock:ingest:{source}` |
+| `INGEST_RUN_TIMEOUT_SEC` | нет | `300` | Максимальная длительность одного one-shot ingest run |
 
 Секреты только в `.env` (gitignored), не в Compose YAML и не в документации как реальные значения.
 

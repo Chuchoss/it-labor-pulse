@@ -22,6 +22,7 @@ type Config struct {
 	DefaultText string
 	PageDelay   time.Duration
 	MaxPages    int
+	RunTimeout  time.Duration
 
 	// FixtureDir when set enables offline fixture mode (testdata/hh).
 	FixtureDir string
@@ -39,6 +40,7 @@ func Load() (Config, error) {
 		DefaultArea: envOr("INGEST_DEFAULT_AREA", "1"),
 		DefaultText: envOr("INGEST_DEFAULT_TEXT", "golang"),
 		MaxPages:    envInt("INGEST_MAX_PAGES", 5),
+		RunTimeout:  time.Duration(envInt("INGEST_RUN_TIMEOUT_SEC", 300)) * time.Second,
 		FixtureDir:  strings.TrimSpace(os.Getenv("INGEST_FIXTURE_DIR")),
 	}
 	delayMS := envInt("INGEST_PAGE_DELAY_MS", 350)
@@ -56,6 +58,9 @@ func (c Config) ValidateLive() error {
 	}
 	if c.FixtureDir == "" && c.HHUserAgent == "" {
 		return fmt.Errorf("HH_USER_AGENT is required for live ingest")
+	}
+	if c.RunTimeout <= 0 {
+		return fmt.Errorf("INGEST_RUN_TIMEOUT_SEC must be positive")
 	}
 	return nil
 }
