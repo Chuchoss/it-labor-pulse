@@ -25,6 +25,35 @@ type PG struct {
 	pool *pgxpool.Pool
 }
 
+// DBTX is the query surface shared by a pool connection and a transaction.
+// Transaction-scoped helpers must receive this interface instead of PG/pool.
+type DBTX interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+type pageTx interface {
+	DBTX
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
+}
+
+type dbStageError struct {
+	stage string
+	err   error
+}
+
+func (e *dbStageError) Error() string { return e.stage + ": " + e.err.Error() }
+func (e *dbStageError) Unwrap() error { return e.err }
+
+func atDBStage(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &dbStageError{stage: stage, err: err}
+}
+
 // Open connects using DATABASE_URL. Never log the DSN.
 func Open(ctx context.Context, databaseURL string) (*PG, error) {
 	if strings.TrimSpace(databaseURL) == "" {
@@ -98,7 +127,11 @@ func retryTransientWithTimeout(
 ) error {
 	var err error
 	for i := 0; i < attempts; i++ {
-		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		attemptCtx := ctx
+		cancel := func() {}
+		if timeout > 0 {
+			attemptCtx, cancel = context.WithTimeout(ctx, timeout)
+		}
 		err = op(attemptCtx)
 		cancel()
 		if err == nil || !isTransientDBErr(err) {
@@ -119,17 +152,26 @@ func sanitizeDBError(operation string, err error) error {
 	if err == nil {
 		return nil
 	}
+	stage := ""
+	var stageErr *dbStageError
+	if errors.As(err, &stageErr) {
+		stage = " at " + stageErr.stage
+	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		return fmt.Errorf("store %s: postgres error (sqlstate=%s)", operation, pgErr.Code)
+		return fmt.Errorf("store %s%s: postgres error (sqlstate=%s)", operation, stage, pgErr.Code)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("store %s: database operation timed out", operation)
+		return fmt.Errorf("store %s%s: database operation timed out", operation, stage)
 	}
 	if errors.Is(err, context.Canceled) {
-		return fmt.Errorf("store %s: database operation canceled", operation)
+		return fmt.Errorf("store %s%s: database operation canceled", operation, stage)
 	}
-	return fmt.Errorf("store %s: database operation failed", operation)
+	root := err
+	for errors.Unwrap(root) != nil {
+		root = errors.Unwrap(root)
+	}
+	return fmt.Errorf("store %s%s: database operation failed (kind=%T)", operation, stage, root)
 }
 
 func min(a, b int) int {
@@ -224,7 +266,10 @@ func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (strin
 // SavePage upserts vacancies and advances checkpoint atomically.
 func (s *PG) SavePage(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
 	var upserted, unchanged int
-	err := retryTransient(ctx, 3, func(ctx context.Context) error {
+	// A page performs many statements. The caller bounds the complete run and
+	// PostgreSQL bounds each statement; a 30s deadline on the whole page can
+	// cancel a healthy transaction midway through a high-latency pooler.
+	err := retryTransientWithTimeout(ctx, 3, 0, func(ctx context.Context) error {
 		u, un, err := s.savePageOnce(ctx, source, scopeHash, nextCursor, items)
 		if err != nil {
 			return err
@@ -241,7 +286,7 @@ func (s *PG) SavePage(ctx context.Context, source, scopeHash, nextCursor string,
 func (s *PG) savePageOnce(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
-		return 0, 0, fmt.Errorf("store acquire: %w", err)
+		return 0, 0, atDBStage("acquire", err)
 	}
 	released := false
 	defer func() {
@@ -252,16 +297,33 @@ func (s *PG) savePageOnce(ctx context.Context, source, scopeHash, nextCursor str
 
 	tx, err := conn.Conn().Begin(ctx)
 	if err != nil {
-		return 0, 0, fmt.Errorf("store begin: %w", err)
+		return 0, 0, atDBStage("begin", err)
 	}
+
+	return savePageInTx(ctx, tx, source, scopeHash, nextCursor, items, func() {
+		rawConn := conn.Hijack()
+		released = true
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+		defer cancel()
+		_ = rawConn.Close(cleanupCtx)
+	})
+}
+
+func savePageInTx(
+	ctx context.Context,
+	tx pageTx,
+	source, scopeHash, nextCursor string,
+	items []VacancyWrite,
+	onRollbackFailure func(),
+) (int, int, error) {
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
 		defer cancel()
 		if rollbackErr := tx.Rollback(cleanupCtx); rollbackErr != nil &&
 			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			rawConn := conn.Hijack()
-			released = true
-			_ = rawConn.Close(cleanupCtx)
+			if onRollbackFailure != nil {
+				onRollbackFailure()
+			}
 		}
 	}()
 
@@ -278,22 +340,22 @@ func (s *PG) savePageOnce(ctx context.Context, source, scopeHash, nextCursor str
 		}
 	}
 
-	_, err = tx.Exec(ctx, `
+	_, err := tx.Exec(ctx, `
 		INSERT INTO ingest_checkpoints (source, scope_hash, cursor, updated_at)
 		VALUES ($1, $2, $3, now())
 		ON CONFLICT (source, scope_hash) DO UPDATE
 		SET cursor = EXCLUDED.cursor, updated_at = now()
 	`, source, scopeHash, nextCursor)
 	if err != nil {
-		return 0, 0, fmt.Errorf("store checkpoint: %w", err)
+		return 0, 0, atDBStage("checkpoint", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, fmt.Errorf("store commit: %w", err)
+		return 0, 0, atDBStage("commit", err)
 	}
 	return upserted, unchanged, nil
 }
 
-func upsertVacancy(ctx context.Context, tx pgx.Tx, item VacancyWrite) (changed bool, err error) {
+func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed bool, err error) {
 	v := item.Vacancy
 	var employerID *string
 	if v.EmployerExternalID != "" {
@@ -333,7 +395,7 @@ func upsertVacancy(ctx context.Context, tx pgx.Tx, item VacancyWrite) (changed b
 		SELECT id::text, content_hash FROM vacancies WHERE source = $1 AND external_id = $2
 	`, v.Source, v.ExternalID).Scan(&vacancyID, &existingHash)
 	if err != nil && err != pgx.ErrNoRows {
-		return false, fmt.Errorf("store select vacancy: %w", err)
+		return false, atDBStage("select vacancy", err)
 	}
 
 	if err == nil && bytesEqual(existingHash, hashBytes) {
@@ -343,7 +405,7 @@ func upsertVacancy(ctx context.Context, tx pgx.Tx, item VacancyWrite) (changed b
 			WHERE id = $1::uuid
 		`, vacancyID, v.CollectedAt.UTC(), v.IsActive)
 		if err != nil {
-			return false, fmt.Errorf("store touch vacancy: %w", err)
+			return false, atDBStage("touch vacancy", err)
 		}
 		return false, nil
 	}
@@ -396,12 +458,12 @@ func upsertVacancy(ctx context.Context, tx pgx.Tx, item VacancyWrite) (changed b
 		hashBytes, raw,
 	).Scan(&vacancyID)
 	if err != nil {
-		return false, fmt.Errorf("store upsert vacancy: %w", err)
+		return false, atDBStage("upsert vacancy", err)
 	}
 
 	_, err = tx.Exec(ctx, `DELETE FROM vacancy_skills WHERE vacancy_id = $1::uuid`, vacancyID)
 	if err != nil {
-		return false, fmt.Errorf("store clear vacancy_skills: %w", err)
+		return false, atDBStage("clear vacancy skills", err)
 	}
 	for _, sid := range skillIDs {
 		_, err = tx.Exec(ctx, `
@@ -410,7 +472,7 @@ func upsertVacancy(ctx context.Context, tx pgx.Tx, item VacancyWrite) (changed b
 			ON CONFLICT DO NOTHING
 		`, vacancyID, sid)
 		if err != nil {
-			return false, fmt.Errorf("store vacancy_skills: %w", err)
+			return false, atDBStage("link vacancy skill", err)
 		}
 	}
 	return true, nil
@@ -427,7 +489,7 @@ func salaryMidForStore(v normalize.CanonicalVacancy) *float64 {
 	return v.SalaryMid
 }
 
-func upsertEmployer(ctx context.Context, tx pgx.Tx, source, externalID, name string) (string, error) {
+func upsertEmployer(ctx context.Context, tx DBTX, source, externalID, name string) (string, error) {
 	if name == "" {
 		name = externalID
 	}
@@ -440,12 +502,12 @@ func upsertEmployer(ctx context.Context, tx pgx.Tx, source, externalID, name str
 		RETURNING id::text
 	`, source, externalID, truncate(name, 500)).Scan(&id)
 	if err != nil {
-		return "", fmt.Errorf("store upsert employer: %w", err)
+		return "", atDBStage("upsert employer", err)
 	}
 	return id, nil
 }
 
-func upsertRegion(ctx context.Context, tx pgx.Tx, source, externalID, name string) (string, error) {
+func upsertRegion(ctx context.Context, tx DBTX, source, externalID, name string) (string, error) {
 	if name == "" {
 		name = externalID
 	}
@@ -457,7 +519,7 @@ func upsertRegion(ctx context.Context, tx pgx.Tx, source, externalID, name strin
 		return id, nil
 	}
 	if err != pgx.ErrNoRows {
-		return "", fmt.Errorf("store region lookup: %w", err)
+		return "", atDBStage("lookup region", err)
 	}
 
 	err = tx.QueryRow(ctx, `
@@ -468,7 +530,7 @@ func upsertRegion(ctx context.Context, tx pgx.Tx, source, externalID, name strin
 		RETURNING id::text
 	`, externalID, truncate(name, 500)).Scan(&id)
 	if err != nil {
-		return "", fmt.Errorf("store upsert region: %w", err)
+		return "", atDBStage("upsert region", err)
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO region_external_ids (source, external_id, region_id)
@@ -476,12 +538,12 @@ func upsertRegion(ctx context.Context, tx pgx.Tx, source, externalID, name strin
 		ON CONFLICT (source, external_id) DO UPDATE SET region_id = EXCLUDED.region_id
 	`, source, externalID, id)
 	if err != nil {
-		return "", fmt.Errorf("store region_external_ids: %w", err)
+		return "", atDBStage("map region", err)
 	}
 	return id, nil
 }
 
-func upsertSkills(ctx context.Context, tx pgx.Tx, skills []normalize.SkillRef) ([]string, error) {
+func upsertSkills(ctx context.Context, tx DBTX, skills []normalize.SkillRef) ([]string, error) {
 	ids := make([]string, 0, len(skills))
 	seen := make(map[string]struct{}, len(skills))
 	for _, sk := range skills {
@@ -505,7 +567,7 @@ func upsertSkills(ctx context.Context, tx pgx.Tx, skills []normalize.SkillRef) (
 			RETURNING id::text
 		`, slug, truncate(name, 200)).Scan(&id)
 		if err != nil {
-			return nil, fmt.Errorf("store upsert skill: %w", err)
+			return nil, atDBStage("upsert skill", err)
 		}
 		if _, ok := seen[id]; ok {
 			continue
