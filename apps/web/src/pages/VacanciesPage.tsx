@@ -16,21 +16,21 @@ import {
   TableCell,
   TableContainer,
   TableHead,
-  TablePagination,
   TableRow,
   TextField,
   Typography,
   FormControlLabel,
   Button,
 } from '@mui/material'
-import { useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import type { Vacancy } from '../api/types'
 import { EmptyState, ErrorState } from '../components/DataState'
 import { formatDate, formatSalaryRange } from '../utils/format'
 import { getRegionLabel } from '../utils/regions'
+import { dedupeVacancies, getNextVacancyPageParam } from './vacancyPagination'
 
 function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
   return (
@@ -53,30 +53,58 @@ function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
   )
 }
 
+const FIRST_PAGE = 1
+
 export function VacanciesPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const query = searchParams.get('q') || ''
   const source = searchParams.get('source') || ''
   const onlyActive = searchParams.get('only_active') !== 'false'
-  const page = Math.max(Number(searchParams.get('page')) || 1, 1)
   const pageSize = Math.min(Math.max(Number(searchParams.get('page_size')) || 20, 1), 100)
   const [draftQuery, setDraftQuery] = useState(query)
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
 
-  const vacancies = useQuery({
-    queryKey: ['vacancies', { query, source, onlyActive, page, pageSize }],
-    queryFn: ({ signal }) =>
+  const vacancies = useInfiniteQuery({
+    queryKey: ['vacancies', { query, source, onlyActive, pageSize }],
+    initialPageParam: FIRST_PAGE,
+    queryFn: ({ pageParam, signal }) =>
       api.vacancies(
         {
           q: query || undefined,
           source: source || undefined,
           only_active: onlyActive,
-          page,
+          page: pageParam,
           page_size: pageSize,
         },
         signal,
       ),
+    getNextPageParam: getNextVacancyPageParam,
   })
-  const rows = useMemo(() => vacancies.data?.data ?? [], [vacancies.data?.data])
+  const pages = useMemo(() => vacancies.data?.pages ?? [], [vacancies.data?.pages])
+  const rows = useMemo(() => dedupeVacancies(pages), [pages])
+  const total = pages[0]?.total ?? 0
+  const loadNextPage = vacancies.fetchNextPage
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (
+      !sentinel ||
+      typeof IntersectionObserver === 'undefined' ||
+      !vacancies.hasNextPage ||
+      vacancies.isFetchingNextPage
+    ) {
+      return
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadNextPage()
+      },
+      { rootMargin: '240px 0px' },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [loadNextPage, vacancies.hasNextPage, vacancies.isFetchingNextPage])
+
   const regionPeriod = useMemo(() => {
     const dates = rows
       .map((vacancy) => vacancy.published_at?.slice(0, 10))
@@ -104,6 +132,7 @@ export function VacanciesPage() {
 
   const updateParams = (updates: Record<string, string | undefined>) => {
     const next = new URLSearchParams(searchParams)
+    next.delete('page')
     Object.entries(updates).forEach(([key, value]) => {
       if (!value) next.delete(key)
       else next.set(key, value)
@@ -135,7 +164,7 @@ export function VacanciesPage() {
             }}
             onSubmit={(event) => {
               event.preventDefault()
-              updateParams({ q: draftQuery.trim() || undefined, page: '1' })
+              updateParams({ q: draftQuery.trim() || undefined })
             }}
           >
             <TextField
@@ -157,7 +186,7 @@ export function VacanciesPage() {
                 label="Источник"
                 value={source}
                 onChange={(event) =>
-                  updateParams({ source: event.target.value || undefined, page: '1' })
+                  updateParams({ source: event.target.value || undefined })
                 }
               >
                 <MenuItem value="">Все</MenuItem>
@@ -170,7 +199,7 @@ export function VacanciesPage() {
                 <Switch
                   checked={onlyActive}
                   onChange={(_, checked) =>
-                    updateParams({ only_active: checked ? undefined : 'false', page: '1' })
+                    updateParams({ only_active: checked ? undefined : 'false' })
                   }
                 />
               }
@@ -193,7 +222,7 @@ export function VacanciesPage() {
         </CardContent>
       </Card>
 
-      {vacancies.isError && (
+      {vacancies.isError && rows.length === 0 && (
         <ErrorState error={vacancies.error} onRetry={() => vacancies.refetch()} />
       )}
 
@@ -220,6 +249,11 @@ export function VacanciesPage() {
 
       {rows.length > 0 && (
         <Card variant="outlined">
+          <Box sx={{ px: 2, pt: 2 }}>
+            <Typography color="text.secondary" aria-live="polite">
+              Загружено {rows.length} из {total}
+            </Typography>
+          </Box>
           <TableContainer sx={{ display: { xs: 'none', md: 'block' } }}>
             <Table>
               <TableHead>
@@ -282,21 +316,25 @@ export function VacanciesPage() {
             ))}
           </Stack>
 
-          <TablePagination
-            component="div"
-            count={vacancies.data?.total ?? 0}
-            page={page - 1}
-            onPageChange={(_, nextPage) => updateParams({ page: String(nextPage + 1) })}
-            rowsPerPage={pageSize}
-            onRowsPerPageChange={(event) =>
-              updateParams({ page_size: event.target.value, page: '1' })
-            }
-            rowsPerPageOptions={[10, 20, 50]}
-            labelRowsPerPage="На странице:"
-            labelDisplayedRows={({ from: first, to: last, count }) =>
-              `${first}–${last} из ${count}`
-            }
-          />
+          <Stack sx={{ alignItems: 'center', p: 2 }} spacing={1}>
+            <Box ref={sentinelRef} data-testid="vacancy-scroll-sentinel" sx={{ height: 1 }} />
+            {vacancies.isFetchNextPageError && (
+              <Typography color="error" role="alert">
+                Не удалось загрузить следующую страницу.
+              </Typography>
+            )}
+            {vacancies.hasNextPage ? (
+              <Button
+                variant="outlined"
+                disabled={vacancies.isFetchingNextPage}
+                onClick={() => void vacancies.fetchNextPage()}
+              >
+                {vacancies.isFetchingNextPage ? 'Загрузка…' : vacancies.isFetchNextPageError ? 'Повторить' : 'Загрузить ещё'}
+              </Button>
+            ) : (
+              <Typography color="text.secondary">Все доступные вакансии загружены</Typography>
+            )}
+          </Stack>
         </Card>
       )}
     </Stack>

@@ -14,6 +14,8 @@ import (
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 )
 
+const hardMaxPages = 100
+
 // Source fetches HH search pages and vacancy details.
 type Source interface {
 	SearchVacancies(ctx context.Context, q hh.SearchQuery) (hh.SearchPage, error)
@@ -46,7 +48,22 @@ type Result struct {
 	Stats  store.Stats
 }
 
-// Run executes an incremental/full HH ingest until max pages or terminal page.
+// ResolvePageLimit returns the bounded number of pages this run may request.
+// requested=0 means all pages available for this query.
+func ResolvePageLimit(requested, perPage int) int {
+	if perPage <= 0 || perPage > hh.MaxPerPage {
+		perPage = hh.MaxPerPage
+	}
+	depthPages := (hh.MaxSearchResults + perPage - 1) / perPage
+	limit := min(depthPages, hardMaxPages)
+	if requested > 0 {
+		limit = min(limit, requested)
+	}
+	return limit
+}
+
+// Run executes an incremental/full HH ingest until the configured guard,
+// HH's search-depth cap, or the API-reported terminal page.
 func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 	if r.Source == nil || r.Store == nil {
 		return Result{}, fmt.Errorf("pipeline: source and store are required")
@@ -63,10 +80,11 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 	if mode == "" {
 		mode = "incremental"
 	}
-	maxPages := p.MaxPages
-	if maxPages <= 0 {
-		maxPages = 5
+	perPage := p.PerPage
+	if perPage <= 0 || perPage > hh.MaxPerPage {
+		perPage = hh.MaxPerPage
 	}
+	pageLimit := ResolvePageLimit(p.MaxPages, perPage)
 	opts := r.Opts
 	if opts.Roles == nil && opts.Skills == nil && opts.Regions == nil && opts.FX == nil {
 		opts = normalize.DefaultOptions()
@@ -74,14 +92,16 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 
 	runID := newRunID()
 	started := nowFn().UTC()
-	scope := checkpoint.ScopeHash(hh.SourceCode, mode, p.Area, p.Text)
+	scope := checkpoint.ScopeHash(hh.SourceCode, mode, p.Area, p.Text, perPage)
 
 	if err := r.Store.CreateRun(ctx, store.Run{
-		ID:          runID,
-		Source:      hh.SourceCode,
-		Mode:        mode,
-		Status:      store.StatusRunning,
-		Params:      map[string]any{"area": p.Area, "text": p.Text, "max_pages": maxPages},
+		ID:     runID,
+		Source: hh.SourceCode,
+		Mode:   mode,
+		Status: store.StatusRunning,
+		Params: map[string]any{
+			"area": p.Area, "text": p.Text, "max_pages": p.MaxPages, "per_page": perPage,
+		},
 		RequestedBy: p.RequestedBy,
 		StartedAt:   &started,
 	}); err != nil {
@@ -94,6 +114,8 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 		"mode", mode,
 		"area", p.Area,
 		"text", p.Text,
+		"max_pages", p.MaxPages,
+		"per_page", perPage,
 	)
 
 	stats := store.Stats{}
@@ -111,12 +133,12 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 	status := store.StatusSuccess
 	var fatal error
 
-	for pagesDone := 0; pagesDone < maxPages; pagesDone++ {
+	for pagesDone := 0; pagesDone < pageLimit && pageIdx < ResolvePageLimit(0, perPage); pagesDone++ {
 		search, err := r.Source.SearchVacancies(ctx, hh.SearchQuery{
 			Text:    p.Text,
 			Area:    p.Area,
 			Page:    pageIdx,
-			PerPage: p.PerPage,
+			PerPage: perPage,
 		})
 		if err != nil {
 			stats.Errors++
@@ -126,6 +148,15 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 			break
 		}
 		stats.Pages++
+		apiPages := min(search.Pages, ResolvePageLimit(0, perPage))
+		log.Info("ingest_search_page_fetched",
+			"ingest_run_id", runID,
+			"source", hh.SourceCode,
+			"page", search.Page,
+			"reported_pages", search.Pages,
+			"bounded_pages", apiPages,
+			"reported_found", search.Found,
+		)
 
 		writes := make([]store.VacancyWrite, 0, len(search.Items))
 		pageOK := true
@@ -168,7 +199,7 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 		dec := checkpoint.Decide(checkpoint.PageOutcome{
 			AllOK:       pageOK,
 			CurrentPage: pageIdx,
-			TotalPages:  search.Pages,
+			TotalPages:  apiPages,
 			ItemCount:   len(search.Items),
 		})
 		if !dec.Advance {

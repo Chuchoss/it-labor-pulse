@@ -9,12 +9,13 @@ import (
 )
 
 // ScopeHash returns a stable SHA-256 hex of normalized ingest params.
-func ScopeHash(source, mode, area, text string) string {
+func ScopeHash(source, mode, area, text string, perPage int) string {
 	norm := strings.Join([]string{
 		strings.ToLower(strings.TrimSpace(source)),
 		strings.ToLower(strings.TrimSpace(mode)),
 		strings.TrimSpace(area),
 		strings.ToLower(strings.TrimSpace(text)),
+		strconv.Itoa(perPage),
 	}, "|")
 	sum := sha256.Sum256([]byte(norm))
 	return hex.EncodeToString(sum[:])
@@ -70,7 +71,7 @@ func Decide(o PageOutcome) Decision {
 	if o.ItemCount == 0 {
 		return Decision{
 			Advance:        true,
-			NextCursor:     FormatCursor(o.CurrentPage),
+			NextCursor:     FormatCursor(0),
 			Terminal:       true,
 			TerminalReason: "empty_page",
 		}
@@ -79,7 +80,7 @@ func Decide(o PageOutcome) Decision {
 	if o.TotalPages > 0 && next >= o.TotalPages {
 		return Decision{
 			Advance:        true,
-			NextCursor:     FormatCursor(next),
+			NextCursor:     FormatCursor(0),
 			Terminal:       true,
 			TerminalReason: "last_page",
 		}

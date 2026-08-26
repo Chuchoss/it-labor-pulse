@@ -9,11 +9,12 @@ import (
 )
 
 func TestScopeHash_Stable(t *testing.T) {
-	a := checkpoint.ScopeHash("hh", "incremental", "1", "Golang")
-	b := checkpoint.ScopeHash("HH", "incremental", "1", "golang")
+	a := checkpoint.ScopeHash("hh", "incremental", "1", "Golang", 100)
+	b := checkpoint.ScopeHash("HH", "incremental", "1", "golang", 100)
 	require.Equal(t, a, b)
 	require.Len(t, a, 64)
-	require.NotEqual(t, a, checkpoint.ScopeHash("hh", "incremental", "2", "golang"))
+	require.NotEqual(t, a, checkpoint.ScopeHash("hh", "incremental", "2", "golang", 100))
+	require.NotEqual(t, a, checkpoint.ScopeHash("hh", "incremental", "1", "golang", 20))
 }
 
 func TestDecide_FailureDoesNotAdvance(t *testing.T) {
@@ -49,7 +50,7 @@ func TestDecide_LastPageTerminal(t *testing.T) {
 	require.True(t, d.Advance)
 	require.True(t, d.Terminal)
 	require.Equal(t, "last_page", d.TerminalReason)
-	require.Equal(t, "3", d.NextCursor)
+	require.Equal(t, "0", d.NextCursor)
 }
 
 func TestDecide_EmptyPageTerminal(t *testing.T) {
@@ -62,6 +63,7 @@ func TestDecide_EmptyPageTerminal(t *testing.T) {
 	require.True(t, d.Advance)
 	require.True(t, d.Terminal)
 	require.Equal(t, "empty_page", d.TerminalReason)
+	require.Equal(t, "0", d.NextCursor)
 }
 
 func TestParseCursorPage(t *testing.T) {

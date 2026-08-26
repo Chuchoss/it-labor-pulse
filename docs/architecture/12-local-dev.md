@@ -215,9 +215,19 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `GRAFANA_PORT` | нет | `3001` | host-порт Grafana (profile `observability`) |
 | `CACHE_TTL_SUMMARY_SEC` | нет | `300` | TTL summary |
 | `INGEST_LOCK_TTL_SEC` | нет | `2700` | TTL `lock:ingest:{source}` |
-| `INGEST_RUN_TIMEOUT_SEC` | нет | `300` | Максимальная длительность одного one-shot ingest run |
+| `INGEST_MAX_PAGES` | нет | `5` | Guard страниц; `0` или `all` — все страницы текущего запроса в пределах лимитов HH |
+| `INGEST_PER_PAGE` | нет | `100` | Размер страницы HH, `1..100`; `100` минимизирует число search-запросов |
+| `INGEST_PAGE_DELAY_MS` | нет | `350` | Пауза между запросами HH; дополнительно действуют `Retry-After` и backoff |
+| `INGEST_RUN_TIMEOUT_SEC` | нет | `1800` | Максимальная длительность bounded one-shot ingest run |
 
 Секреты только в `.env` (gitignored), не в Compose YAML и не в документации как реальные значения.
+
+`INGEST_MAX_PAGES=0` / `all` означает не «все вакансии HH», а все страницы,
+которые официальный API сообщает для комбинации `INGEST_DEFAULT_AREA` +
+`INGEST_DEFAULT_TEXT`. Глубина одной поисковой выдачи HH ограничена 2000
+результатами: при `INGEST_PER_PAGE=100` доступно не более 20 страниц. В коде
+также остаётся hard ceiling 100 страниц. Разбиение рынка на множество ролей,
+регионов или временных окон в Phase 1 не выполняется.
 
 ---
 

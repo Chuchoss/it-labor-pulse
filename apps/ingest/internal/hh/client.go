@@ -11,6 +11,13 @@ import (
 	"time"
 )
 
+const (
+	// MaxSearchResults is HH's documented maximum depth for one vacancy search query.
+	MaxSearchResults = 2000
+	// MaxPerPage is HH's documented maximum vacancy search page size.
+	MaxPerPage = 100
+)
+
 // Client is an official HH API HTTP client (no scraping).
 type Client struct {
 	baseURL    string
@@ -93,7 +100,13 @@ func (c *Client) SearchVacancies(ctx context.Context, q SearchQuery) (SearchPage
 	}
 	perPage := q.PerPage
 	if perPage <= 0 {
-		perPage = 20
+		perPage = MaxPerPage
+	}
+	if perPage > MaxPerPage {
+		perPage = MaxPerPage
+	}
+	if q.Page < 0 {
+		return SearchPage{}, fmt.Errorf("hh search: page must not be negative")
 	}
 	u, err := url.Parse(c.baseURL + "/vacancies")
 	if err != nil {

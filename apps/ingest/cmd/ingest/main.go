@@ -25,7 +25,8 @@ func main() {
 	fixture := flag.Bool("fixture", false, "use testdata/hh instead of live HH API")
 	area := flag.String("area", "", "HH area id (default INGEST_DEFAULT_AREA)")
 	text := flag.String("text", "", "HH search text (default INGEST_DEFAULT_TEXT)")
-	maxPages := flag.Int("max-pages", 0, "max pages (default INGEST_MAX_PAGES)")
+	maxPages := flag.Int("max-pages", -1, "max pages; 0 means all available (default INGEST_MAX_PAGES)")
+	perPage := flag.Int("per-page", 0, "HH page size, 1..100 (default INGEST_PER_PAGE)")
 	flag.Parse()
 
 	cfg := config.Load()
@@ -76,6 +77,7 @@ func main() {
 		Text:        cfg.DefaultText,
 		Mode:        "incremental",
 		MaxPages:    cfg.MaxPages,
+		PerPage:     cfg.PerPage,
 		RequestedBy: "cli",
 	}
 	if *area != "" {
@@ -84,8 +86,11 @@ func main() {
 	if *text != "" {
 		p.Text = *text
 	}
-	if *maxPages > 0 {
+	if *maxPages >= 0 {
 		p.MaxPages = *maxPages
+	}
+	if *perPage > 0 {
+		p.PerPage = *perPage
 	}
 
 	runner := &pipeline.Runner{

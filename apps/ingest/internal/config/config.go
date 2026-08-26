@@ -22,6 +22,7 @@ type Config struct {
 	DefaultText string
 	PageDelay   time.Duration
 	MaxPages    int
+	PerPage     int
 	RunTimeout  time.Duration
 
 	// FixtureDir when set enables offline fixture mode (testdata/hh).
@@ -39,8 +40,9 @@ func Load() Config {
 		HHAppToken:  strings.TrimSpace(os.Getenv("HH_APP_TOKEN")),
 		DefaultArea: envOr("INGEST_DEFAULT_AREA", "1"),
 		DefaultText: envOr("INGEST_DEFAULT_TEXT", "golang"),
-		MaxPages:    envInt("INGEST_MAX_PAGES", 5),
-		RunTimeout:  time.Duration(envInt("INGEST_RUN_TIMEOUT_SEC", 300)) * time.Second,
+		MaxPages:    envMaxPages("INGEST_MAX_PAGES", 5),
+		PerPage:     envInt("INGEST_PER_PAGE", 100),
+		RunTimeout:  time.Duration(envInt("INGEST_RUN_TIMEOUT_SEC", 1800)) * time.Second,
 		FixtureDir:  strings.TrimSpace(os.Getenv("INGEST_FIXTURE_DIR")),
 	}
 	delayMS := envInt("INGEST_PAGE_DELAY_MS", 350)
@@ -62,6 +64,12 @@ func (c Config) ValidateLive() error {
 	if c.RunTimeout <= 0 {
 		return fmt.Errorf("INGEST_RUN_TIMEOUT_SEC must be positive")
 	}
+	if c.MaxPages < 0 {
+		return fmt.Errorf("INGEST_MAX_PAGES must be 0/all or a positive integer")
+	}
+	if c.PerPage < 1 || c.PerPage > 100 {
+		return fmt.Errorf("INGEST_PER_PAGE must be between 1 and 100")
+	}
 	return nil
 }
 
@@ -82,4 +90,12 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func envMaxPages(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if strings.EqualFold(v, "all") {
+		return 0
+	}
+	return envInt(key, fallback)
 }

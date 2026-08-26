@@ -47,6 +47,17 @@ classDiagram
 | **Normalizer** | Shared normalization, dedup, role/skill/region mapping, PG/CH | Знание HTTP/пагинации конкретного source |
 | **Query** | Агрегаты по канонической модели | Вызовы job boards |
 
+### Пагинация HH (Phase 1)
+
+- `page` начинается с `0`, `per_page` — максимум `100`.
+- `pages` задаёт число доступных страниц, `found` — полное число совпадений.
+- Официальная глубина одной поисковой выдачи — максимум **2000 результатов**:
+  `found` может быть больше, но получить их одним запросом нельзя.
+- `INGEST_MAX_PAGES=0` / `all` обходит все API-reported страницы только для
+  текущих `area` + `text`, но не выше лимита 2000 и внутреннего hard ceiling.
+- Это не глобальный crawl: автоматического partitioning по ролям, регионам или
+  датам в Phase 1 нет.
+
 ### Versioned source-neutral draft (граница adapter → normalizer)
 
 `SourceNeutralDraftV1` — контракт на границе: `schema_version`, `source`, `external_id`, `title`, `employer_external_id`, `region_external_id`, `salary_from`, `salary_to`, `salary_currency_raw`, `salary_gross`, `published_at`, `skills_raw[]`, `content_hash`, `is_active_hint` и ограниченный `raw_payload` для диагностики.

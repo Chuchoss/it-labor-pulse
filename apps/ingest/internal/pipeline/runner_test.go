@@ -17,6 +17,27 @@ import (
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/store"
 )
 
+type pagingSource struct {
+	pages  int
+	detail []byte
+	seen   []int
+}
+
+func (s *pagingSource) SearchVacancies(_ context.Context, q hh.SearchQuery) (hh.SearchPage, error) {
+	s.seen = append(s.seen, q.Page)
+	return hh.SearchPage{
+		Found:   s.pages,
+		Page:    q.Page,
+		Pages:   s.pages,
+		PerPage: q.PerPage,
+		Items:   []hh.SearchItem{{ID: "900001", Name: "Senior Go Developer"}},
+	}, nil
+}
+
+func (s *pagingSource) GetVacancyRaw(context.Context, string) ([]byte, error) {
+	return s.detail, nil
+}
+
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
@@ -123,4 +144,33 @@ func TestRunner_PageErrorDoesNotAdvanceCheckpoint(t *testing.T) {
 	require.NotEqual(t, store.StatusSuccess, res.Status)
 	require.Empty(t, mem.Checkpoints)
 	require.Empty(t, mem.Vacancies)
+}
+
+func TestResolvePageLimit(t *testing.T) {
+	require.Equal(t, 20, pipeline.ResolvePageLimit(0, 100))
+	require.Equal(t, 5, pipeline.ResolvePageLimit(5, 100))
+	require.Equal(t, 20, pipeline.ResolvePageLimit(50, 100))
+	require.Equal(t, 100, pipeline.ResolvePageLimit(0, 1))
+}
+
+func TestRunner_AllModeStopsAtAPIPageExhaustionAndResumes(t *testing.T) {
+	detail, err := os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "hh", "vacancy_detail.json"))
+	require.NoError(t, err)
+	src := &pagingSource{pages: 3, detail: detail}
+	mem := store.NewMemory()
+	r := &pipeline.Runner{Source: src, Store: mem}
+
+	first, err := r.Run(context.Background(), pipeline.Params{
+		Area: "1", Text: "golang", MaxPages: 1, PerPage: 100,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Stats.Pages)
+	require.Equal(t, []int{0}, src.seen)
+
+	second, err := r.Run(context.Background(), pipeline.Params{
+		Area: "1", Text: "golang", MaxPages: 0, PerPage: 100,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, second.Stats.Pages)
+	require.Equal(t, []int{0, 1, 2}, src.seen)
 }

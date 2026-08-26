@@ -61,6 +61,7 @@ cd apps/web && npm test
 | Error state | retry button; показывает `request_id` |
 | Roles table | pagination envelope render |
 | Vacancy salary disclaimer | текст offered/net (copy) |
+| Vacancy infinite scroll | next-page params, sentinel/fallback, dedup, stop, filter reset, retry |
 
 States из [16](./16-frontend.md): Loading / Empty / Error / Partial — хотя бы по одному тесту на critical screen container.
 

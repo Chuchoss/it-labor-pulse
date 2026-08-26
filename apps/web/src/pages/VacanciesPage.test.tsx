@@ -1,13 +1,46 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen } from '@testing-library/react'
 import { delay, http, HttpResponse } from 'msw'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderPage } from '../test/render'
 import { server } from '../test/server'
 import { getRegionLabel } from '../utils/regions'
 import { VacanciesPage } from './VacanciesPage'
+import { dedupeVacancies, getNextVacancyPageParam } from './vacancyPagination'
+
+let intersectionCallback: IntersectionObserverCallback | undefined
+
+class IntersectionObserverMock {
+  constructor(callback: IntersectionObserverCallback) {
+    intersectionCallback = callback
+  }
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return []
+  }
+  readonly root = null
+  readonly rootMargin = ''
+  readonly thresholds = []
+}
+
+function intersectSentinel() {
+  act(() => {
+    intersectionCallback?.(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    )
+  })
+}
+
+afterEach(() => {
+  intersectionCallback = undefined
+  vi.unstubAllGlobals()
+})
 
 describe('VacanciesPage', () => {
-  it('renders region names from every dictionary page and sends vacancy parameters', async () => {
+  it('loads the next page from the sentinel, dedupes and stops at total', async () => {
+    vi.stubGlobal('IntersectionObserver', IntersectionObserverMock)
     const requestedUrls: string[] = []
     const requestedRegionPages: string[] = []
     const requestedRegionUrls: string[] = []
@@ -30,26 +63,43 @@ describe('VacanciesPage', () => {
       http.get('*/api/v1/vacancies', ({ request }) => {
         const url = new URL(request.url)
         requestedUrls.push(request.url)
+        const page = Number(url.searchParams.get('page') || 1)
         return HttpResponse.json({
-          data: [
-            {
-              id: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
-              source: 'hh',
-              external_id: '123',
-              title: url.searchParams.get('q') || 'Senior Go Developer',
-              salary_from: 200000,
-              salary_to: 300000,
-              salary_currency: 'RUB',
-              salary_gross: false,
-              published_at: '2026-08-25T10:00:00Z',
-              is_active: true,
-              skills: ['Go'],
-              region_id: 'region-2',
-            },
-          ],
-          page: Number(url.searchParams.get('page') || 1),
-          page_size: 20,
-          total: 22,
+          data:
+            page === 1
+              ? [
+                  {
+                    id: 'vacancy-1',
+                    source: 'hh',
+                    external_id: '123',
+                    title: url.searchParams.get('q') || 'Senior Go Developer',
+                    published_at: '2026-08-25T10:00:00Z',
+                    is_active: true,
+                    skills: ['Go'],
+                    region_id: 'region-2',
+                  },
+                ]
+              : [
+                  {
+                    id: 'vacancy-1',
+                    source: 'hh',
+                    external_id: '123',
+                    title: 'Duplicate',
+                    published_at: '2026-08-25T10:00:00Z',
+                    is_active: true,
+                  },
+                  {
+                    id: 'vacancy-2',
+                    source: 'hh',
+                    external_id: '124',
+                    title: 'Go Platform Engineer',
+                    published_at: '2026-08-25T10:00:00Z',
+                    is_active: true,
+                  },
+                ],
+          page,
+          page_size: 2,
+          total: 3,
         })
       }),
     )
@@ -59,12 +109,44 @@ describe('VacanciesPage', () => {
     expect((await screen.findAllByText('Санкт-Петербург')).length).toBeGreaterThan(0)
     expect(screen.queryByText('region-2')).not.toBeInTheDocument()
     expect(requestedRegionPages).toEqual(['1', '2'])
-    expect(
-      requestedRegionUrls.every(
-        (url) => url.includes('from=2026-08-25') && url.includes('to=2026-08-25'),
-      ),
-    ).toBe(true)
+    expect(requestedRegionUrls.every((url) => url.includes('from=2026-08-25'))).toBe(true)
+    expect(screen.getByText('Загружено 1 из 3')).toBeInTheDocument()
 
+    intersectSentinel()
+    expect((await screen.findAllByText('Go Platform Engineer')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('Duplicate')).not.toBeInTheDocument()
+    expect(screen.getByText('Загружено 2 из 3')).toBeInTheDocument()
+    expect(screen.getByText('Все доступные вакансии загружены')).toBeInTheDocument()
+    expect(requestedUrls.some((url) => url.includes('page=2'))).toBe(true)
+    expect(requestedUrls.every((url) => url.includes('page_size=20'))).toBe(true)
+    expect(requestedUrls.every((url) => url.includes('only_active=true'))).toBe(true)
+  })
+
+  it('resets accumulated pages when a filter changes', async () => {
+    vi.stubGlobal('IntersectionObserver', IntersectionObserverMock)
+    const requestedQueries: string[] = []
+    server.use(
+      http.get('*/api/v1/vacancies', ({ request }) => {
+        const url = new URL(request.url)
+        const query = url.searchParams.get('q') || ''
+        requestedQueries.push(query)
+        return HttpResponse.json({
+          data: [
+            {
+              id: query ? 'filtered' : 'initial',
+              title: query || 'Initial vacancy',
+              published_at: '2026-08-25T10:00:00Z',
+              is_active: true,
+            },
+          ],
+          page: 1,
+          page_size: 20,
+          total: 1,
+        })
+      }),
+    )
+    renderPage(<VacanciesPage />, '/vacancies?page=9')
+    expect((await screen.findAllByText('Initial vacancy')).length).toBeGreaterThan(0)
     fireEvent.change(screen.getByLabelText('Поиск по названию'), {
       target: { value: 'Data engineer' },
     })
@@ -73,13 +155,53 @@ describe('VacanciesPage', () => {
     expect(submitButton.querySelector('[data-testid="SearchRoundedIcon"]')).toBeInTheDocument()
     fireEvent.click(submitButton)
     expect((await screen.findAllByText('Data engineer')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('Initial vacancy')).not.toBeInTheDocument()
+    expect(requestedQueries).toEqual(['', 'Data engineer'])
+  })
 
-    fireEvent.click(screen.getByTitle('Go to next page'))
-    await waitFor(() => {
-      expect(requestedUrls.some((url) => url.includes('q=Data+engineer'))).toBe(true)
-      expect(requestedUrls.some((url) => url.includes('page=2'))).toBe(true)
-      expect(requestedUrls.every((url) => url.includes('only_active=true'))).toBe(true)
-    })
+  it('retries a failed next page from the fallback button', async () => {
+    vi.stubGlobal('IntersectionObserver', IntersectionObserverMock)
+    let pageTwoAttempts = 0
+    server.use(
+      http.get('*/api/v1/vacancies', ({ request }) => {
+        const page = Number(new URL(request.url).searchParams.get('page') || 1)
+        if (page === 2 && ++pageTwoAttempts === 1) {
+          return new HttpResponse(null, { status: 503 })
+        }
+        return HttpResponse.json({
+          data: [{ id: `vacancy-${page}`, title: `Vacancy ${page}`, is_active: true }],
+          page,
+          page_size: 1,
+          total: 2,
+        })
+      }),
+    )
+    renderPage(<VacanciesPage />)
+    expect((await screen.findAllByText('Vacancy 1')).length).toBeGreaterThan(0)
+    intersectSentinel()
+    expect(await screen.findByText('Не удалось загрузить следующую страницу.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }))
+    expect((await screen.findAllByText('Vacancy 2')).length).toBeGreaterThan(0)
+    expect(pageTwoAttempts).toBe(2)
+  })
+
+  it('offers a load-more fallback without IntersectionObserver', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined)
+    server.use(
+      http.get('*/api/v1/vacancies', ({ request }) => {
+        const page = Number(new URL(request.url).searchParams.get('page') || 1)
+        return HttpResponse.json({
+          data: [{ id: `fallback-${page}`, title: `Fallback ${page}`, is_active: true }],
+          page,
+          page_size: 1,
+          total: 2,
+        })
+      }),
+    )
+    renderPage(<VacanciesPage />)
+    expect((await screen.findAllByText('Fallback 1')).length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Загрузить ещё' }))
+    expect((await screen.findAllByText('Fallback 2')).length).toBeGreaterThan(0)
   })
 
   it('keeps vacancies visible with a neutral label while the dictionary loads', async () => {
@@ -145,6 +267,30 @@ describe('VacanciesPage', () => {
     expect((await screen.findAllByText('Data Engineer')).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Регион не указан').length).toBeGreaterThan(0)
     expect(screen.queryByText('unmapped-region')).not.toBeInTheDocument()
+  })
+})
+
+describe('vacancy page helpers', () => {
+  const vacancy = (id: string) => ({ id, title: id, is_active: true })
+
+  it('deduplicates vacancy IDs', () => {
+    expect(
+      dedupeVacancies([
+        { data: [vacancy('1')], page: 1, page_size: 1, total: 2 },
+        { data: [vacancy('1'), vacancy('2')], page: 2, page_size: 1, total: 2 },
+      ]).map((item) => item.id),
+    ).toEqual(['1', '2'])
+  })
+
+  it('stops on empty, duplicate-only, and final pages', () => {
+    const first = { data: [vacancy('1')], page: 1, page_size: 1, total: 3 }
+    expect(getNextVacancyPageParam(first, [first])).toBe(2)
+    const duplicate = { data: [vacancy('1')], page: 2, page_size: 1, total: 3 }
+    expect(getNextVacancyPageParam(duplicate, [first, duplicate])).toBeUndefined()
+    const empty = { data: [], page: 2, page_size: 1, total: 3 }
+    expect(getNextVacancyPageParam(empty, [first, empty])).toBeUndefined()
+    const final = { data: [vacancy('2')], page: 2, page_size: 1, total: 2 }
+    expect(getNextVacancyPageParam(final, [first, final])).toBeUndefined()
   })
 })
 
