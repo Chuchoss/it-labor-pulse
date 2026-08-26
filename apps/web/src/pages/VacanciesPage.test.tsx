@@ -290,6 +290,35 @@ describe('VacanciesPage', () => {
     expect(requestedUrls.at(-1)).not.toContain('published_from')
   })
 
+  it('accepts unmasked publication dates and serializes them as ISO values', async () => {
+    const requestedUrls: string[] = []
+    server.use(
+      http.get('*/api/v1/vacancies', ({ request }) => {
+        requestedUrls.push(request.url)
+        return HttpResponse.json({ data: [], page: 1, page_size: 20, total: 0 })
+      }),
+    )
+
+    renderPage(<VacanciesPage pollIntervalMs={0} />)
+    expect(await screen.findByText('Вакансии не найдены')).toBeInTheDocument()
+
+    const fromInput = screen.getByLabelText('Дата публикации от')
+    const toInput = screen.getByLabelText('Дата публикации до')
+    expect(fromInput).toHaveAttribute('type', 'date')
+    expect(toInput).toHaveAttribute('type', 'date')
+    expect(fromInput).not.toHaveAttribute('placeholder')
+    expect(toInput).not.toHaveAttribute('placeholder')
+
+    fireEvent.change(fromInput, { target: { value: '2026-08-01' } })
+    fireEvent.change(toInput, { target: { value: '2026-08-03' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+
+    await waitFor(() => {
+      expect(requestedUrls.at(-1)).toContain('published_from=2026-08-01')
+      expect(requestedUrls.at(-1)).toContain('published_to=2026-08-03')
+    })
+  })
+
   it('retries a failed next page from the fallback button', async () => {
     vi.stubGlobal('IntersectionObserver', IntersectionObserverMock)
     let pageTwoAttempts = 0

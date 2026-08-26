@@ -527,6 +527,7 @@ export function VacanciesPage({
               type="date"
               value={draftPublishedFrom}
               onChange={(event) => setDraftPublishedFrom(event.target.value)}
+              helperText="Формат: ГГГГ-ММ-ДД"
               size="small"
               slotProps={{ inputLabel: { shrink: true } }}
               sx={{ width: { xs: '100%', md: 180 } }}
@@ -536,6 +537,7 @@ export function VacanciesPage({
               type="date"
               value={draftPublishedTo}
               onChange={(event) => setDraftPublishedTo(event.target.value)}
+              helperText="Формат: ГГГГ-ММ-ДД"
               size="small"
               slotProps={{ inputLabel: { shrink: true } }}
               sx={{ width: { xs: '100%', md: 180 } }}
