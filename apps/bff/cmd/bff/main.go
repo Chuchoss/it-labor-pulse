@@ -86,6 +86,7 @@ func main() {
 		Assistant: httpserver.AssistantOptions{
 			Enabled:            cfg.AssistantEnabled,
 			DevAuthEnabled:     cfg.AssistantDevAuthEnabled && (cfg.AppEnv == "local" || cfg.AppEnv == "dev"),
+			DevSubject:         cfg.AssistantDevSubject,
 			Repository:         assistantRepository,
 			TelegramConfigured: cfg.AssistantTelegramEnabled,
 		},

@@ -521,8 +521,10 @@ redis-cli -h localhost -p 6379 PING
 При `ASSISTANT_ENABLED=true` BFF использует только PostgreSQL-репозиторий,
 если задан `DATABASE_URL`. `ASSISTANT_LOCAL_STORE=true` разрешает пустой
 in-memory fallback только в `local`/`dev` для тестов; это не режим production.
-Идентичность локального пользователя явно задаётся заголовком `X-Dev-User`,
-поэтому она не является заменой JWT-аутентификации.
+Идентичность локального пользователя детерминирована `ASSISTANT_DEV_SUBJECT`
+(по умолчанию `local-dev-user`); `X-Dev-User` позволяет явно выбрать subject
+для изолированного smoke. Оба варианта доступны только в `local`/`dev` при
+включённом dev auth и не являются заменой JWT-аутентификации.
 
 Worker запускается ограниченным one-shot окном:
 

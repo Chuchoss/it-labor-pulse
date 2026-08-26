@@ -16,6 +16,7 @@ type Config struct {
 	AssistantEnabled         bool
 	AssistantLocalStore      bool
 	AssistantDevAuthEnabled  bool
+	AssistantDevSubject      string
 	AssistantTelegramEnabled bool
 }
 
@@ -32,6 +33,7 @@ func Load() Config {
 		AssistantEnabled:         envBool("ASSISTANT_ENABLED", false),
 		AssistantLocalStore:      envBool("ASSISTANT_LOCAL_STORE", false),
 		AssistantDevAuthEnabled:  envBool("ASSISTANT_DEV_AUTH_ENABLED", false),
+		AssistantDevSubject:      envOr("ASSISTANT_DEV_SUBJECT", "local-dev-user"),
 		AssistantTelegramEnabled: envBool("ASSISTANT_TELEGRAM_ENABLED", false) && strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")) != "",
 	}
 }

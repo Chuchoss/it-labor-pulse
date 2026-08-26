@@ -541,6 +541,10 @@ paths:
           $ref: "#/components/responses/NotFound"
 
   /api/v1/assistant/preferences:
+    description: |
+      In local/dev with ASSISTANT_DEV_AUTH_ENABLED=true, the BFF uses the
+      deterministic server-side dev subject (or X-Dev-User when supplied).
+      PUT, PATCH, and POST append an immutable preference version.
     get:
       tags: [assistant]
       operationId: getAssistantPreferences

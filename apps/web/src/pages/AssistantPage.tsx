@@ -8,20 +8,25 @@ export function AssistantPage() {
   const preferences = useQuery({ queryKey: ['assistant-preferences'], queryFn: api.assistantPreferences })
   const matches = useQuery({ queryKey: ['assistant-matches'], queryFn: api.assistantMatches })
   const telegram = useQuery({ queryKey: ['telegram-status'], queryFn: api.telegramStatus })
-  const [note, setNote] = useState('')
+  const [note, setNote] = useState<string>()
   const [confirmed, setConfirmed] = useState(false)
+  const noteValue = note ?? preferences.data?.note ?? ''
+  const hardCriteriaValue = preferences.data?.hard_criteria ?? {}
+  const softCriteriaValue = preferences.data?.soft_criteria ?? {}
+  const weightsValue = preferences.data?.weights ?? {}
   const save = useMutation({
     mutationFn: () => api.saveAssistantPreferences({
-      note,
-      hard_criteria: {},
-      soft_criteria: {},
-      weights: {},
+      note: noteValue,
+      hard_criteria: hardCriteriaValue,
+      soft_criteria: softCriteriaValue,
+      weights: weightsValue,
     }),
     onSuccess: () => {
       setConfirmed(true)
-      void client.invalidateQueries({ queryKey: ['assistant-preferences'] })
+      void client.refetchQueries({ queryKey: ['assistant-preferences'] })
       void client.invalidateQueries({ queryKey: ['assistant-matches'] })
     },
+    onMutate: () => setConfirmed(false),
   })
   const link = useMutation({ mutationFn: api.telegramLink })
   const revoke = useMutation({
@@ -39,15 +44,16 @@ export function AssistantPage() {
       <Card variant="outlined"><CardContent>
         <Stack spacing={2}>
           <Typography variant="h6">Что для меня интересная вакансия</Typography>
-          <TextField multiline minRows={3} value={note} onChange={(event) => setNote(event.target.value)}
+          <TextField multiline minRows={3} value={noteValue} onChange={(event) => setNote(event.target.value)}
             placeholder="Например: Go backend, удалённо, от 180 000 ₽"
             slotProps={{ htmlInput: { maxLength: 2000 } }} />
           <Typography variant="body2" color="text.secondary">Пока AI не настроен, текст хранится как заметка. Matching использует подтверждённые структурированные поля.</Typography>
-          <Button variant="contained" disabled={!note.trim() || save.isPending} onClick={() => void save.mutate()}>
+          <Button variant="contained" disabled={!noteValue.trim() || save.isPending} onClick={() => void save.mutate()}>
             Сохранить критерии
           </Button>
-          {confirmed && <Alert severity="success">Критерии подтверждены и сохранены новой версией.</Alert>}
-          {preferences.data?.version && <Chip label={`Версия ${preferences.data.version}`} sx={{ width: 'fit-content' }} />}
+          {save.isError && <Alert severity="error">Не удалось сохранить критерии: {save.error.message}</Alert>}
+          {confirmed && <Alert severity="success">Критерии сохранены. Версия {save.data?.version ?? preferences.data?.version}.</Alert>}
+          {preferences.data?.version && <Chip label={`Версия ${preferences.data.version}${preferences.data.active_from ? ` · ${new Date(preferences.data.active_from).toLocaleString('ru-RU')}` : ''}`} sx={{ width: 'fit-content' }} />}
         </Stack>
       </CardContent></Card>
       <Card variant="outlined"><CardContent>

@@ -12,11 +12,10 @@ import (
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/assistant"
 )
 
-// AssistantOptions is intentionally an in-memory local adapter. Production must
-// replace it with the PostgreSQL repository and real authentication.
 type AssistantOptions struct {
 	Enabled            bool
 	DevAuthEnabled     bool
+	DevSubject         string
 	Repository         AssistantRepository
 	TelegramConfigured bool
 }
@@ -63,14 +62,22 @@ func (h *assistantHandler) authorized(r *http.Request) bool {
 	if !h.opts.DevAuthEnabled {
 		return false
 	}
-	return strings.TrimSpace(r.Header.Get("X-Dev-User")) != ""
+	return h.subject(r) != ""
+}
+
+func (h *assistantHandler) subject(r *http.Request) string {
+	subject := strings.TrimSpace(r.Header.Get("X-Dev-User"))
+	if subject == "" {
+		subject = strings.TrimSpace(h.opts.DevSubject)
+	}
+	return subject
 }
 
 func (h *assistantHandler) user(ctx context.Context, r *http.Request) (string, error) {
 	if !h.authorized(r) {
 		return "", errors.New("unauthorized")
 	}
-	subject := strings.TrimSpace(r.Header.Get("X-Dev-User"))
+	subject := h.subject(r)
 	if h.opts.Repository == nil {
 		return subject, nil
 	}
@@ -109,7 +116,7 @@ func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, h.currentPreferences)
 		return
 	}
-	if r.Method != http.MethodPut {
+	if r.Method != http.MethodPut && r.Method != http.MethodPatch && r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -123,7 +130,11 @@ func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
 			Note: value.Note, HardCriteria: value.HardCriteria, SoftCriteria: value.SoftCriteria, Weights: value.Weights,
 		})
 		if err != nil {
-			writeAPIError(w, 400, "VALIDATION_ERROR", "Invalid preferences", nil, "")
+			if errors.Is(err, assistant.ErrInvalidPreferences) {
+				writeAPIError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid preferences", nil, "")
+			} else {
+				writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not save preferences", nil, "")
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, preferencePayload(value))

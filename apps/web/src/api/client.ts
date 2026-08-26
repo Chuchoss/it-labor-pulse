@@ -18,6 +18,13 @@ import type {
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/$/, '')
 const REQUEST_TIMEOUT_MS = 10_000
+const ASSISTANT_DEV_SUBJECT = import.meta.env.VITE_ASSISTANT_DEV_SUBJECT || 'local-dev-user'
+
+function headersFor(path: string, headers: Record<string, string> = {}) {
+  return path.startsWith('/assistant/')
+    ? { ...headers, 'X-Dev-User': ASSISTANT_DEV_SUBJECT }
+    : headers
+}
 
 export class ApiError extends Error {
   readonly status?: number
@@ -54,7 +61,7 @@ async function get<T>(
   let response: Response
   try {
     response = await fetch(url, {
-      headers: { Accept: 'application/json' },
+      headers: headersFor(path, { Accept: 'application/json' }),
       signal: requestSignal,
     })
   } catch (error) {
@@ -79,7 +86,7 @@ async function mutate<T>(path: string, method: string, body?: unknown): Promise<
   const url = new URL(`${API_BASE_URL}${path}`, window.location.origin)
   const response = await fetch(url, {
     method,
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    headers: headersFor(path, { Accept: 'application/json', 'Content-Type': 'application/json' }),
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!response.ok) {
@@ -235,7 +242,7 @@ export const api = {
   ) => get<VacancyPage>('/vacancies', params, signal),
   assistantPreferences: () => get<import('./types').AssistantPreferences>('/assistant/preferences', {}),
   saveAssistantPreferences: (value: import('./types').AssistantPreferences) =>
-    mutate<import('./types').AssistantPreferences>('/assistant/preferences', 'PUT', value),
+    mutate<import('./types').AssistantPreferences>('/assistant/preferences', 'PATCH', value),
   assistantMatches: () => get<import('./types').AssistantMatch[]>('/assistant/matches', {}),
   telegramStatus: () => get<import('./types').TelegramStatus>('/assistant/telegram', {}),
   telegramLink: () => mutate<{ deep_link: string; expires_at: string }>('/assistant/telegram/link', 'POST'),

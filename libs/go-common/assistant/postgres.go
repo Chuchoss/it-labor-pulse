@@ -30,6 +30,8 @@ type PreferenceRecord struct {
 	ActiveFrom   time.Time
 }
 
+var ErrInvalidPreferences = errors.New("invalid assistant preferences")
+
 type MatchRecord struct {
 	VacancyID  string
 	Title      string
@@ -109,19 +111,28 @@ func (r *PostgresRepository) CurrentPreferences(ctx context.Context, userID stri
 
 func validatePreferences(p PreferenceRecord) ([]byte, []byte, []byte, error) {
 	if len([]rune(p.Note)) > 2000 {
-		return nil, nil, nil, errors.New("assistant note is too long")
+		return nil, nil, nil, fmt.Errorf("%w: note is too long", ErrInvalidPreferences)
+	}
+	if p.HardCriteria == nil {
+		p.HardCriteria = map[string]any{}
+	}
+	if p.SoftCriteria == nil {
+		p.SoftCriteria = map[string]any{}
+	}
+	if p.Weights == nil {
+		p.Weights = map[string]float64{}
 	}
 	hard, err := json.Marshal(p.HardCriteria)
 	if err != nil || len(hard) > 32*1024 {
-		return nil, nil, nil, errors.New("invalid hard criteria")
+		return nil, nil, nil, fmt.Errorf("%w: invalid hard criteria", ErrInvalidPreferences)
 	}
 	soft, err := json.Marshal(p.SoftCriteria)
 	if err != nil || len(soft) > 32*1024 {
-		return nil, nil, nil, errors.New("invalid soft criteria")
+		return nil, nil, nil, fmt.Errorf("%w: invalid soft criteria", ErrInvalidPreferences)
 	}
 	weights, err := json.Marshal(p.Weights)
 	if err != nil || len(weights) > 8*1024 {
-		return nil, nil, nil, errors.New("invalid weights")
+		return nil, nil, nil, fmt.Errorf("%w: invalid weights", ErrInvalidPreferences)
 	}
 	return hard, soft, weights, nil
 }
@@ -138,9 +149,12 @@ func (r *PostgresRepository) SavePreferences(ctx context.Context, userID, reques
 	var resultHard, resultSoft, resultWeights []byte
 	requestID = strings.TrimSpace(requestID)
 	query := `
-		WITH next_version AS (
+		WITH locked AS (
+			SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+		), next_version AS (
 			SELECT COALESCE(max(version), 0) + 1 AS version
-			FROM vacancy_preferences WHERE user_id = $1::uuid
+			FROM vacancy_preferences CROSS JOIN locked
+			WHERE user_id = $1::uuid
 		), inserted AS (
 			INSERT INTO vacancy_preferences
 				(user_id, version, note, hard_criteria, soft_criteria, weights)
