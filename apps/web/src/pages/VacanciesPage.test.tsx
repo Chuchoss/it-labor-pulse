@@ -117,7 +117,9 @@ describe('VacanciesPage', () => {
     expect(screen.queryByText('region-2')).not.toBeInTheDocument()
     expect(requestedRegionPages).toEqual(['1', '2'])
     expect(requestedRegionUrls.every((url) => url.includes('from=2000-01-01'))).toBe(true)
-    expect(screen.getByText('Загружено 1 из 3')).toBeInTheDocument()
+    const loadedStatus = screen.getByText('Загружено 1 из 3')
+    expect(loadedStatus).toBeInTheDocument()
+    expect(getComputedStyle(loadedStatus).marginBottom).toBe('8px')
     const sourceLinks = screen.getAllByRole('link', {
       name: 'Открыть вакансию «Senior Go Developer» на hh.ru в новой вкладке',
     })

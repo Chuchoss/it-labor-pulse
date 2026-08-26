@@ -587,7 +587,7 @@ export function VacanciesPage({
       {rows.length > 0 && (
         <Card variant="outlined">
           <Box sx={{ px: 2, pt: 2 }}>
-            <Typography color="text.secondary" aria-live="polite">
+            <Typography color="text.secondary" aria-live="polite" sx={{ mb: 1 }}>
               Загружено {rows.length} из {total}
             </Typography>
             {newVacancyAnnouncement && (
