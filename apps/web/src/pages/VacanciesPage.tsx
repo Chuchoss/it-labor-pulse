@@ -1,5 +1,6 @@
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded'
+import CalendarMonthRoundedIcon from '@mui/icons-material/CalendarMonthRounded'
 import {
   Box,
   Autocomplete,
@@ -40,6 +41,7 @@ import { getRegionLabel } from '../utils/regions'
 import { useCurrency } from '../components/CurrencyContext'
 import {
   normalizeDateOnly,
+  parseDateOnly,
   validatePublishedDateRange,
 } from './publicationDate'
 import {
@@ -68,18 +70,83 @@ function vacancyStatus(vacancy: Vacancy) {
   return { label: 'Активна', color: 'success' as const }
 }
 
+function PublicationDateField({
+  label,
+  value,
+  onChange,
+  error,
+  helperText,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  error?: boolean
+  helperText?: string
+}) {
+  const pickerRef = useRef<HTMLInputElement>(null)
+  const openPicker = () => {
+    try {
+      pickerRef.current?.showPicker?.()
+    } catch {
+      // Browsers may reject showPicker outside a user activation.
+    }
+  }
+  return (
+    <Box sx={{ position: 'relative', width: { xs: '100%', md: 180 } }}>
+      <TextField
+        label={label}
+        type="text"
+        placeholder="ГГГГ-ММ-ДД"
+        inputMode="numeric"
+        autoComplete="off"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onClick={openPicker}
+        onFocus={openPicker}
+        error={error}
+        helperText={helperText}
+        size="small"
+        fullWidth
+        slotProps={{
+          inputLabel: { shrink: true },
+          htmlInput: { inputMode: 'numeric', autoComplete: 'off' },
+          input: {
+            endAdornment: <CalendarMonthRoundedIcon color="action" fontSize="small" />,
+          },
+        }}
+      />
+      <input
+        ref={pickerRef}
+        type="date"
+        value={parseDateOnly(value) ? value.trim() : ''}
+        onChange={(event) => onChange(event.target.value)}
+        tabIndex={-1}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          opacity: 0,
+          pointerEvents: 'none',
+          inset: 0,
+        }}
+      />
+    </Box>
+  )
+}
+
 function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
   return (
     <Stack spacing={1}>
       <Stack direction="row" useFlexGap sx={{ alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <Typography sx={{ fontWeight: 700 }}>{vacancy.title || 'Без названия'}</Typography>
         {vacancy.is_fresh === true && (
-          <Tooltip title="Добавлена в список за последние 24 часа">
+          <Tooltip title="Опубликована на HH за последние 5 часов">
             <Chip
               label="Новая"
               color="info"
               size="small"
-              aria-label="Вакансия добавлена в течение последних 24 часов"
+              aria-label="Вакансия опубликована на HH за последние 5 часов"
             />
           </Tooltip>
         )}
@@ -521,47 +588,25 @@ export function VacanciesPage({
               size="small"
               sx={{ width: { xs: '100%', md: 160 } }}
             />
-            <TextField
+            <PublicationDateField
               label="Дата публикации от"
-              type="text"
-              placeholder="ГГГГ-ММ-ДД"
-              inputMode="numeric"
-              autoComplete="off"
               value={draftPublishedFrom}
-              onChange={(event) => {
-                setDraftPublishedFrom(event.target.value)
+              onChange={(value) => {
+                setDraftPublishedFrom(value)
                 setDateError(null)
               }}
-              onBlur={() => setDraftPublishedFrom((value) => normalizeDateOnly(value))}
               error={dateError?.field === 'from'}
               helperText={dateError?.field === 'from' ? dateError.message : undefined}
-              size="small"
-              slotProps={{
-                inputLabel: { shrink: true },
-                htmlInput: { inputMode: 'numeric', autoComplete: 'off' },
-              }}
-              sx={{ width: { xs: '100%', md: 180 } }}
             />
-            <TextField
+            <PublicationDateField
               label="Дата публикации до"
-              type="text"
-              placeholder="ГГГГ-ММ-ДД"
-              inputMode="numeric"
-              autoComplete="off"
               value={draftPublishedTo}
-              onChange={(event) => {
-                setDraftPublishedTo(event.target.value)
+              onChange={(value) => {
+                setDraftPublishedTo(value)
                 setDateError(null)
               }}
-              onBlur={() => setDraftPublishedTo((value) => normalizeDateOnly(value))}
               error={dateError?.field === 'to'}
               helperText={dateError?.field === 'to' ? dateError.message : undefined}
-              size="small"
-              slotProps={{
-                inputLabel: { shrink: true },
-                htmlInput: { inputMode: 'numeric', autoComplete: 'off' },
-              }}
-              sx={{ width: { xs: '100%', md: 180 } }}
             />
             <FormControl
               size="small"

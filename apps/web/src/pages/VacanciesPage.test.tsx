@@ -201,7 +201,7 @@ describe('VacanciesPage', () => {
     renderPage(<VacanciesPage pollIntervalMs={0} />)
 
     expect((await screen.findAllByText('Fresh vacancy')).length).toBe(2)
-    expect(screen.getAllByLabelText('Вакансия добавлена в течение последних 24 часов')).toHaveLength(2)
+    expect(screen.getAllByLabelText('Вакансия опубликована на HH за последние 5 часов')).toHaveLength(2)
     expect(screen.getAllByText('Новая')).toHaveLength(2)
     expect(screen.getAllByText('Stale vacancy')).toHaveLength(2)
     expect(screen.getAllByText('Missing freshness')).toHaveLength(2)
@@ -316,6 +316,14 @@ describe('VacanciesPage', () => {
     expect(fromInput).toHaveAttribute('placeholder', 'ГГГГ-ММ-ДД')
     expect(toInput).toHaveAttribute('placeholder', 'ГГГГ-ММ-ДД')
     expect(screen.queryByText('Формат: ГГГГ-ММ-ДД')).not.toBeInTheDocument()
+
+    const nativePicker = document.querySelector('input[type="date"]') as HTMLInputElement
+    const showPicker = vi.fn()
+    Object.defineProperty(nativePicker, 'showPicker', { value: showPicker })
+    fireEvent.click(fromInput)
+    expect(showPicker).toHaveBeenCalled()
+    fireEvent.change(nativePicker, { target: { value: '2026-08-01' } })
+    expect(fromInput).toHaveValue('2026-08-01')
 
     fireEvent.change(fromInput, { target: { value: '2026-08-01' } })
     fireEvent.change(toInput, { target: { value: '2026-08-03' } })

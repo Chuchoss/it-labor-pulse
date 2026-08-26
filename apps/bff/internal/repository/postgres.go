@@ -1027,9 +1027,10 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 			CASE WHEN v.salary_mid IS NOT NULL THEN false END,
 			v.salary_from_rub_net::float8, v.salary_to_rub_net::float8,
 			v.published_at, v.first_observed_at,
-			(v.first_observed_at IS NOT NULL
-				AND v.first_observed_at <= current_timestamp
-				AND v.first_observed_at >= current_timestamp - interval '24 hours'),
+			(v.source = 'hh'
+				AND v.published_at IS NOT NULL
+				AND v.published_at <= current_timestamp
+				AND v.published_at >= current_timestamp - interval '5 hours'),
 			v.is_active,
 			v.deactivation_reason,
 			v.deactivated_at,

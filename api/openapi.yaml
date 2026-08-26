@@ -1326,7 +1326,7 @@ components:
           description: UTC-время первого наблюдения вакансии ingest-пайплайном; не меняется при повторном сборе.
         is_fresh:
           type: boolean
-          description: true, если published_at находится в UTC-окне [server_now-24h, server_now]. NULL и будущие значения считаются не свежими; first_observed_at для этого поля не используется.
+          description: true только для вакансий HH, если published_at находится в UTC-окне [server_now-5h, server_now] с включёнными границами. NULL и будущие значения считаются не свежими; first_observed_at для этого поля не используется.
         is_active: { type: boolean }
         status:
           type: string
