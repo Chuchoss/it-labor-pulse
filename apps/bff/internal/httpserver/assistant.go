@@ -18,23 +18,30 @@ type AssistantOptions struct {
 	DevSubject         string
 	Repository         AssistantRepository
 	TelegramConfigured bool
+	AIConfigured       bool
 }
 
 type AssistantRepository interface {
 	EnsureUser(context.Context, string) (string, error)
 	CurrentPreferences(context.Context, string) (assistant.PreferenceRecord, error)
+	ListPreferences(context.Context, string) ([]assistant.PreferenceRecord, error)
 	SavePreferences(context.Context, string, string, assistant.PreferenceRecord) (assistant.PreferenceRecord, error)
+	ArchivePreference(context.Context, string, string) error
+	AnalysisStatus(context.Context, string, bool) (assistant.AnalysisStatus, error)
+	QueueAnalysis(context.Context, string, string) (string, error)
 	ListMatches(context.Context, string, int) ([]assistant.MatchRecord, error)
 	TelegramStatus(context.Context, string, bool) (assistant.TelegramStatus, error)
 }
 
 type assistantPreferencesPayload struct {
+	ID           string             `json:"id,omitempty"`
 	Version      int                `json:"version"`
 	Note         string             `json:"note"`
 	HardCriteria map[string]any     `json:"hard_criteria"`
 	SoftCriteria map[string]any     `json:"soft_criteria"`
 	Weights      map[string]float64 `json:"weights"`
 	ActiveFrom   *time.Time         `json:"active_from,omitempty"`
+	ArchivedAt   *time.Time         `json:"archived_at,omitempty"`
 }
 
 type assistantHandler struct {
@@ -53,6 +60,10 @@ func (h *assistantHandler) register(mux *http.ServeMux) {
 		return
 	}
 	mux.HandleFunc("/api/v1/assistant/preferences", h.preferences)
+	mux.HandleFunc("/api/v1/assistant/preferences/list", h.preferenceList)
+	mux.HandleFunc("/api/v1/assistant/preferences/archive", h.archivePreference)
+	mux.HandleFunc("/api/v1/assistant/status", h.status)
+	mux.HandleFunc("/api/v1/assistant/analyze", h.analyze)
 	mux.HandleFunc("/api/v1/assistant/matches", h.matches)
 	mux.HandleFunc("/api/v1/assistant/telegram/link", h.link)
 	mux.HandleFunc("/api/v1/assistant/telegram", h.telegram)
@@ -90,6 +101,106 @@ func (h *assistantHandler) guard(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+func (h *assistantHandler) preferenceList(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	userID, err := h.user(r.Context(), r)
+	if err != nil {
+		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		return
+	}
+	if h.opts.Repository == nil {
+		writeJSON(w, http.StatusOK, []assistantPreferencesPayload{h.currentPreferences})
+		return
+	}
+	items, err := h.opts.Repository.ListPreferences(r.Context(), userID)
+	if err != nil {
+		writeAPIError(w, 500, "INTERNAL_ERROR", "Could not read preferences", nil, "")
+		return
+	}
+	result := make([]assistantPreferencesPayload, 0, len(items))
+	for _, item := range items {
+		result = append(result, preferencePayload(item))
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *assistantHandler) archivePreference(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	userID, err := h.user(r.Context(), r)
+	if err != nil {
+		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024)).Decode(&body) != nil || strings.TrimSpace(body.ID) == "" {
+		writeAPIError(w, 400, "VALIDATION_ERROR", "Preference id is required", nil, "")
+		return
+	}
+	if h.opts.Repository != nil {
+		if err := h.opts.Repository.ArchivePreference(r.Context(), userID, body.ID); err != nil {
+			writeAPIError(w, http.StatusNotFound, "NOT_FOUND", "Preference not found", nil, "")
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *assistantHandler) status(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	userID, err := h.user(r.Context(), r)
+	if err != nil {
+		writeAPIError(w, 401, "UNAUTHORIZED", "Authentication is required", nil, "")
+		return
+	}
+	if h.opts.Repository == nil {
+		writeJSON(w, 200, assistant.AnalysisStatus{State: "disabled", MethodVersion: "deterministic-v1"})
+		return
+	}
+	value, err := h.opts.Repository.AnalysisStatus(r.Context(), userID, h.opts.AIConfigured)
+	if err != nil {
+		writeAPIError(w, 500, "INTERNAL_ERROR", "Could not read analysis status", nil, "")
+		return
+	}
+	writeJSON(w, 200, value)
+}
+
+func (h *assistantHandler) analyze(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	userID, err := h.user(r.Context(), r)
+	if err != nil {
+		writeAPIError(w, 401, "UNAUTHORIZED", "Authentication is required", nil, "")
+		return
+	}
+	if h.opts.Repository == nil {
+		writeAPIError(w, 503, "DEPENDENCY_UNAVAILABLE", "Analysis store is not configured", nil, "")
+		return
+	}
+	runID, err := h.opts.Repository.QueueAnalysis(r.Context(), userID, r.Header.Get("Idempotency-Key"))
+	if err != nil {
+		writeAPIError(w, 409, "CONFLICT", "Анализ уже выполняется", nil, "")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "status": "queued"})
 }
 
 func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
@@ -203,7 +314,7 @@ func (h *assistantHandler) telegram(w http.ResponseWriter, r *http.Request) {
 
 func preferencePayload(value assistant.PreferenceRecord) assistantPreferencesPayload {
 	return assistantPreferencesPayload{
-		Version: value.Version, Note: value.Note, HardCriteria: value.HardCriteria,
-		SoftCriteria: value.SoftCriteria, Weights: value.Weights, ActiveFrom: &value.ActiveFrom,
+		ID: value.ID, Version: value.Version, Note: value.Note, HardCriteria: value.HardCriteria,
+		SoftCriteria: value.SoftCriteria, Weights: value.Weights, ActiveFrom: &value.ActiveFrom, ArchivedAt: value.ArchivedAt,
 	}
 }

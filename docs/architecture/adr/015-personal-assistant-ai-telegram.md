@@ -25,6 +25,14 @@ production auth. One-candidate DeepSeek validation требует одновре
 `ASSISTANT_AI_ENABLED=true`, `ASSISTANT_AI_LIVE_TEST=true` и CLI
 `-allow-external`; Telegram остаётся выключенным до отдельного opt-in.
 
+Lifecycle preferences остаётся append-only: UI показывает содержимое всех
+версий, а archive помечает версию `archived_at` без удаления evidence. При
+архивировании последней активной версии новый запуск не должен обрабатывать
+профиль до сохранения новой версии. `assistant_runs` хранит состояние и
+агрегированные counters в PostgreSQL; UI может безопасно обновляться после
+перезапуска BFF. Обычная кнопка запуска ограничена 25 новыми кандидатами и не
+включает платный provider.
+
 ## Consequences
 
 (+) Нет AI/Telegram вызовов при обычном локальном старте; deterministic matching

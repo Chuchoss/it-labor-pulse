@@ -241,8 +241,13 @@ export const api = {
     signal?: AbortSignal,
   ) => get<VacancyPage>('/vacancies', params, signal),
   assistantPreferences: () => get<import('./types').AssistantPreferences>('/assistant/preferences', {}),
+  assistantPreferenceList: () => get<import('./types').AssistantPreferences[]>('/assistant/preferences/list', {}),
   saveAssistantPreferences: (value: import('./types').AssistantPreferences) =>
     mutate<import('./types').AssistantPreferences>('/assistant/preferences', 'PATCH', value),
+  archiveAssistantPreference: (id: string) =>
+    mutate<void>('/assistant/preferences/archive', 'POST', { id }),
+  assistantStatus: () => get<import('./types').AssistantStatus>('/assistant/status', {}),
+  runAssistantAnalysis: () => mutate<{ run_id: string; status: string }>('/assistant/analyze', 'POST'),
   assistantMatches: () => get<import('./types').AssistantMatch[]>('/assistant/matches', {}),
   telegramStatus: () => get<import('./types').TelegramStatus>('/assistant/telegram', {}),
   telegramLink: () => mutate<{ deep_link: string; expires_at: string }>('/assistant/telegram/link', 'POST'),

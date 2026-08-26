@@ -89,6 +89,7 @@ func main() {
 			DevSubject:         cfg.AssistantDevSubject,
 			Repository:         assistantRepository,
 			TelegramConfigured: cfg.AssistantTelegramEnabled,
+			AIConfigured:       cfg.AssistantAIEnabled,
 		},
 	})
 

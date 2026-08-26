@@ -26,12 +26,24 @@ func (f *assistantRepositoryFake) EnsureUser(_ context.Context, subject string) 
 func (f *assistantRepositoryFake) CurrentPreferences(context.Context, string) (assistant.PreferenceRecord, error) {
 	return f.preference, nil
 }
+func (f *assistantRepositoryFake) ListPreferences(context.Context, string) ([]assistant.PreferenceRecord, error) {
+	return []assistant.PreferenceRecord{f.preference}, nil
+}
 func (f *assistantRepositoryFake) SavePreferences(_ context.Context, _, _ string, p assistant.PreferenceRecord) (assistant.PreferenceRecord, error) {
 	f.saves++
 	p.Version = f.saves
 	p.ActiveFrom = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	f.preference = p
 	return p, nil
+}
+func (f *assistantRepositoryFake) ArchivePreference(context.Context, string, string) error {
+	return nil
+}
+func (f *assistantRepositoryFake) AnalysisStatus(context.Context, string, bool) (assistant.AnalysisStatus, error) {
+	return assistant.AnalysisStatus{State: "never_run"}, nil
+}
+func (f *assistantRepositoryFake) QueueAnalysis(context.Context, string, string) (string, error) {
+	return "run-1", nil
 }
 func (f *assistantRepositoryFake) ListMatches(context.Context, string, int) ([]assistant.MatchRecord, error) {
 	return []assistant.MatchRecord{}, nil
@@ -71,4 +83,32 @@ func TestAssistantPreferencesUseStableDevSubjectAndSupportPatch(t *testing.T) {
 	srv.Handler.ServeHTTP(rec, create)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, 2, repo.saves)
+}
+
+func TestAssistantLifecycleEndpointsAreDevGatedAndBounded(t *testing.T) {
+	repo := &assistantRepositoryFake{preference: assistant.PreferenceRecord{ID: "pref-1", Version: 1}}
+	srv := New(Options{Assistant: AssistantOptions{Enabled: true, DevAuthEnabled: true, DevSubject: "synthetic", Repository: repo}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/assistant/preferences/list", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/assistant/analyze", nil)
+	rec = httptest.NewRecorder()
+	srv.Handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	require.Contains(t, rec.Body.String(), `"status":"queued"`)
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/assistant/analyze", nil)
+	req.Header.Set("X-Dev-User", "")
+	rec = httptest.NewRecorder()
+	srv.Handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/assistant/status", nil)
+	req.Header.Set("X-Dev-User", "")
+	rec = httptest.NewRecorder()
+	srv.Handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
 }

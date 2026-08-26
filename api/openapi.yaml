@@ -584,6 +584,69 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/assistant/preferences/list:
+    get:
+      tags: [assistant]
+      operationId: listAssistantPreferences
+      summary: История версий критериев
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Версии, включая архивные
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AssistantPreferences" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/assistant/preferences/archive:
+    post:
+      tags: [assistant]
+      operationId: archiveAssistantPreference
+      summary: Архивировать версию критериев
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string, format: uuid }
+      responses:
+        "204": { description: Версия архивирована; данные и evidence сохранены }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/assistant/status:
+    get:
+      tags: [assistant]
+      operationId: getAssistantStatus
+      summary: Статус последнего bounded анализа
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Durable status and aggregate counters
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssistantStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/assistant/analyze:
+    post:
+      tags: [assistant]
+      operationId: runAssistantAnalysis
+      summary: Поставить bounded анализ в очередь
+      description: Не более 25 новых вакансий; Telegram не отправляется. Внешний AI требует отдельного server-side opt-in.
+      security:
+        - bearerAuth: []
+      responses:
+        "202": { description: Queued }
+        "409": { description: Уже выполняется }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /api/v1/assistant/matches:
     get:
       tags: [assistant]
@@ -1425,8 +1488,34 @@ components:
         - type: object
           required: [version, active_from]
           properties:
+            id: { type: string, format: uuid }
             version: { type: integer, minimum: 1 }
             active_from: { type: string, format: date-time }
+            archived_at: { type: [string, "null"], format: date-time }
+
+    AssistantStatus:
+      type: object
+      required: [ai_configured, state, processed, eligible, matched, ai_calls, skipped, pending_candidates]
+      properties:
+        ai_configured: { type: boolean }
+        state: { type: string, enum: [never_run, queued, running, succeeded, failed, disabled] }
+        started_at: { type: [string, "null"], format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        last_checked_at: { type: [string, "null"], format: date-time }
+        processed: { type: integer, minimum: 0 }
+        eligible: { type: integer, minimum: 0 }
+        matched: { type: integer, minimum: 0 }
+        ai_calls: { type: integer, minimum: 0 }
+        skipped: { type: integer, minimum: 0 }
+        error_category: { type: [string, "null"] }
+        request_id: { type: [string, "null"] }
+        cursor_source: { type: string }
+        cursor_observed_at: { type: [string, "null"], format: date-time }
+        pending_candidates: { type: boolean }
+        provider: { type: [string, "null"] }
+        model: { type: [string, "null"] }
+        prompt_version: { type: [string, "null"] }
+        method_version: { type: string }
 
     AssistantMatch:
       type: object

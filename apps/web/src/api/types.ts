@@ -198,12 +198,35 @@ export interface CurrenciesResponse {
 }
 
 export interface AssistantPreferences {
+  id?: string
   version?: number
   note: string
   hard_criteria: Record<string, unknown>
   soft_criteria: Record<string, unknown>
   weights: Record<string, number>
   active_from?: string
+  archived_at?: string | null
+}
+
+export interface AssistantStatus {
+  ai_configured: boolean
+  state: 'never_run' | 'queued' | 'running' | 'succeeded' | 'failed' | 'disabled'
+  started_at?: string
+  finished_at?: string
+  last_checked_at?: string
+  processed: number
+  eligible: number
+  matched: number
+  ai_calls: number
+  skipped: number
+  error_category?: string
+  cursor_source?: string
+  cursor_observed_at?: string
+  pending_candidates: boolean
+  provider?: string
+  model?: string
+  prompt_version?: string
+  method_version?: string
 }
 
 export interface AssistantMatch {

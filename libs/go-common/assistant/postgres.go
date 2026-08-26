@@ -22,12 +22,36 @@ type DBTX interface {
 }
 
 type PreferenceRecord struct {
+	ID           string
 	Version      int
 	Note         string
 	HardCriteria map[string]any
 	SoftCriteria map[string]any
 	Weights      map[string]float64
 	ActiveFrom   time.Time
+	ArchivedAt   *time.Time
+}
+
+type AnalysisStatus struct {
+	AIConfigured      bool       `json:"ai_configured"`
+	State             string     `json:"state"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	FinishedAt        *time.Time `json:"finished_at,omitempty"`
+	LastCheckedAt     time.Time  `json:"last_checked_at"`
+	Processed         int        `json:"processed"`
+	Eligible          int        `json:"eligible"`
+	Matched           int        `json:"matched"`
+	AICalls           int        `json:"ai_calls"`
+	Skipped           int        `json:"skipped"`
+	ErrorCategory     *string    `json:"error_category,omitempty"`
+	RequestID         *string    `json:"request_id,omitempty"`
+	CursorSource      string     `json:"cursor_source"`
+	CursorObservedAt  *time.Time `json:"cursor_observed_at,omitempty"`
+	PendingCandidates bool       `json:"pending_candidates"`
+	Provider          *string    `json:"provider,omitempty"`
+	Model             *string    `json:"model,omitempty"`
+	PromptVersion     *string    `json:"prompt_version,omitempty"`
+	MethodVersion     string     `json:"method_version"`
 }
 
 var ErrInvalidPreferences = errors.New("invalid assistant preferences")
@@ -86,11 +110,11 @@ func (r *PostgresRepository) CurrentPreferences(ctx context.Context, userID stri
 	var p PreferenceRecord
 	var hard, soft, weights []byte
 	err := r.db.QueryRow(ctx, `
-		SELECT version, note, hard_criteria, soft_criteria, weights, active_from
+		SELECT id::text, version, note, hard_criteria, soft_criteria, weights, active_from, archived_at
 		FROM vacancy_preferences
-		WHERE user_id = $1::uuid
+		WHERE user_id = $1::uuid AND archived_at IS NULL
 		ORDER BY version DESC LIMIT 1
-	`, userID).Scan(&p.Version, &p.Note, &hard, &soft, &weights, &p.ActiveFrom)
+	`, userID).Scan(&p.ID, &p.Version, &p.Note, &hard, &soft, &weights, &p.ActiveFrom, &p.ArchivedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PreferenceRecord{HardCriteria: map[string]any{}, SoftCriteria: map[string]any{}, Weights: map[string]float64{}}, nil
 	}
@@ -107,6 +131,86 @@ func (r *PostgresRepository) CurrentPreferences(ctx context.Context, userID stri
 		return PreferenceRecord{}, fmt.Errorf("decode weights: %w", err)
 	}
 	return p, nil
+}
+
+func (r *PostgresRepository) ListPreferences(ctx context.Context, userID string) ([]PreferenceRecord, error) {
+	rows, err := r.db.Query(ctx, `SELECT id::text, version, note, hard_criteria, soft_criteria, weights, active_from, archived_at
+		FROM vacancy_preferences WHERE user_id = $1::uuid ORDER BY version DESC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list assistant preferences: %w", err)
+	}
+	defer rows.Close()
+	result := make([]PreferenceRecord, 0)
+	for rows.Next() {
+		var p PreferenceRecord
+		var hard, soft, weights []byte
+		if err := rows.Scan(&p.ID, &p.Version, &p.Note, &hard, &soft, &weights, &p.ActiveFrom, &p.ArchivedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(hard, &p.HardCriteria); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(soft, &p.SoftCriteria); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(weights, &p.Weights); err != nil {
+			return nil, err
+		}
+		result = append(result, p)
+	}
+	return result, rows.Err()
+}
+
+func (r *PostgresRepository) ArchivePreference(ctx context.Context, userID, preferenceID string) error {
+	tag, err := r.db.Exec(ctx, `UPDATE vacancy_preferences SET archived_at = now()
+		WHERE id = $1::uuid AND user_id = $2::uuid AND archived_at IS NULL`, preferenceID, userID)
+	if err != nil {
+		return fmt.Errorf("archive assistant preference: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, aiConfigured bool) (AnalysisStatus, error) {
+	var s AnalysisStatus
+	var cursorAt *time.Time
+	err := r.db.QueryRow(ctx, `SELECT state, started_at, finished_at, last_checked_at,
+		processed, eligible, matched, ai_calls, skipped, error_category, request_id,
+		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version
+		FROM assistant_runs WHERE user_id = $1::uuid ORDER BY created_at DESC LIMIT 1`, userID).Scan(
+		&s.State, &s.StartedAt, &s.FinishedAt, &s.LastCheckedAt, &s.Processed, &s.Eligible,
+		&s.Matched, &s.AICalls, &s.Skipped, &s.ErrorCategory, &s.RequestID, &s.CursorSource,
+		&cursorAt, &s.PendingCandidates, &s.Provider, &s.Model, &s.PromptVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		s.State = "never_run"
+		s.LastCheckedAt = time.Now().UTC()
+	} else if err != nil {
+		return AnalysisStatus{}, fmt.Errorf("get assistant status: %w", err)
+	}
+	s.AIConfigured = aiConfigured
+	if !aiConfigured && (s.State == "never_run" || s.State == "queued") {
+		s.State = "disabled"
+	}
+	s.CursorObservedAt = cursorAt
+	s.MethodVersion = "deterministic-v1"
+	return s, nil
+}
+
+func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestID string) (string, error) {
+	var id string
+	err := r.db.QueryRow(ctx, `INSERT INTO assistant_runs (user_id, state, request_id)
+		SELECT $1::uuid, 'queued', NULLIF($2, '')
+		WHERE NOT EXISTS (SELECT 1 FROM assistant_runs WHERE user_id = $1::uuid AND state IN ('queued','running'))
+		RETURNING id::text`, userID, requestID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("analysis already running")
+	}
+	if err != nil {
+		return "", fmt.Errorf("queue assistant analysis: %w", err)
+	}
+	return id, nil
 }
 
 func validatePreferences(p PreferenceRecord) ([]byte, []byte, []byte, error) {
