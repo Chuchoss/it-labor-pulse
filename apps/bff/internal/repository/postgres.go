@@ -516,7 +516,16 @@ func (p *Postgres) TrendsCoverage(ctx context.Context) (readapi.TrendsCoverage, 
 				  AND status = 'complete' AND method_version = $1
 			),
 			coalesce((
-				SELECT greatest(current_date - min(cycle_date), 0)
+				SELECT greatest(
+					(
+						CASE
+							WHEN (now() AT TIME ZONE 'UTC')::time >= time '01:00'
+							THEN current_date - 1
+							ELSE current_date - 2
+						END
+					) - min(cycle_date) + 1,
+					0
+				)
 				FROM ingest_cycles
 				WHERE source = 'hh' AND scope = 'daily_discovery'
 				  AND method_version = $1
