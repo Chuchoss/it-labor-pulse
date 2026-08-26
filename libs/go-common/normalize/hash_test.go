@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
+
 	"github.com/stretchr/testify/require"
 )
 

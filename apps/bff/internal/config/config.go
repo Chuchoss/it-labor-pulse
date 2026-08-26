@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"strings"
 )
@@ -18,18 +17,14 @@ type Config struct {
 // Load reads BFF config from env.
 // Listen address precedence: BFF_HTTP_ADDR, then PORT / BFF_PORT (bare port or :port), default :8080.
 // BFF is the public MVP edge (ADR 010). DATABASE_URL and REDIS_URL optional for health ping.
-func Load() (Config, error) {
-	cfg := Config{
+func Load() Config {
+	return Config{
 		HTTPAddr:    resolveHTTPAddr(),
 		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		RedisURL:    strings.TrimSpace(os.Getenv("REDIS_URL")),
 		AppEnv:      envOr("APP_ENV", "local"),
 		LogLevel:    envOr("LOG_LEVEL", "info"),
 	}
-	if cfg.HTTPAddr == "" {
-		return Config{}, fmt.Errorf("http listen address is empty")
-	}
-	return cfg, nil
 }
 
 func resolveHTTPAddr() string {

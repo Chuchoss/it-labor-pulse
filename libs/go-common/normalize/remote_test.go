@@ -3,8 +3,9 @@ package normalize_test
 import (
 	"testing"
 
-	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 )
 
 func TestDetectRemote(t *testing.T) {

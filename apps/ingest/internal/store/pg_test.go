@@ -68,7 +68,7 @@ func TestSavePageInTxUsesHeldTransactionWithSingleConnection(t *testing.T) {
 		strings.Repeat("a", 64),
 		"1",
 		nil,
-		func() { t.Fatal("healthy transaction must not discard its connection") },
+		func(context.Context) { t.Fatal("healthy transaction must not discard its connection") },
 	)
 
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestSavePageInTxRollsBackOnCheckpointError(t *testing.T) {
 		strings.Repeat("b", 64),
 		"1",
 		nil,
-		func() { t.Fatal("successful rollback must not discard its connection") },
+		func(context.Context) { t.Fatal("successful rollback must not discard its connection") },
 	)
 
 	require.ErrorIs(t, err, checkpointErr)

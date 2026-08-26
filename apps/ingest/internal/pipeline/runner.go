@@ -224,7 +224,7 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 	if err := r.Store.FinishRun(ctx, runID, status, stats, errMsg); err != nil {
 		if fatal != nil {
 			return Result{RunID: runID, Status: status, Stats: stats},
-				fmt.Errorf("pipeline operation failed (%v); finish run: %w", fatal, err)
+				fmt.Errorf("pipeline operation failed (%w); finish run: %w", fatal, err)
 		}
 		return Result{RunID: runID, Status: status, Stats: stats}, fmt.Errorf("pipeline finish run: %w", err)
 	}

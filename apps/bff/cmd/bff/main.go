@@ -25,12 +25,7 @@ func main() {
 	// Local DX: load .env if present; never override already-set env vars.
 	_ = godotenv.Load()
 
-	cfg, err := config.Load()
-	if err != nil {
-		slog.Error("config_load_failed", "err", err.Error())
-		os.Exit(1)
-	}
-
+	cfg := config.Load()
 	log := logging.New(logging.Options{
 		Service: "bff",
 		Env:     cfg.AppEnv,

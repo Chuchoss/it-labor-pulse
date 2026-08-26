@@ -10,10 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/hh"
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/pipeline"
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/store"
-	"github.com/stretchr/testify/require"
 )
 
 func moduleRoot(t *testing.T) string {

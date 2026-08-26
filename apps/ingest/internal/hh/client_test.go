@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/hh"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/hh"
 )
 
 func TestNewClient_EmptyUserAgentFails(t *testing.T) {

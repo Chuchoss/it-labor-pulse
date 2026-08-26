@@ -28,7 +28,7 @@ help:
 	@echo "  make ps             - compose ps"
 	@echo "  make psql           - psql into local postgres (needs up-local-pg)"
 	@echo "  make redis-cli      - redis-cli into local redis (needs up-local-redis)"
-	@echo "  make migrate-up     - apply PG migrations via DATABASE_URL (when SQL exists)"
+	@echo "  make migrate-up     - apply PG migrations via DATABASE_URL"
 	@echo "  make migrate-down   - roll back one PG migration (dev only)"
 	@echo "  make bust-cache     - INCR meta:cache_version in local Redis"
 

@@ -29,7 +29,7 @@ type Config struct {
 }
 
 // Load reads ingest config from env.
-func Load() (Config, error) {
+func Load() Config {
 	cfg := Config{
 		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		AppEnv:      envOr("APP_ENV", "local"),
@@ -48,7 +48,7 @@ func Load() (Config, error) {
 		delayMS = 0
 	}
 	cfg.PageDelay = time.Duration(delayMS) * time.Millisecond
-	return cfg, nil
+	return cfg
 }
 
 // ValidateLive requires UA + DATABASE_URL for live HH ingest.

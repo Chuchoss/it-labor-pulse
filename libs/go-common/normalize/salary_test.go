@@ -4,8 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 )
 
 func TestMid(t *testing.T) {

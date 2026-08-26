@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/checkpoint"
+
 	"github.com/stretchr/testify/require"
 )
 

@@ -205,9 +205,9 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 
 ---
 
-## Make targets (intended)
+## Make targets
 
-Даже если `Makefile` ещё не создан — целевые команды для единообразия:
+Актуальные команды корневого `Makefile` и запланированные расширения:
 
 | Target | Действие | Статус |
 |--------|----------|--------|
@@ -221,12 +221,13 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `make wait-ready` | health local Redis; позже + BFF `/api/v1/health` | **есть** (infra) |
 | `make run-bff` | публичный BFF на `:8080` | **есть** |
 | `make psql` / `make redis-cli` | shell в контейнеры (`local-pg` / `local-redis`) | **есть** |
-| `make migrate-up` / `migrate-down` | golang-migrate по `DATABASE_URL` (Docker image) | stub (нет SQL пока) |
+| `make migrate-up` / `migrate-down` | golang-migrate по `DATABASE_URL` (Docker image) | **есть** |
 | `make bust-cache` | `INCR meta:cache_version` (local Redis) | **есть** |
 | `make up-full` | `--profile full` | позже (Phase 2+) |
 | `make up-obs` | Compose `--profile observability` (Loki/Tempo/Grafana) | **есть** (stub) |
 | `make ingest-hh` / `ingest-hh-fixture` | one-shot HH → normalize → PG (`apps/ingest`); fixture без live HH | Phase 1 |
-| `make proto` / `openapi-lint` / `test*` / `smoke` / `fmt` / `lint` | по мере появления кода | planned |
+| `make test` | `go test ./...` | **есть** |
+| `make proto` / `openapi-lint` / `smoke` / `fmt` / `lint` | по мере появления tooling | planned |
 
 **Windows без Make** (PowerShell, из корня репо):
 

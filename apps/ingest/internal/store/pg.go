@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -9,10 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 )
 
 const (
@@ -251,7 +253,7 @@ func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (strin
 			SELECT cursor FROM ingest_checkpoints WHERE source = $1 AND scope_hash = $2
 		`, source, scopeHash).Scan(&cursor)
 	})
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
@@ -300,10 +302,10 @@ func (s *PG) savePageOnce(ctx context.Context, source, scopeHash, nextCursor str
 		return 0, 0, atDBStage("begin", err)
 	}
 
-	return savePageInTx(ctx, tx, source, scopeHash, nextCursor, items, func() {
+	return savePageInTx(ctx, tx, source, scopeHash, nextCursor, items, func(ctx context.Context) {
 		rawConn := conn.Hijack()
 		released = true
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
 		defer cancel()
 		_ = rawConn.Close(cleanupCtx)
 	})
@@ -314,15 +316,15 @@ func savePageInTx(
 	tx pageTx,
 	source, scopeHash, nextCursor string,
 	items []VacancyWrite,
-	onRollbackFailure func(),
+	onRollbackFailure func(context.Context),
 ) (int, int, error) {
 	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
 		defer cancel()
 		if rollbackErr := tx.Rollback(cleanupCtx); rollbackErr != nil &&
 			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
 			if onRollbackFailure != nil {
-				onRollbackFailure()
+				onRollbackFailure(cleanupCtx)
 			}
 		}
 	}()
@@ -394,11 +396,11 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 	err = tx.QueryRow(ctx, `
 		SELECT id::text, content_hash FROM vacancies WHERE source = $1 AND external_id = $2
 	`, v.Source, v.ExternalID).Scan(&vacancyID, &existingHash)
-	if err != nil && err != pgx.ErrNoRows {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, atDBStage("select vacancy", err)
 	}
 
-	if err == nil && bytesEqual(existingHash, hashBytes) {
+	if err == nil && bytes.Equal(existingHash, hashBytes) {
 		_, err = tx.Exec(ctx, `
 			UPDATE vacancies
 			SET collected_at = $2, is_active = $3, deleted_at = NULL, updated_at = now()
@@ -518,7 +520,7 @@ func upsertRegion(ctx context.Context, tx DBTX, source, externalID, name string)
 	if err == nil {
 		return id, nil
 	}
-	if err != pgx.ErrNoRows {
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", atDBStage("lookup region", err)
 	}
 
@@ -587,18 +589,6 @@ func decodeHash(hexStr string) ([]byte, error) {
 		return nil, fmt.Errorf("store content_hash: %w", err)
 	}
 	return b, nil
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func nullTime(t time.Time) any {

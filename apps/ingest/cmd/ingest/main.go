@@ -28,11 +28,7 @@ func main() {
 	maxPages := flag.Int("max-pages", 0, "max pages (default INGEST_MAX_PAGES)")
 	flag.Parse()
 
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "config: %v\n", err)
-		os.Exit(1)
-	}
+	cfg := config.Load()
 	if *fixture && cfg.FixtureDir == "" {
 		cfg.FixtureDir = findDefaultFixtureDir()
 	}
