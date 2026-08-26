@@ -39,6 +39,10 @@ import { formatDate, formatSalaryRange } from '../utils/format'
 import { getRegionLabel } from '../utils/regions'
 import { useCurrency } from '../components/CurrencyContext'
 import {
+  normalizeDateOnly,
+  validatePublishedDateRange,
+} from './publicationDate'
+import {
   dedupeVacancies,
   getNextVacancyPageParam,
   mergePolledVacancies,
@@ -157,6 +161,7 @@ export function VacanciesPage({
   const [draftSalaryMax, setDraftSalaryMax] = useState(salaryMax)
   const [draftPublishedFrom, setDraftPublishedFrom] = useState(publishedFrom)
   const [draftPublishedTo, setDraftPublishedTo] = useState(publishedTo)
+  const [dateError, setDateError] = useState<{ field: 'from' | 'to'; message: string } | null>(null)
   const [newVacancyState, setNewVacancyState] = useState<{
     filter: string
     ids: Set<string>
@@ -439,17 +444,20 @@ export function VacanciesPage({
             useFlexGap
             sx={{
               gap: 1.5,
-              alignItems: { md: 'center' },
+              alignItems: { md: 'flex-start' },
               flexWrap: { md: 'wrap' },
             }}
             onSubmit={(event) => {
               event.preventDefault()
+              const nextDateError = validatePublishedDateRange(draftPublishedFrom, draftPublishedTo)
+              setDateError(nextDateError)
+              if (nextDateError) return
               updateParams({
                 q: draftQuery.trim() || undefined,
                 salary_min: draftSalaryMin || undefined,
                 salary_max: draftSalaryMax || undefined,
-                published_from: draftPublishedFrom || undefined,
-                published_to: draftPublishedTo || undefined,
+                published_from: normalizeDateOnly(draftPublishedFrom) || undefined,
+                published_to: normalizeDateOnly(draftPublishedTo) || undefined,
               })
             }}
           >
@@ -524,23 +532,51 @@ export function VacanciesPage({
             />
             <TextField
               label="Дата публикации от"
-              type="date"
+              type="text"
+              placeholder="ГГГГ-ММ-ДД"
+              inputMode="numeric"
+              autoComplete="off"
               value={draftPublishedFrom}
-              onChange={(event) => setDraftPublishedFrom(event.target.value)}
-              helperText="Формат: ГГГГ-ММ-ДД"
+              onChange={(event) => {
+                setDraftPublishedFrom(event.target.value)
+                setDateError(null)
+              }}
+              onBlur={() => setDraftPublishedFrom((value) => normalizeDateOnly(value))}
+              error={dateError?.field === 'from'}
+              helperText={dateError?.field === 'from' ? dateError.message : 'Формат: ГГГГ-ММ-ДД'}
               size="small"
-              slotProps={{ inputLabel: { shrink: true } }}
-              sx={{ width: { xs: '100%', md: 180 } }}
+              slotProps={{
+                inputLabel: { shrink: true },
+                htmlInput: { inputMode: 'numeric', autoComplete: 'off' },
+              }}
+              sx={{
+                width: { xs: '100%', md: 180 },
+                '& .MuiFormHelperText-root': { minHeight: '1.25rem', mt: 0.5 },
+              }}
             />
             <TextField
               label="Дата публикации до"
-              type="date"
+              type="text"
+              placeholder="ГГГГ-ММ-ДД"
+              inputMode="numeric"
+              autoComplete="off"
               value={draftPublishedTo}
-              onChange={(event) => setDraftPublishedTo(event.target.value)}
-              helperText="Формат: ГГГГ-ММ-ДД"
+              onChange={(event) => {
+                setDraftPublishedTo(event.target.value)
+                setDateError(null)
+              }}
+              onBlur={() => setDraftPublishedTo((value) => normalizeDateOnly(value))}
+              error={dateError?.field === 'to'}
+              helperText={dateError?.field === 'to' ? dateError.message : 'Формат: ГГГГ-ММ-ДД'}
               size="small"
-              slotProps={{ inputLabel: { shrink: true } }}
-              sx={{ width: { xs: '100%', md: 180 } }}
+              slotProps={{
+                inputLabel: { shrink: true },
+                htmlInput: { inputMode: 'numeric', autoComplete: 'off' },
+              }}
+              sx={{
+                width: { xs: '100%', md: 180 },
+                '& .MuiFormHelperText-root': { minHeight: '1.25rem', mt: 0.5 },
+              }}
             />
             <FormControl
               size="small"
@@ -593,6 +629,7 @@ export function VacanciesPage({
                 setDraftSalaryMax('')
                 setDraftPublishedFrom('')
                 setDraftPublishedTo('')
+                setDateError(null)
                 setSearchParams({})
               }}
             >

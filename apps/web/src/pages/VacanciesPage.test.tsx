@@ -6,6 +6,11 @@ import { server } from '../test/server'
 import { getRegionLabel } from '../utils/regions'
 import { VacanciesPage } from './VacanciesPage'
 import {
+  normalizeDateOnly,
+  parseDateOnly,
+  validatePublishedDateRange,
+} from './publicationDate'
+import {
   dedupeVacancies,
   getNextVacancyPageParam,
   mergePolledVacancies,
@@ -304,10 +309,12 @@ describe('VacanciesPage', () => {
 
     const fromInput = screen.getByLabelText('Дата публикации от')
     const toInput = screen.getByLabelText('Дата публикации до')
-    expect(fromInput).toHaveAttribute('type', 'date')
-    expect(toInput).toHaveAttribute('type', 'date')
-    expect(fromInput).not.toHaveAttribute('placeholder')
-    expect(toInput).not.toHaveAttribute('placeholder')
+    expect(fromInput).toHaveAttribute('type', 'text')
+    expect(toInput).toHaveAttribute('type', 'text')
+    expect(fromInput).toHaveAttribute('inputmode', 'numeric')
+    expect(toInput).toHaveAttribute('inputmode', 'numeric')
+    expect(fromInput).toHaveAttribute('placeholder', 'ГГГГ-ММ-ДД')
+    expect(toInput).toHaveAttribute('placeholder', 'ГГГГ-ММ-ДД')
 
     fireEvent.change(fromInput, { target: { value: '2026-08-01' } })
     fireEvent.change(toInput, { target: { value: '2026-08-03' } })
@@ -317,6 +324,25 @@ describe('VacanciesPage', () => {
       expect(requestedUrls.at(-1)).toContain('published_from=2026-08-01')
       expect(requestedUrls.at(-1)).toContain('published_to=2026-08-03')
     })
+  })
+
+  it('shows date validation errors without blocking free-form typing', async () => {
+    server.use(
+      http.get('*/api/v1/vacancies', () =>
+        HttpResponse.json({ data: [], page: 1, page_size: 20, total: 0 }),
+      ),
+    )
+    renderPage(<VacanciesPage pollIntervalMs={0} />)
+    expect(await screen.findByText('Вакансии не найдены')).toBeInTheDocument()
+
+    const fromInput = screen.getByLabelText('Дата публикации от')
+    const toInput = screen.getByLabelText('Дата публикации до')
+    fireEvent.change(fromInput, { target: { value: '2026-' } })
+    expect(fromInput).toHaveValue('2026-')
+    fireEvent.change(fromInput, { target: { value: '2026-08-04' } })
+    fireEvent.change(toInput, { target: { value: '2026-08-03' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+    expect(await screen.findByText('Дата «до» не может быть раньше даты «от»')).toBeInTheDocument()
   })
 
   it('retries a failed next page from the fallback button', async () => {
@@ -582,6 +608,19 @@ describe('VacanciesPage', () => {
 })
 
 describe('vacancy page helpers', () => {
+  it('parses and normalizes valid date-only values without accepting invalid dates', () => {
+    expect(parseDateOnly('2026-08-03')?.toISOString()).toBe('2026-08-03T00:00:00.000Z')
+    expect(normalizeDateOnly(' 2026-08-03 ')).toBe('2026-08-03')
+    expect(parseDateOnly('2026-02-30')).toBeNull()
+    expect(parseDateOnly('2026-8-3')).toBeNull()
+  })
+
+  it('validates reversed and oversized date ranges', () => {
+    expect(validatePublishedDateRange('2026-08-04', '2026-08-03')?.field).toBe('to')
+    expect(validatePublishedDateRange('2026-01-01', '2027-01-03')?.message).toContain('366')
+    expect(validatePublishedDateRange('2026-01-01', '2026-01-01')).toBeNull()
+  })
+
   const vacancy = (id: string) => ({ id, title: id, is_active: true })
 
   it('deduplicates vacancy IDs', () => {
