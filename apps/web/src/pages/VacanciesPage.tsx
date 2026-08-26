@@ -74,12 +74,12 @@ function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
       <Stack direction="row" useFlexGap sx={{ alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <Typography sx={{ fontWeight: 700 }}>{vacancy.title || 'Без названия'}</Typography>
         {vacancy.is_fresh === true && (
-          <Tooltip title="Опубликована на HH за последние 24 часа">
+          <Tooltip title="Добавлена в список за последние 24 часа">
             <Chip
               label="Новая"
               color="info"
               size="small"
-              aria-label="Опубликована на HH за последние 24 часа"
+              aria-label="Вакансия добавлена в течение последних 24 часов"
             />
           </Tooltip>
         )}

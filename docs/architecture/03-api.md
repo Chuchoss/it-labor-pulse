@@ -301,9 +301,9 @@ pagination.
   начинает пагинацию с первой страницы.
 - `first_observed_at` — UTC-время первого наблюдения вакансии ingest-пайплайном,
   а не `published_at`; оно сохраняется при повторном сборе.
-- `is_fresh=true` только для `published_at` (время публикации на HH) в
-  rolling UTC-окне `[server_now-24h, server_now]`. `NULL` и будущие значения
-  считаются не свежими; `first_observed_at` для этого поля не используется.
+- `is_fresh=true` только для `first_observed_at` (время первого наблюдения
+  ingest-пайплайном) в rolling UTC-окне `[server_now-24h, server_now]`.
+  `NULL` и будущие значения считаются не свежими.
 - `status` — статус доступности вакансии, а не работодателя: `active`,
   `inactive` или `missing_from_last_complete_cycle`. Последний означает, что
   вакансия не встретилась в последнем полном discovery-срезе HH; неполный или

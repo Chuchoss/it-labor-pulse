@@ -201,7 +201,7 @@ describe('VacanciesPage', () => {
     renderPage(<VacanciesPage pollIntervalMs={0} />)
 
     expect((await screen.findAllByText('Fresh vacancy')).length).toBe(2)
-    expect(screen.getAllByLabelText('Опубликована на HH за последние 24 часа')).toHaveLength(2)
+    expect(screen.getAllByLabelText('Вакансия добавлена в течение последних 24 часов')).toHaveLength(2)
     expect(screen.getAllByText('Новая')).toHaveLength(2)
     expect(screen.getAllByText('Stale vacancy')).toHaveLength(2)
     expect(screen.getAllByText('Missing freshness')).toHaveLength(2)
