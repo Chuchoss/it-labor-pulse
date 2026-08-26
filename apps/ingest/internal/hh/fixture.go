@@ -21,6 +21,7 @@ func NewFixtureSource(dir string) *FixtureSource {
 		Dir: dir,
 		DetailByID: map[string]string{
 			"900001": "vacancy_detail.json",
+			"900002": "vacancy_detail_spb.json",
 			"900010": "salary_absent.json",
 		},
 	}
@@ -75,10 +76,10 @@ func (f *FixtureSource) detailFromSearch(id string) ([]byte, error) {
 	for _, it := range page.Items {
 		if it.ID == id {
 			// Minimal detail body sufficient for DraftFromDetail.
-			return []byte(fmt.Sprintf(
+			return fmt.Appendf(nil,
 				`{"id":%q,"name":%q,"area":{"id":"0","name":"Unknown"},"salary":null,"employer":{"id":"0","name":"Unknown"},"published_at":"2026-08-10T10:00:00+0300","archived":false,"key_skills":[],"professional_roles":[],"description":""}`,
 				it.ID, it.Name,
-			)), nil
+			), nil
 		}
 	}
 	return nil, fmt.Errorf("hh fixture: vacancy %s not found", id)

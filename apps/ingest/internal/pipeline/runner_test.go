@@ -62,8 +62,7 @@ func TestRunner_FixtureSource(t *testing.T) {
 		Now:    func() time.Time { return time.Date(2026, 8, 12, 15, 0, 0, 0, time.UTC) },
 	}
 	res, err := r.Run(context.Background(), pipeline.Params{
-		Area:     "1",
-		Text:     "golang",
+		Area:     "113",
 		Mode:     "incremental",
 		MaxPages: 2,
 	})
@@ -74,6 +73,24 @@ func TestRunner_FixtureSource(t *testing.T) {
 	require.Contains(t, mem.Vacancies, "hh|900001")
 	require.Contains(t, mem.Vacancies, "hh|900002")
 	require.Equal(t, "Senior Go Developer", mem.Vacancies["hh|900001"].Vacancy.Title)
+	require.Equal(t, "1", mem.Vacancies["hh|900001"].Vacancy.RegionExternalID)
+	require.Equal(t, "Москва", mem.Vacancies["hh|900001"].RegionName)
+	require.Equal(t, "2", mem.Vacancies["hh|900002"].Vacancy.RegionExternalID)
+	require.Equal(t, "Санкт-Петербург", mem.Vacancies["hh|900002"].RegionName)
+
+	// A Russia-wide search area is only the search scope. Repeating the same
+	// vacancy payloads under another checkpoint scope remains idempotent and
+	// preserves each vacancy's own HH area.
+	repeated, err := r.Run(context.Background(), pipeline.Params{
+		Area:     "113",
+		Text:     "idempotency-check",
+		Mode:     "incremental",
+		MaxPages: 2,
+	})
+	require.NoError(t, err)
+	require.Zero(t, repeated.Stats.Upserted)
+	require.Equal(t, 2, repeated.Stats.Unchanged)
+	require.Len(t, mem.Vacancies, 2)
 }
 
 func TestRunner_httptest_WithBackoffPath(t *testing.T) {

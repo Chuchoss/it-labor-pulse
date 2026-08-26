@@ -14,6 +14,7 @@
 |---|---|---|
 |[`vacancy_search_page.json`](./vacancy_search_page.json)|`GET /vacancies?...` (page)|пагинация, список items|
 |[`vacancy_detail.json`](./vacancy_detail.json)|`GET /vacancies/{id}`|salary, employer, skills, area, description|
+|[`vacancy_detail_spb.json`](./vacancy_detail_spb.json)|`GET /vacancies/{id}`|отдельный non-Moscow `area.id` для проверки географии|
 |[`salary_absent.json`](./salary_absent.json)|vacancy|отсутствующая salary|
 |[`salary_invalid_outlier.json`](./salary_invalid_outlier.json)|vacancy|invalid `from=0` и outlier `to=5_000_000`|
 |[`salary_fx_miss.json`](./salary_fx_miss.json)|vacancy|USD без доступного FX rate|

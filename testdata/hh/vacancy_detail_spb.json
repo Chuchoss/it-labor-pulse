@@ -1,0 +1,37 @@
+{
+  "id": "900002",
+  "name": "Frontend Developer",
+  "area": {
+    "id": "2",
+    "name": "Санкт-Петербург",
+    "url": "https://api.hh.ru/areas/2"
+  },
+  "salary": null,
+  "employer": {
+    "id": "70002",
+    "name": "Тестовая компания"
+  },
+  "key_skills": [
+    { "name": "TypeScript" },
+    { "name": "React" }
+  ],
+  "professional_roles": [
+    {
+      "id": "96",
+      "name": "Программист, разработчик"
+    }
+  ],
+  "schedule": {
+    "id": "fullDay",
+    "name": "Полный день"
+  },
+  "work_format": [
+    {
+      "id": "ON_SITE",
+      "name": "На месте работодателя"
+    }
+  ],
+  "description": "<p>Анонимизированная тестовая вакансия.</p>",
+  "published_at": "2026-08-09T14:00:00+0300",
+  "archived": false
+}

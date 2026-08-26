@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 )
 
 type fakePageTx struct {
@@ -18,6 +20,59 @@ type fakePageTx struct {
 	commitCalls   int
 	rollbackCalls int
 	committed     bool
+}
+
+type stubRow struct {
+	values []any
+	err    error
+}
+
+func (r stubRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	for i, value := range r.values {
+		switch target := dest[i].(type) {
+		case *string:
+			*target = value.(string)
+		case *[]byte:
+			*target = value.([]byte)
+		default:
+			panic("unsupported scan target")
+		}
+	}
+	return nil
+}
+
+type unchangedVacancyDB struct {
+	queryCalls int
+	updateArgs []any
+}
+
+func (f *unchangedVacancyDB) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "UPDATE vacancies") {
+		f.updateArgs = args
+	}
+	return pgconn.CommandTag{}, nil
+}
+
+func (f *unchangedVacancyDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	panic("unexpected Query call")
+}
+
+func (f *unchangedVacancyDB) QueryRow(context.Context, string, ...any) pgx.Row {
+	f.queryCalls++
+	switch f.queryCalls {
+	case 1:
+		return stubRow{values: []any{"00000000-0000-0000-0000-000000000002"}}
+	case 2:
+		return stubRow{values: []any{
+			"00000000-0000-0000-0000-000000000010",
+			[]byte{1},
+		}}
+	default:
+		panic("unexpected QueryRow call")
+	}
 }
 
 func (f *fakePageTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -145,4 +200,27 @@ func TestSanitizeDBErrorKeepsOnlySQLState(t *testing.T) {
 
 	require.EqualError(t, got, "store save page: postgres error (sqlstate=55P03)")
 	require.False(t, errors.Is(got, original))
+}
+
+func TestUnchangedVacancyReconcilesCanonicalRegionReference(t *testing.T) {
+	db := &unchangedVacancyDB{}
+	changed, err := upsertVacancy(context.Background(), db, VacancyWrite{
+		Vacancy: normalize.CanonicalVacancy{
+			Source:           "hh",
+			ExternalID:       "900002",
+			Title:            "Fixture vacancy",
+			RegionExternalID: "2",
+			CollectedAt:      time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC),
+			IsActive:         true,
+			ContentHash:      "01",
+		},
+		RegionName: "Санкт-Петербург",
+	})
+
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Len(t, db.updateArgs, 6)
+	regionID, ok := db.updateArgs[3].(*string)
+	require.True(t, ok)
+	require.Equal(t, "00000000-0000-0000-0000-000000000002", *regionID)
 }

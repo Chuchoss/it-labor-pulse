@@ -432,6 +432,11 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 		return false, err
 	}
 
+	var roleID any
+	if v.RoleID != nil && *v.RoleID != "" {
+		roleID = *v.RoleID
+	}
+
 	var existingHash []byte
 	var vacancyID string
 	err = tx.QueryRow(ctx, `
@@ -444,9 +449,15 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 	if err == nil && bytes.Equal(existingHash, hashBytes) {
 		_, err = tx.Exec(ctx, `
 			UPDATE vacancies
-			SET collected_at = $2, is_active = $3, deleted_at = NULL, updated_at = now()
+			SET collected_at = $2,
+			    is_active = $3,
+			    region_id = $4::uuid,
+			    role_id = $5::uuid,
+			    employer_id = $6::uuid,
+			    deleted_at = NULL,
+			    updated_at = now()
 			WHERE id = $1::uuid
-		`, vacancyID, v.CollectedAt.UTC(), v.IsActive)
+		`, vacancyID, v.CollectedAt.UTC(), v.IsActive, regionID, roleID, employerID)
 		if err != nil {
 			return false, atDBStage("touch vacancy", err)
 		}
@@ -456,11 +467,6 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 	var raw any
 	if len(item.RawPayload) > 0 && json.Valid(item.RawPayload) {
 		raw = string(item.RawPayload)
-	}
-
-	var roleID any
-	if v.RoleID != nil && *v.RoleID != "" {
-		roleID = *v.RoleID
 	}
 
 	err = tx.QueryRow(ctx, `
