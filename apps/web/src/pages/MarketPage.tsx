@@ -188,7 +188,8 @@ export function MarketPage() {
             <CardContent>
               <Typography variant="h6">Медианная зарплата</Typography>
               <Typography variant="body2" color="text.secondary">
-                Исторические снимки пересчитаны по курсу ЦБ на дату снимка, {currency} net
+                Исторические снимки пересчитаны по курсу ЦБ на дату снимка, {currency} net.
+                Приблизительный официальный дневной курс; не live-курс и не курс выплаты.
               </Typography>
               {points.some((point) => point.median_salary != null) ? (
                 <LineChart
@@ -212,7 +213,8 @@ export function MarketPage() {
               )}
               {points.find((point) => point.rate_date)?.rate_date && (
                 <Typography variant="caption" color="text.secondary">
-                  Каждый point использует ближайший предыдущий курс ЦБ (не старше 7 дней).
+                  Курс ЦБ на {points.find((point) => point.rate_date)?.rate_date}. Каждый point
+                  использует ближайший предыдущий курс (не старше 7 дней).
                 </Typography>
               )}
             </CardContent>

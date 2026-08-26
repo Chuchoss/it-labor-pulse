@@ -67,7 +67,8 @@ function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
       </Typography>
       {vacancy.salary_rate_date && (
         <Typography variant="caption" color="text.secondary">
-          Курс ЦБ на {vacancy.salary_rate_date}
+          Курс ЦБ на {vacancy.salary_rate_date} · приблизительный официальный дневной курс,
+          не live/платёжный
         </Typography>
       )}
       <Stack direction="row" useFlexGap sx={{ gap: 0.75, flexWrap: 'wrap' }}>
@@ -548,7 +549,8 @@ export function VacanciesPage({
             {skills.isError && <Chip size="small" color="warning" label="Справочник навыков недоступен" />}
             <Tooltip title="Фильтр пересчитывается сервером по последнему доступному официальному курсу">
               <Typography variant="caption" color="text.secondary">
-                Зарплата: {currency}, оценка net. Для валюты используется дневной курс ЦБ, не биржевой realtime.
+                Зарплата: {currency}, оценка net. Используется приблизительный официальный
+                дневной курс ЦБ, не live-курс и не курс выплаты.
               </Typography>
             </Tooltip>
           </Stack>

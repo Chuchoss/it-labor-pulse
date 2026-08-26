@@ -138,7 +138,7 @@ function RankingCard({
         <Tooltip
           title={
             metric === 'salary'
-              ? `Медиана offered salary, нормализованная в ${params.currency} net. Минимальная выборка: ${minimumSample}.`
+              ? `Медиана offered salary, нормализованная в ${params.currency} net. ${ranking.data?.pages[0]?.rate_date ? `Курс ЦБ на ${ranking.data.pages[0].rate_date}. ` : ''}Приблизительный официальный дневной курс; не live-курс и не курс выплаты. Минимальная выборка: ${minimumSample}.`
               : 'Доля считается среди активных вакансий соответствующего рейтинга за период.'
           }
         >
@@ -363,7 +363,7 @@ export function DashboardPage() {
         <MetricCard
           label="Медианная зарплата"
           value={lowSample ? 'Мало данных' : formatSalary(summary.data?.median_salary, currency)}
-          helper={`${summary.data?.salary_rate_date ? `Курс ЦБ на ${summary.data.salary_rate_date} · ` : ''}выборка: ${formatNumber(summary.data?.salary_sample_size)}`}
+          helper={`${summary.data?.salary_rate_date ? `Курс ЦБ на ${summary.data.salary_rate_date} · приблизительный официальный дневной курс, не live/платёжный · ` : ''}выборка: ${formatNumber(summary.data?.salary_sample_size)}`}
           icon={<CurrencyRubleRoundedIcon />}
           loading={summary.isLoading}
         />
@@ -562,6 +562,10 @@ export function DashboardPage() {
             />
           )}
           <Typography variant="caption" color="text.secondary">
+            {salaryPoints.find((point) => point.rate_date)?.rate_date
+              ? `Курс ЦБ на ${salaryPoints.find((point) => point.rate_date)?.rate_date}. `
+              : ''}
+            Приблизительный официальный дневной курс; не live-курс и не курс выплаты.
             Оценка по зарплатным полям вакансий, не зарплатный опрос.
           </Typography>
         </CardContent>

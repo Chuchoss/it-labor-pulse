@@ -3,14 +3,17 @@ import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded'
 import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined'
 import MenuRoundedIcon from '@mui/icons-material/MenuRounded'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
+import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import WorkOutlineRoundedIcon from '@mui/icons-material/WorkOutlineRounded'
 import {
   AppBar,
   Box,
+  CircularProgress,
   Container,
   Drawer,
   FormControl,
   IconButton,
+  InputLabel,
   List,
   ListItemButton,
   ListItemIcon,
@@ -22,13 +25,14 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation } from 'react-router-dom'
 import { api } from '../api/client'
 import { useCurrency, type DisplayCurrency } from './CurrencyContext'
 
 const drawerWidth = 236
+const fallbackCurrencies = [{ code: 'RUB', label: 'Российский рубль', symbol: '₽' }] as const
 const navigation = [
   { label: 'Обзор', path: '/', icon: <DashboardRoundedIcon /> },
   { label: 'Рынок', path: '/market', icon: <QueryStatsRoundedIcon /> },
@@ -50,13 +54,34 @@ export function AppShell({ children, mode, onToggleMode }: AppShellProps) {
     queryFn: ({ signal }) => api.currencies(signal),
     staleTime: 30 * 60 * 1000,
   })
+  const currencyOptions = useMemo(() => {
+    if (!currencies.data) {
+      return currency === 'RUB'
+        ? fallbackCurrencies
+        : [...fallbackCurrencies, { code: currency, label: currency, symbol: currency }]
+    }
+    return currencies.data.rates.filter((item) => item.available)
+  }, [currencies.data, currency])
   const selectedRate = currencies.data?.rates.find((item) => item.code === currency)
   const rateLabel =
     currency === 'RUB'
-      ? 'Каноническая валюта'
+      ? 'Базовая валюта зарплат — RUB. Пересчёт не применяется.'
       : selectedRate?.rate_date
-        ? `Курс ЦБ на ${selectedRate.rate_date}`
-        : 'Курс ЦБ недоступен'
+        ? `Курс ЦБ на ${selectedRate.rate_date}. Приблизительный официальный дневной курс; не live-курс и не курс выплаты.`
+        : 'Курс ЦБ недоступен. Зарплаты остаются доступны в RUB.'
+
+  useEffect(() => {
+    if (currencies.isError && currency !== 'RUB') {
+      setCurrency('RUB')
+      return
+    }
+    if (
+      currencies.data &&
+      !currencies.data.rates.some((item) => item.code === currency && item.available)
+    ) {
+      setCurrency('RUB')
+    }
+  }, [currencies.data, currencies.isError, currency, setCurrency])
 
   const drawer = (
     <Stack sx={{ height: '100%' }}>
@@ -131,24 +156,61 @@ export function AppShell({ children, mode, onToggleMode }: AppShellProps) {
           >
             <MenuRoundedIcon />
           </IconButton>
-          <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ flexGrow: 1, display: { xs: 'none', sm: 'block' } }}
+          >
             Рынок IT в России
           </Typography>
           <Tooltip title={rateLabel}>
-            <FormControl size="small" sx={{ minWidth: 88, mr: 1 }}>
+            <FormControl
+              size="small"
+              sx={{
+                width: { xs: 158, sm: 190 },
+                mr: { xs: 0.5, sm: 1 },
+                ml: { xs: 'auto', sm: 0 },
+              }}
+            >
+              <InputLabel id="salary-currency-label">Валюта зарплат</InputLabel>
               <Select
+                labelId="salary-currency-label"
+                label="Валюта зарплат"
                 value={currency}
-                aria-label="Валюта отображения зарплат"
                 onChange={(event) => setCurrency(event.target.value as DisplayCurrency)}
+                endAdornment={
+                  currencies.isLoading ? (
+                    <CircularProgress
+                      size={16}
+                      aria-label="Загрузка курсов валют"
+                      sx={{ mr: 2.5 }}
+                    />
+                  ) : undefined
+                }
               >
-                {(['RUB', 'USD', 'EUR', 'CNY'] as const).map((code) => (
-                  <MenuItem key={code} value={code}>
-                    {code}
+                {currencyOptions.map((item) => (
+                  <MenuItem key={item.code} value={item.code}>
+                    {item.code} · {item.symbol}
                   </MenuItem>
                 ))}
               </Select>
             </FormControl>
           </Tooltip>
+          {currencies.isError && (
+            <Tooltip title="Курсы временно недоступны — зарплаты показаны в RUB.">
+              <Box
+                role="status"
+                aria-label="Курсы валют временно недоступны; используется RUB"
+                sx={{ display: 'flex', mr: 0.5 }}
+              >
+                <WarningAmberRoundedIcon
+                  color="warning"
+                  fontSize="small"
+                  aria-hidden="true"
+                />
+              </Box>
+            </Tooltip>
+          )}
           <Tooltip title={mode === 'light' ? 'Тёмная тема' : 'Светлая тема'}>
             <IconButton aria-label="Переключить тему" onClick={onToggleMode}>
               {mode === 'light' ? <DarkModeOutlinedIcon /> : <LightModeOutlinedIcon />}

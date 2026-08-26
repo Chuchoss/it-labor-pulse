@@ -2,6 +2,48 @@ import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 
 export const handlers = [
+  http.get('*/api/v1/currencies', () =>
+    HttpResponse.json({
+      base_currency: 'RUB',
+      rates: [
+        {
+          code: 'RUB',
+          label: 'Российский рубль',
+          symbol: '₽',
+          rate_date: null,
+          stale_days: null,
+          available: true,
+        },
+        {
+          code: 'USD',
+          label: 'Доллар США',
+          symbol: '$',
+          rate_date: '2026-08-26',
+          provider: 'cbr',
+          stale_days: 0,
+          available: true,
+        },
+        {
+          code: 'EUR',
+          label: 'Евро',
+          symbol: '€',
+          rate_date: '2026-08-26',
+          provider: 'cbr',
+          stale_days: 0,
+          available: true,
+        },
+        {
+          code: 'CNY',
+          label: 'Китайский юань',
+          symbol: '¥',
+          rate_date: '2026-08-26',
+          provider: 'cbr',
+          stale_days: 0,
+          available: true,
+        },
+      ],
+    }),
+  ),
   http.get('*/api/v1/dashboard/summary', () =>
     HttpResponse.json({
       period: { from: '2026-07-27', to: '2026-08-26' },
