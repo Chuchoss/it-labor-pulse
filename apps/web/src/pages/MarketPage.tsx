@@ -190,8 +190,7 @@ export function MarketPage() {
             <CardContent>
               <Typography variant="h6">Медианная зарплата</Typography>
               <Typography variant="body2" color="text.secondary">
-                Исторические снимки пересчитаны по курсу ЦБ на дату снимка, {currency} net.
-                Приблизительный официальный дневной курс; не live-курс и не курс выплаты.
+                Исторические снимки, {currency} net
               </Typography>
               {points.some((point) => point.median_salary != null) ? (
                 <LineChart
@@ -212,12 +211,6 @@ export function MarketPage() {
                 <Alert severity="info" sx={{ mt: 2 }}>
                   Зарплатные данные или исторический курс для выбранного периода недоступны.
                 </Alert>
-              )}
-              {points.find((point) => point.rate_date)?.rate_date && (
-                <Typography variant="caption" color="text.secondary">
-                  Курс ЦБ на {points.find((point) => point.rate_date)?.rate_date}. Каждый point
-                  использует ближайший предыдущий курс (не старше 7 дней).
-                </Typography>
               )}
             </CardContent>
           </Card>
@@ -251,10 +244,6 @@ export function MarketPage() {
                   value={new Date(coverage.data.next_scheduled_cycle).toLocaleString('ru-RU')}
                 />
                 <CoverageItem
-                  label="Методика"
-                  value={coverage.data.method_version || '—'}
-                />
-                <CoverageItem
                   label="Последний полный цикл"
                   value={
                     coverage.data.latest_complete_cycle
@@ -263,11 +252,6 @@ export function MarketPage() {
                   }
                 />
               </Box>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-                Активные — дедуплицированные вакансии из полного дневного search-discovery.
-                Опубликованные — вакансии с <code>published_at</code> в UTC-окне снимка.
-                Навыки и полные карточки обновляются отдельно фоновой hydration.
-              </Typography>
             </CardContent>
           </Card>
 
@@ -275,8 +259,7 @@ export function MarketPage() {
             <CardContent>
               <Typography variant="h6">Спрос на рынке</Typography>
               <Typography variant="body2" color="text.secondary">
-                Исторический active_count хранится в снимках и не восстанавливается из
-                текущих вакансий
+                Полные снимки за выбранный период
               </Typography>
               {demand.isLoading && <Skeleton variant="rounded" height={340} sx={{ mt: 2 }} />}
               {demand.isError && (

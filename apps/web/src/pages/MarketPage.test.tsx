@@ -11,7 +11,7 @@ describe('MarketPage', () => {
     expect(await screen.findByText('Покрытие данных')).toBeInTheDocument()
     expect(screen.getByText('2026')).toBeInTheDocument()
     expect(screen.queryByText('2024')).not.toBeInTheDocument()
-    expect(screen.getByText('vacancy_demand_v2')).toBeInTheDocument()
+    expect(screen.queryByText('vacancy_demand_v2')).not.toBeInTheDocument()
     expect(await screen.findByText('Активные')).toBeInTheDocument()
     expect(screen.getByText('Опубликованные')).toBeInTheDocument()
   })

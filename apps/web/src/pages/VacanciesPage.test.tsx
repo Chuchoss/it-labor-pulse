@@ -315,6 +315,7 @@ describe('VacanciesPage', () => {
     expect(toInput).toHaveAttribute('inputmode', 'numeric')
     expect(fromInput).toHaveAttribute('placeholder', 'ГГГГ-ММ-ДД')
     expect(toInput).toHaveAttribute('placeholder', 'ГГГГ-ММ-ДД')
+    expect(screen.queryByText('Формат: ГГГГ-ММ-ДД')).not.toBeInTheDocument()
 
     fireEvent.change(fromInput, { target: { value: '2026-08-01' } })
     fireEvent.change(toInput, { target: { value: '2026-08-03' } })

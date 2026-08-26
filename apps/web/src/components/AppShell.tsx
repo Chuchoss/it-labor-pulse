@@ -1,5 +1,6 @@
 import DarkModeOutlinedIcon from '@mui/icons-material/DarkModeOutlined'
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined'
 import MenuRoundedIcon from '@mui/icons-material/MenuRounded'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
@@ -199,24 +200,34 @@ export function AppShell({ children, mode, onToggleMode }: AppShellProps) {
                 </MenuItem>
               ))}
             </Select>
-            <Box
-              component="span"
-              id="salary-currency-description"
-              sx={{
-                position: 'absolute',
-                width: 1,
-                height: 1,
-                p: 0,
-                m: -1,
-                overflow: 'hidden',
-                clip: 'rect(0 0 0 0)',
-                whiteSpace: 'nowrap',
-                border: 0,
-              }}
-            >
-              {rateLabel}
-            </Box>
           </FormControl>
+          <Tooltip title={rateLabel}>
+            <IconButton
+              aria-label="Информация о пересчёте зарплат"
+              aria-describedby="salary-currency-description"
+              size="small"
+              sx={{ mr: { xs: 0.25, sm: 0.5 } }}
+            >
+              <InfoOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Box
+            component="span"
+            id="salary-currency-description"
+            sx={{
+              position: 'absolute',
+              width: 1,
+              height: 1,
+              p: 0,
+              m: -1,
+              overflow: 'hidden',
+              clip: 'rect(0 0 0 0)',
+              whiteSpace: 'nowrap',
+              border: 0,
+            }}
+          >
+            {rateLabel}
+          </Box>
           {currencies.isError && (
             <Tooltip title="Курсы временно недоступны — зарплаты показаны в RUB.">
               <Box

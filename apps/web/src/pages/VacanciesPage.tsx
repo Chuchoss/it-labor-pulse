@@ -92,12 +92,6 @@ function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
         )}
         {vacancy.salary_gross === true ? ' · до вычета налогов' : ''}
       </Typography>
-      {vacancy.salary_rate_date && (
-        <Typography variant="caption" color="text.secondary">
-          Курс ЦБ на {vacancy.salary_rate_date} · приблизительный официальный дневной курс,
-          не live/платёжный
-        </Typography>
-      )}
       <Stack direction="row" useFlexGap sx={{ gap: 0.75, flexWrap: 'wrap' }}>
         {(vacancy.skills ?? []).slice(0, 5).map((skill) => (
           <Chip key={skill} label={skill} size="small" variant="outlined" />
@@ -431,9 +425,6 @@ export function VacanciesPage({
             Обновить
           </Button>
         </Stack>
-        <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-          Drill-down по нормализованным данным из PostgreSQL
-        </Typography>
       </Box>
 
       <Card variant="outlined">
@@ -543,16 +534,13 @@ export function VacanciesPage({
               }}
               onBlur={() => setDraftPublishedFrom((value) => normalizeDateOnly(value))}
               error={dateError?.field === 'from'}
-              helperText={dateError?.field === 'from' ? dateError.message : 'Формат: ГГГГ-ММ-ДД'}
+              helperText={dateError?.field === 'from' ? dateError.message : undefined}
               size="small"
               slotProps={{
                 inputLabel: { shrink: true },
                 htmlInput: { inputMode: 'numeric', autoComplete: 'off' },
               }}
-              sx={{
-                width: { xs: '100%', md: 180 },
-                '& .MuiFormHelperText-root': { minHeight: '1.25rem', mt: 0.5 },
-              }}
+              sx={{ width: { xs: '100%', md: 180 } }}
             />
             <TextField
               label="Дата публикации до"
@@ -567,16 +555,13 @@ export function VacanciesPage({
               }}
               onBlur={() => setDraftPublishedTo((value) => normalizeDateOnly(value))}
               error={dateError?.field === 'to'}
-              helperText={dateError?.field === 'to' ? dateError.message : 'Формат: ГГГГ-ММ-ДД'}
+              helperText={dateError?.field === 'to' ? dateError.message : undefined}
               size="small"
               slotProps={{
                 inputLabel: { shrink: true },
                 htmlInput: { inputMode: 'numeric', autoComplete: 'off' },
               }}
-              sx={{
-                width: { xs: '100%', md: 180 },
-                '& .MuiFormHelperText-root': { minHeight: '1.25rem', mt: 0.5 },
-              }}
+              sx={{ width: { xs: '100%', md: 180 } }}
             />
             <FormControl
               size="small"
@@ -661,12 +646,9 @@ export function VacanciesPage({
             {regions.isError && <Chip size="small" color="warning" label="Справочник регионов недоступен" />}
             {roles.isError && <Chip size="small" color="warning" label="Справочник ролей недоступен" />}
             {skills.isError && <Chip size="small" color="warning" label="Справочник навыков недоступен" />}
-            <Tooltip title="Фильтр пересчитывается сервером по последнему доступному официальному курсу">
-              <Typography variant="caption" color="text.secondary">
-                Зарплата: {currency}, оценка net. Используется приблизительный официальный
-                дневной курс ЦБ, не live-курс и не курс выплаты.
-              </Typography>
-            </Tooltip>
+            <Typography variant="caption" color="text.secondary">
+              Зарплата: {currency} · net
+            </Typography>
           </Stack>
         </CardContent>
       </Card>

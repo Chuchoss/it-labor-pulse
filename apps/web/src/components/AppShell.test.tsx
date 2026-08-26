@@ -107,6 +107,19 @@ describe('AppShell salary currency selector', () => {
     expect(select).toHaveAccessibleDescription(/Базовая валюта зарплат/)
   })
 
+  it('exposes FX details through a keyboard-accessible info control', async () => {
+    const user = userEvent.setup()
+    renderShell()
+
+    const info = await screen.findByRole('button', { name: 'Информация о пересчёте зарплат' })
+    info.focus()
+    expect(info).toHaveAccessibleName('Информация о пересчёте зарплат')
+    await user.hover(info)
+    await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent(/Базовая валюта зарплат/))
+    await user.click(screen.getByRole('combobox', { name: 'Валюта зарплат' }))
+    expect(screen.getByRole('listbox')).toBeVisible()
+  })
+
   it('falls back to usable RUB when currency metadata is unavailable', async () => {
     localStorage.setItem('lma-display-currency', 'EUR')
     server.use(
