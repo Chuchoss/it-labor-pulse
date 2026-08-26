@@ -84,16 +84,21 @@ jobs:
       # - name: golangci-lint
       #   uses: golangci/golangci-lint-action@v6
 
-      # --- TODO (when apps/web exists): frontend unit ---
-      # - name: Setup Node
-      #   uses: actions/setup-node@v4
-      #   with:
-      #     node-version: "22"
-      #     cache: npm
-      #     cache-dependency-path: apps/web/package-lock.json
-      # - name: Vitest
-      #   working-directory: apps/web
-      #   run: npm ci && npm test
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Frontend checks
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
 
       # --- TODO (when libs/proto + buf.yaml exist): contract ---
       # - name: buf lint / breaking
@@ -110,7 +115,7 @@ jobs:
 
       - name: CI gate summary
         run: |
-          echo "Gate job 'test' passed critical checks (OpenAPI, no .env, go test if modules exist)."
+          echo "Gate job 'test' passed critical checks (OpenAPI, no .env, Go and frontend checks)."
           echo "Suite intent:"
           echo "  PR + developer: lint + unit + contract lite"
           echo "  production push: + integration (when code exists)"

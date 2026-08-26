@@ -131,7 +131,7 @@ Nav: пункт «Тенденции» не добавлять в MVP shell до
 
 ## Техзаметки
 
-- Base URL: `VITE_API_BASE_URL` → **BFF** (`http://localhost:8080/api/v1`, см. `.env.example`).
+- Base URL: `VITE_API_BASE_URL` → **BFF** (default `/api/v1`; local Vite proxy → `http://localhost:8080`, см. `.env.example`).
 - `request_id` из error body — в UI error state.
 - OpenAPI → опциональная генерация типов (`openapi-typescript`) в Phase 1.
 - Auth MVP отсутствует; admin token только если появится admin UI.

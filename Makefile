@@ -7,7 +7,7 @@ COMPOSE      := docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 # Optional local data plane; cloud PG/Redis need no Compose services.
 PROFILES_INFRA := --profile local-redis --profile local-pg
 
-.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff ingest-hh ingest-hh-fixture test
+.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff run-web ingest-hh ingest-hh-fixture test test-go test-web
 
 help:
 	@echo "LMA local targets:"
@@ -19,9 +19,10 @@ help:
 	@echo "  make up-mvp         - reserved for Phase 0–1 apps; for now see up-cloud / up-local-*"
 	@echo "  make up-obs         - Loki + Tempo + Alloy + Prometheus + Grafana (profile observability)"
 	@echo "  make run-bff        - run public BFF on :8080 (loads .env)"
+	@echo "  make run-web        - run Vite SPA on :3000 (proxy to BFF :8080)"
 	@echo "  make ingest-hh      - one-shot HH ingest → normalize → PG (needs DATABASE_URL + HH_USER_AGENT)"
 	@echo "  make ingest-hh-fixture - same path using testdata/hh (no live HH; needs DATABASE_URL)"
-	@echo "  make test           - go test ./..."
+	@echo "  make test           - Go + frontend unit tests"
 	@echo "  make down           - stop compose stack (local-redis + local-pg)"
 	@echo "  make wait-ready     - wait until local-redis is healthy (skip if cloud Redis)"
 	@echo "  make logs           - follow compose logs"
@@ -162,6 +163,9 @@ run-bff: $(ENV_FILE)
 	@set -a; . ./$(ENV_FILE); set +a; \
 	go run ./apps/bff/cmd/bff
 
+run-web:
+	npm --prefix apps/web run dev
+
 # Phase 1: one-shot HH ingest (official API only). Requires migrate-up first.
 ingest-hh: $(ENV_FILE)
 	@set -a; . ./$(ENV_FILE); set +a; \
@@ -172,5 +176,10 @@ ingest-hh-fixture: $(ENV_FILE)
 	@set -a; . ./$(ENV_FILE); set +a; \
 	go run ./apps/ingest/cmd/ingest -fixture
 
-test:
+test: test-go test-web
+
+test-go:
 	go test ./...
+
+test-web:
+	npm --prefix apps/web test

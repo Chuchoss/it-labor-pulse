@@ -36,6 +36,24 @@ curl -s "http://localhost:8080/api/v1/dashboard/summary?from=2026-07-01&to=2026-
 
 Публичный вход — `BFF_HTTP_ADDR` (default `:8080`). Phase 1 read-маршруты читают PostgreSQL и требуют `DATABASE_URL`; Redis пока опционален. Отдельный gateway — Target Phase 3+ ([ADR 010](./docs/architecture/adr/010-api-gateway.md)). Health пингует настроенные PostgreSQL и Redis (`checks.*`, `status: degraded` при недоступности; процесс не падает). См. [локальный DX](./docs/architecture/12-local-dev.md) · [контракт API](./api/openapi.yaml).
 
+### Phase 1 web (React SPA)
+
+```powershell
+# терминал 1, из корня
+go run ./apps/bff/cmd/bff
+
+# терминал 2
+Set-Location apps/web
+npm ci
+npm run dev
+```
+
+UI: <http://localhost:3000>. По умолчанию Vite proxy отправляет `/api` на BFF
+`:8080`, поэтому CORS не нужен. Публичный base path задаётся через
+`VITE_API_BASE_URL` (пример: `/api/v1`); в frontend нельзя передавать HH/admin
+токены или строки подключения. Проверки: `npm run lint`, `npm run typecheck`,
+`npm test`, `npm run build`.
+
 ### Phase 1 ingest (HH → normalize → Postgres)
 
 ```bash
@@ -62,8 +80,8 @@ CI: GitHub Actions (`test` required on PRs).
 
 | Сейчас | Дальше |
 |--------|--------|
-| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra, Phase 0–1 BFF read API, shared normalize, Phase 1 HH ingest → PG (`apps/ingest`) | Web UI, Redis cache и дальше по [фазам](./docs/architecture/00-overview.md) |
+| Архитектура, OpenAPI/proto, HH-фикстуры, cloud/local infra, Phase 0–1 BFF read API, React SPA (`/`, `/vacancies`), shared normalize, Phase 1 HH ingest → PG (`apps/ingest`) | Roles/regions UI, Redis cache и дальше по [фазам](./docs/architecture/00-overview.md) |
 
 ## Attribution
 
-Данные вакансий принадлежат площадкам (HH и др.). Соблюдайте ToS, лимиты и User-Agent. Зарплаты на дашборде — оценка по полям salary в вакансиях, не опросы.
+Данные вакансий: HeadHunter и другие указанные источники. Соблюдайте ToS, лимиты и User-Agent. Медианные зарплаты — оценка по полям salary в вакансиях (offered), приведённым к net упрощённо; это не опрос и не офер кандидату.

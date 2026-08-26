@@ -100,13 +100,13 @@ make migrate-up
 7. Подключиться к БД/Redis (облако или local — см. [ниже](#подключение-к-postgres--redis), [Облачный PostgreSQL](#облачный-postgresql), [Облачный Redis](#облачный-redis)).
 
 **Сейчас в Compose:** Redis — опционально (`local-redis`); Postgres — опционально (`local-pg`). Profile `mvp` зарезервирован под приложения Phase 0–1.  
-**Дальше Phase 0:** + bff hello, web shell → health: `curl -sf http://localhost:8080/api/v1/health`.  
-**Phase 1:** + ingest/normalize (in-process), query, ручной admin ingest.
+**Phase 1:** BFF + React SPA на хосте, ingest/normalize (in-process), PostgreSQL; Redis опционален.
 
 Локальный API (один процесс):
 
 ```bash
 make run-bff          # public :8080
+make run-web          # Vite SPA :3000, /api proxy → BFF :8080
 
 # UI / API
 # http://localhost:3000
@@ -127,6 +127,21 @@ curl -X POST http://localhost:8080/api/v1/admin/ingest/runs \
 опциональным и не блокирует чтение из PostgreSQL. Параметры периода имеют
 формат `YYYY-MM-DD`, `page` начинается с 1, `page_size` ограничен 100.
 Полный контракт и список фильтров: [`api/openapi.yaml`](../../api/openapi.yaml).
+
+PowerShell без Make (в двух терминалах):
+
+```powershell
+# терминал 1, корень репозитория
+go run ./apps/bff/cmd/bff
+
+# терминал 2
+Set-Location apps/web
+npm ci
+npm run dev
+```
+
+По умолчанию `VITE_API_BASE_URL=/api/v1`, а Vite proxy отправляет `/api` на
+`http://localhost:8080`; расширять CORS BFF для локальной разработки не нужно.
 
 Отдельный gateway — Target Phase 3+ ([ADR 010](./adr/010-api-gateway.md)).
 
@@ -190,6 +205,7 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `REDIS_ADDR` | fallback | `localhost:6379` | `host:port`, если клиент не читает URL |
 | `REDIS_PASSWORD` | нет | пусто | Local обычно без пароля; cloud — в URL или отдельно |
 | `BFF_HTTP_ADDR` | нет | `:8080` | Публичный BFF (MVP edge) |
+| `VITE_API_BASE_URL` | нет | `/api/v1` | Публичный base path SPA; только несекретное значение |
 | `QUERY_HTTP_ADDR` / `QUERY_GRPC_ADDR` | нет | `:8083` / `:9091` | Query (HTTP debug) |
 | `INGEST_HTTP_ADDR` / `INGEST_GRPC_ADDR` | нет | `:8082` / `:9092` | Ingest admin |
 | `KAFKA_BROKERS` | Phase 2 | `localhost:9092` | Redpanda/Kafka |
@@ -220,13 +236,14 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `make logs` / `make ps` | логи / статус | **есть** |
 | `make wait-ready` | health local Redis; позже + BFF `/api/v1/health` | **есть** (infra) |
 | `make run-bff` | публичный BFF на `:8080` | **есть** |
+| `make run-web` | Vite SPA на `:3000`, proxy `/api` → BFF | **есть** |
 | `make psql` / `make redis-cli` | shell в контейнеры (`local-pg` / `local-redis`) | **есть** |
 | `make migrate-up` / `migrate-down` | golang-migrate по `DATABASE_URL` (Docker image) | **есть** |
 | `make bust-cache` | `INCR meta:cache_version` (local Redis) | **есть** |
 | `make up-full` | `--profile full` | позже (Phase 2+) |
 | `make up-obs` | Compose `--profile observability` (Loki/Tempo/Grafana) | **есть** (stub) |
 | `make ingest-hh` / `ingest-hh-fixture` | one-shot HH → normalize → PG (`apps/ingest`); fixture без live HH | Phase 1 |
-| `make test` | `go test ./...` | **есть** |
+| `make test` | `go test ./...` + Vitest web | **есть** |
 | `make proto` / `openapi-lint` / `smoke` / `fmt` / `lint` | по мере появления tooling | planned |
 
 **Windows без Make** (PowerShell, из корня репо):
