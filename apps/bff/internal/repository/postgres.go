@@ -1042,7 +1042,7 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 		GROUP BY v.id, src.name
 		ORDER BY v.published_at DESC NULLS LAST, v.id
 		LIMIT $11 OFFSET $12
-	`, append(args, filter.Page.Size, (filter.Page.Number-1)*filter.Page.Size, displayCurrency(filter.Currency))...)
+	`, append(args, displayCurrency(filter.Currency))...)
 	if err != nil {
 		return readapi.VacancyPage{}, fmt.Errorf("query vacancies: %w", err)
 	}
