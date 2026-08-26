@@ -220,16 +220,18 @@ type RankingPage struct {
 }
 
 type VacancyFilter struct {
-	Query      string
-	RoleIDs    []string
-	RegionIDs  []string
-	SkillIDs   []string
-	Source     string
-	OnlyActive bool
-	SalaryMin  *float64
-	SalaryMax  *float64
-	Page       Page
-	Currency   string
+	Query         string
+	RoleIDs       []string
+	RegionIDs     []string
+	SkillIDs      []string
+	Source        string
+	OnlyActive    bool
+	SalaryMin     *float64
+	SalaryMax     *float64
+	PublishedFrom *time.Time
+	PublishedTo   *time.Time
+	Page          Page
+	Currency      string
 }
 
 type Vacancy struct {

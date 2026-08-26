@@ -149,10 +149,14 @@ export function VacanciesPage({
   const skillIDs = useMemo(() => csvParam(skillParam), [skillParam])
   const salaryMin = searchParams.get('salary_min') || ''
   const salaryMax = searchParams.get('salary_max') || ''
+  const publishedFrom = searchParams.get('published_from') || ''
+  const publishedTo = searchParams.get('published_to') || ''
   const pageSize = Math.min(Math.max(Number(searchParams.get('page_size')) || 20, 1), 100)
   const [draftQuery, setDraftQuery] = useState(query)
   const [draftSalaryMin, setDraftSalaryMin] = useState(salaryMin)
   const [draftSalaryMax, setDraftSalaryMax] = useState(salaryMax)
+  const [draftPublishedFrom, setDraftPublishedFrom] = useState(publishedFrom)
+  const [draftPublishedTo, setDraftPublishedTo] = useState(publishedTo)
   const [newVacancyState, setNewVacancyState] = useState<{
     filter: string
     ids: Set<string>
@@ -168,8 +172,8 @@ export function VacanciesPage({
 
   const vacancyQueryKey = useMemo(
     () =>
-      ['vacancies', { query, source, onlyActive, pageSize, roleIDs, regionIDs, skillIDs, salaryMin, salaryMax, currency }] as const,
-    [currency, onlyActive, pageSize, query, regionIDs, roleIDs, salaryMax, salaryMin, skillIDs, source],
+      ['vacancies', { query, source, onlyActive, pageSize, roleIDs, regionIDs, skillIDs, salaryMin, salaryMax, publishedFrom, publishedTo, currency }] as const,
+    [currency, onlyActive, pageSize, publishedFrom, publishedTo, query, regionIDs, roleIDs, salaryMax, salaryMin, skillIDs, source],
   )
   const vacancies = useInfiniteQuery({
     queryKey: vacancyQueryKey,
@@ -183,6 +187,8 @@ export function VacanciesPage({
           skill_id: skillIDs.join(',') || undefined,
           salary_min: salaryMin ? Number(salaryMin) : undefined,
           salary_max: salaryMax ? Number(salaryMax) : undefined,
+          published_from: publishedFrom || undefined,
+          published_to: publishedTo || undefined,
           source: source || undefined,
           only_active: onlyActive,
           page: pageParam,
@@ -233,6 +239,8 @@ export function VacanciesPage({
           skill_id: skillIDs.join(',') || undefined,
           salary_min: salaryMin ? Number(salaryMin) : undefined,
           salary_max: salaryMax ? Number(salaryMax) : undefined,
+          published_from: publishedFrom || undefined,
+          published_to: publishedTo || undefined,
           source: source || undefined,
           only_active: onlyActive,
           page: FIRST_PAGE,
@@ -399,7 +407,8 @@ export function VacanciesPage({
   const skillOptions = skills.data?.data ?? []
   const activeFilterCount =
     Number(Boolean(query)) + roleIDs.length + regionIDs.length + skillIDs.length +
-    Number(Boolean(salaryMin)) + Number(Boolean(salaryMax)) + Number(Boolean(source)) +
+    Number(Boolean(salaryMin)) + Number(Boolean(salaryMax)) +
+    Number(Boolean(publishedFrom)) + Number(Boolean(publishedTo)) + Number(Boolean(source)) +
     Number(!onlyActive)
 
   return (
@@ -439,6 +448,8 @@ export function VacanciesPage({
                 q: draftQuery.trim() || undefined,
                 salary_min: draftSalaryMin || undefined,
                 salary_max: draftSalaryMax || undefined,
+                published_from: draftPublishedFrom || undefined,
+                published_to: draftPublishedTo || undefined,
               })
             }}
           >
@@ -511,6 +522,24 @@ export function VacanciesPage({
               size="small"
               sx={{ width: { xs: '100%', md: 160 } }}
             />
+            <TextField
+              label="Дата публикации от"
+              type="date"
+              value={draftPublishedFrom}
+              onChange={(event) => setDraftPublishedFrom(event.target.value)}
+              size="small"
+              slotProps={{ inputLabel: { shrink: true } }}
+              sx={{ width: { xs: '100%', md: 180 } }}
+            />
+            <TextField
+              label="Дата публикации до"
+              type="date"
+              value={draftPublishedTo}
+              onChange={(event) => setDraftPublishedTo(event.target.value)}
+              size="small"
+              slotProps={{ inputLabel: { shrink: true } }}
+              sx={{ width: { xs: '100%', md: 180 } }}
+            />
             <FormControl
               size="small"
               sx={{ minWidth: 150, width: { xs: '100%', md: 'auto' }, flexShrink: 0 }}
@@ -560,6 +589,8 @@ export function VacanciesPage({
                 setDraftQuery('')
                 setDraftSalaryMin('')
                 setDraftSalaryMax('')
+                setDraftPublishedFrom('')
+                setDraftPublishedTo('')
                 setSearchParams({})
               }}
             >
@@ -568,6 +599,26 @@ export function VacanciesPage({
           </Stack>
           <Stack direction="row" useFlexGap sx={{ mt: 1.5, gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
             <Chip size="small" label={`Активных фильтров: ${activeFilterCount}`} />
+            {publishedFrom && (
+              <Chip
+                size="small"
+                label={`Публикация от: ${publishedFrom}`}
+                onDelete={() => {
+                  setDraftPublishedFrom('')
+                  updateParams({ published_from: undefined })
+                }}
+              />
+            )}
+            {publishedTo && (
+              <Chip
+                size="small"
+                label={`Публикация до: ${publishedTo}`}
+                onDelete={() => {
+                  setDraftPublishedTo('')
+                  updateParams({ published_to: undefined })
+                }}
+              />
+            )}
             {regions.isError && <Chip size="small" color="warning" label="Справочник регионов недоступен" />}
             {roles.isError && <Chip size="small" color="warning" label="Справочник ролей недоступен" />}
             {skills.isError && <Chip size="small" color="warning" label="Справочник навыков недоступен" />}

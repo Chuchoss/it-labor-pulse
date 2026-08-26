@@ -984,6 +984,7 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 	args := []any{
 		filter.Query, nonNilStrings(filter.RoleIDs), nonNilStrings(filter.RegionIDs), filter.Source, filter.OnlyActive,
 		salaryMin, salaryMax, nonNilStrings(filter.SkillIDs),
+		filter.PublishedFrom, filter.PublishedTo,
 	}
 	conditions := `
 		v.deleted_at IS NULL
@@ -1008,6 +1009,8 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 					  AND filter_vs.skill_id = ANY($8::uuid[])
 				)
 			)
+			AND ($9::timestamptz IS NULL OR v.published_at >= $9::timestamptz)
+			AND ($10::timestamptz IS NULL OR v.published_at < $10::timestamptz)
 	`
 	var total int64
 	if err := p.db.QueryRow(ctx, `SELECT count(*) FROM vacancies v WHERE `+conditions, args...).Scan(&total); err != nil {
@@ -1020,7 +1023,7 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 			v.role_id::text, v.region_id::text,
 			v.salary_from_rub_net::float8,
 			v.salary_to_rub_net::float8,
-			CASE WHEN v.salary_mid IS NOT NULL THEN $11::text END,
+			CASE WHEN v.salary_mid IS NOT NULL THEN $13::text END,
 			CASE WHEN v.salary_mid IS NOT NULL THEN false END,
 			v.salary_from_rub_net::float8, v.salary_to_rub_net::float8,
 			v.published_at, v.first_observed_at,
@@ -1038,8 +1041,8 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 		WHERE `+conditions+`
 		GROUP BY v.id, src.name
 		ORDER BY v.published_at DESC NULLS LAST, v.id
-		LIMIT $9 OFFSET $10
-	`, append(args, displayCurrency(filter.Currency))...)
+		LIMIT $11 OFFSET $12
+	`, append(args, filter.Page.Size, (filter.Page.Number-1)*filter.Page.Size, displayCurrency(filter.Currency))...)
 	if err != nil {
 		return readapi.VacancyPage{}, fmt.Errorf("query vacancies: %w", err)
 	}

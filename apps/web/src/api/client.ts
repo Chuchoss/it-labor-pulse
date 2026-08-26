@@ -211,6 +211,8 @@ export const api = {
       salary_max?: number
       source?: string
       only_active?: boolean
+      published_from?: string
+      published_to?: string
       page: number
       page_size: number
       currency?: string

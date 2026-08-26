@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -296,6 +297,41 @@ func TestVacancyFilterCombination(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 	require.Equal(t, http.StatusOK, recorder.Code)
+}
+
+func TestVacancyPublicationDateFilterNormalizesUTCAndDateEnd(t *testing.T) {
+	t.Parallel()
+	var got readapi.VacancyFilter
+	server := New(Options{
+		Addr: ":0",
+		ReadService: stubReadService{listVacancies: func(_ context.Context, filter readapi.VacancyFilter) (readapi.VacancyPage, error) {
+			got = filter
+			return readapi.VacancyPage{Data: []readapi.Vacancy{}, Page: 1, PageSize: 20}, nil
+		}},
+	})
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/v1/vacancies?published_from=2026-08-01&published_to=2026-08-03T02:00:00%2B03:00", nil)
+	recorder := httptest.NewRecorder()
+	server.Handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), *got.PublishedFrom)
+	require.Equal(t, time.Date(2026, 8, 2, 23, 0, 0, 0, time.UTC), *got.PublishedTo)
+}
+
+func TestVacancyPublicationDateFilterRejectsInvalidReversedAndLongRanges(t *testing.T) {
+	t.Parallel()
+	server := New(Options{Addr: ":0", ReadService: stubReadService{}})
+	for _, path := range []string{
+		"/api/v1/vacancies?published_from=not-a-date",
+		"/api/v1/vacancies?published_from=2026-08-04&published_to=2026-08-03",
+		"/api/v1/vacancies?published_from=2026-01-01&published_to=2027-01-02",
+	} {
+		recorder := httptest.NewRecorder()
+		server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusBadRequest, recorder.Code, path)
+		require.Contains(t, recorder.Body.String(), `"code":"VALIDATION_ERROR"`, path)
+	}
 }
 
 func TestReadHandlerErrorMapping(t *testing.T) {

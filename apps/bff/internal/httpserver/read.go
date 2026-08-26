@@ -304,6 +304,24 @@ func (h *ReadHandler) listVacancies(w http.ResponseWriter, r *http.Request) {
 		h.validationError(w, r, fieldError{"salary_min", "must not exceed salary_max"})
 		return
 	}
+	publishedFrom, err := parseOptionalPublishedDate(values, "published_from", false)
+	if err != nil {
+		h.validationError(w, r, err)
+		return
+	}
+	publishedTo, err := parseOptionalPublishedDate(values, "published_to", true)
+	if err != nil {
+		h.validationError(w, r, err)
+		return
+	}
+	if publishedFrom != nil && publishedTo != nil && !publishedFrom.Before(*publishedTo) {
+		h.validationError(w, r, fieldError{"published_from", "must be before published_to"})
+		return
+	}
+	if publishedFrom != nil && publishedTo != nil && publishedTo.Sub(*publishedFrom) > 366*24*time.Hour {
+		h.validationError(w, r, fieldError{"published_to", "date range must not exceed 366 days"})
+		return
+	}
 	query := strings.TrimSpace(values.Get("q"))
 	if len([]rune(query)) > 200 {
 		h.validationError(w, r, fieldError{"q", "must be at most 200 characters"})
@@ -318,16 +336,18 @@ func (h *ReadHandler) listVacancies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.service.ListVacancies(r.Context(), readapi.VacancyFilter{
-		Query:      query,
-		RoleIDs:    roleIDs,
-		RegionIDs:  regionIDs,
-		SkillIDs:   skillIDs,
-		Source:     source,
-		OnlyActive: onlyActive,
-		SalaryMin:  salaryMin,
-		SalaryMax:  salaryMax,
-		Page:       page,
-		Currency:   currency,
+		Query:         query,
+		RoleIDs:       roleIDs,
+		RegionIDs:     regionIDs,
+		SkillIDs:      skillIDs,
+		Source:        source,
+		OnlyActive:    onlyActive,
+		SalaryMin:     salaryMin,
+		SalaryMax:     salaryMax,
+		PublishedFrom: publishedFrom,
+		PublishedTo:   publishedTo,
+		Page:          page,
+		Currency:      currency,
 	})
 	h.respond(w, r, result, err)
 }
@@ -579,6 +599,26 @@ func parseOptionalFloat(values url.Values, field string, minimum, maximum float6
 	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < minimum || value > maximum {
 		return nil, fieldError{field, "is outside the allowed range"}
 	}
+	return &value, nil
+}
+
+func parseOptionalPublishedDate(values url.Values, field string, end bool) (*time.Time, error) {
+	raw := strings.TrimSpace(values.Get(field))
+	if raw == "" {
+		return nil, nil
+	}
+	if value, err := time.Parse(time.DateOnly, raw); err == nil {
+		if end {
+			value = value.AddDate(0, 0, 1)
+		}
+		value = value.UTC()
+		return &value, nil
+	}
+	value, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return nil, fieldError{field, "must use YYYY-MM-DD or RFC3339"}
+	}
+	value = value.UTC()
 	return &value, nil
 }
 

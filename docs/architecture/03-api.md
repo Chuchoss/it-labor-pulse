@@ -278,7 +278,8 @@ OpenAPI: `x-lifecycle: target`.
 Поиск/список (OLTP). Для UI drill-down, не для тяжёлой аналитики.
 
 **Query:** `q`, `role_id`, `region_id`, `skill_id`, `salary_min`,
-`salary_max`, `source`, `only_active`, pagination.
+`salary_max`, `source`, `published_from?`, `published_to?`, `only_active`,
+pagination.
 
 - `role_id`, `region_id`, `skill_id`: один UUID или до 20 UUID через запятую;
   внутри одного фильтра семантика **ANY**. Для навыков достаточно совпадения
@@ -286,6 +287,13 @@ OpenAPI: `x-lifecycle: target`.
 - `salary_min` / `salary_max`: границы по канонической `salary_mid` в RUB,
   приведённой к оценке net. При заданной границе вакансии без salary не
   совпадают.
+- `published_from` и `published_to` фильтруют именно канонический `published_at`
+  из HH, а не `first_observed_at`, `updated_at` или время деактивации.
+  Обе границы передаются как ISO `YYYY-MM-DD` или RFC3339 datetime и
+  нормализуются к UTC; диапазон полуоткрытый `[published_from, published_to)`.
+  Для date-only `published_from` — начало указанного дня UTC, а
+  `published_to` — начало следующего дня UTC, поэтому UI включает весь день.
+  Даты должны быть в порядке и не могут охватывать более 366 дней.
 - Публичная выдача всегда ограничена утверждёнными семействами ролей
   `software_development`, `analytics`, `quality_assurance`; unresolved и
   out-of-scope строки не возвращаются даже с `only_active=false`.

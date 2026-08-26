@@ -113,6 +113,8 @@ paths:
         - $ref: "#/components/parameters/To"
         - $ref: "#/components/parameters/RegionIdOptional"
         - $ref: "#/components/parameters/SourceOptional"
+        - $ref: "#/components/parameters/PublishedFromOptional"
+        - $ref: "#/components/parameters/PublishedToOptional"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
         - name: sort
@@ -652,6 +654,24 @@ components:
       schema:
         type: string
         enum: [hh, superjob, remotive, adzuna]
+    PublishedFromOptional:
+      name: published_from
+      in: query
+      description: Нижняя граница published_at, включительно; дата трактуется как 00:00:00 UTC.
+      schema:
+        type: string
+        oneOf:
+          - { type: string, format: date }
+          - { type: string, format: date-time }
+    PublishedToOptional:
+      name: published_to
+      in: query
+      description: Верхняя граница published_at, исключительно; дата трактуется как начало следующего дня UTC.
+      schema:
+        type: string
+        oneOf:
+          - { type: string, format: date }
+          - { type: string, format: date-time }
     Page:
       name: page
       in: query

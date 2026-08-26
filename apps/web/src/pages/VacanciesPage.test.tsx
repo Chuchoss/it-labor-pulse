@@ -274,17 +274,20 @@ describe('VacanciesPage', () => {
     const skill = '30000000-0000-4000-8000-000000000001'
     renderPage(
       <VacanciesPage />,
-      `/vacancies?role_id=${role}&region_id=${region}&skill_id=${skill}&salary_min=100000&salary_max=300000`,
+      `/vacancies?role_id=${role}&region_id=${region}&skill_id=${skill}&salary_min=100000&salary_max=300000&published_from=2026-08-01&published_to=2026-08-03`,
     )
     expect(await screen.findByText('Вакансии не найдены')).toBeInTheDocument()
-    expect(screen.getByText('Активных фильтров: 5')).toBeInTheDocument()
+    expect(screen.getByText('Активных фильтров: 7')).toBeInTheDocument()
     expect(requestedUrls[0]).toContain(`role_id=${role}`)
     expect(requestedUrls[0]).toContain(`region_id=${region}`)
     expect(requestedUrls[0]).toContain(`skill_id=${skill}`)
     expect(requestedUrls[0]).toContain('salary_min=100000')
+    expect(requestedUrls[0]).toContain('published_from=2026-08-01')
+    expect(requestedUrls[0]).toContain('published_to=2026-08-03')
     fireEvent.click(screen.getByRole('button', { name: 'Сбросить все' }))
     await waitFor(() => expect(requestedUrls.length).toBeGreaterThan(1))
     expect(requestedUrls.at(-1)).not.toContain('salary_min')
+    expect(requestedUrls.at(-1)).not.toContain('published_from')
   })
 
   it('retries a failed next page from the fallback button', async () => {
