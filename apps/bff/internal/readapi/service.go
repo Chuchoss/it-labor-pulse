@@ -58,6 +58,12 @@ func (s *Service) DemandTrends(ctx context.Context, filter AnalyticsFilter, grai
 	})
 }
 
+func (s *Service) TrendsCoverage(ctx context.Context) (TrendsCoverage, error) {
+	return withTimeout(ctx, s.timeout, func(ctx context.Context) (TrendsCoverage, error) {
+		return s.repository.TrendsCoverage(ctx)
+	})
+}
+
 func (s *Service) TopSkills(ctx context.Context, filter AnalyticsFilter, limit int) (TopSkills, error) {
 	return withTimeout(ctx, s.timeout, func(ctx context.Context) (TopSkills, error) {
 		return s.repository.TopSkills(ctx, filter, limit)

@@ -12,13 +12,15 @@ React SPA (`web`) — дашборд аналитики IT-рынка труда
 | 2 | **Roles** | `/roles` | Спрос и зарплаты по ролям | MVP |
 | 3 | **Role detail** | `/roles/:roleId` | Одна роль: тренд + skills | MVP |
 | 4 | **Regions** | `/regions` | Срез по регионам | MVP |
-| 5 | **Trends** | `/trends` | Salary + demand time series **только по вакансиям** | MVP |
+| 5 | **Рынок** | `/market` | Persisted demand snapshots **только по вакансиям** | MVP |
 | 6 | **Vacancies** | `/vacancies` | Drill-down в OLTP-список | MVP |
 | 7 | **«Тенденции» (Perspectives)** | `/perspectives` | Какие IT-направления выглядят перспективнее (composite heuristic) | **Phase 5 Target** |
 
 Опционально позже: Admin ingest (`/admin/ingest`) — можно начать с curl/`make ingest-hh`.
 
-**Не путать:** MVP **Trends** (`/trends`) ≠ Target **«Тенденции»** (`/perspectives`). Первый — salary/demand из job pipeline; второй — multi-source Perspectives ([ADR 007](./adr/007-multi-source-trend-signals.md)).
+**Не путать:** MVP **Рынок** (`/market`) ≠ Target **«Тенденции»**
+(`/perspectives`). Первый — vacancy-demand snapshots; второй — multi-source
+Perspectives ([ADR 007](./adr/007-multi-source-trend-signals.md)).
 
 Фильтры глобальные (header/sidebar): `from`, `to`, опционально `role_id`, `region_id`, `source`. На Perspectives дополнительно: `role_family` / direction.
 
@@ -71,14 +73,21 @@ React SPA (`web`) — дашборд аналитики IT-рынка труда
 | Список | `GET /api/v1/regions` |
 | Detail (можно тот же page + drawer) | `GET /api/v1/regions/{region_id}` |
 
-### 5. Trends `/trends`
+### 5. Рынок `/market`
 
 | Блок | Endpoint |
 |------|----------|
-| Salary series | `GET /api/v1/trends/salaries` (`grain`) |
+| Покрытие, годы, регионы | `GET /api/v1/trends/coverage` |
 | Demand series | `GET /api/v1/trends/demand` |
 
-Две серии рядом; не смешивать с survey benchmarks без отдельного toggle (см. [15](./15-normalization-rules.md)).
+- Направления: development/leads, analytics, QA.
+- Годы только из coverage API; 2022–2024 не хардкодятся.
+- Day/week; week доступна после первой complete week.
+- График active/published строится только по persisted snapshots.
+- До полного cycle показывается честный collecting state и ссылка на внешнюю
+  официальную статистику HH как контекст, без импорта.
+- Coverage panel объясняет UTC publication window, source, counts и
+  `method_version`.
 
 ### 6. Vacancies `/vacancies`
 

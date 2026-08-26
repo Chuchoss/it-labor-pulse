@@ -34,7 +34,35 @@ export const handlers = [
   http.get('*/api/v1/trends/demand', () =>
     HttpResponse.json({
       grain: 'week',
-      points: [{ period_start: '2026-08-18', active_count: 22, new_count: 7 }],
+      status: 'ready',
+      source: 'hh',
+      method_version: 'vacancy_demand_v1',
+      points: [
+        {
+          period_start: '2026-08-18',
+          active_count: 22,
+          published_count: 7,
+          new_count: 7,
+          complete: true,
+          source_day_count: 7,
+        },
+      ],
+    }),
+  ),
+  http.get('*/api/v1/trends/coverage', () =>
+    HttpResponse.json({
+      status: 'ready',
+      source: 'hh',
+      method_version: 'vacancy_demand_v1',
+      available_years: [2026],
+      first_observation: '2026-08-26',
+      last_observation: '2026-08-26',
+      publication_from: '2026-08-26',
+      publication_to: '2026-08-26',
+      complete_daily_count: 1,
+      complete_weekly_count: 0,
+      latest_complete_cycle: '2026-08-26T10:00:00Z',
+      regions: [],
     }),
   ),
   http.get('*/api/v1/skills/top', () =>

@@ -2,6 +2,10 @@
 
 React (`apps/web`) и сквозные сценарии Playwright. Политика / CI — [13-testing.md](./13-testing.md). IA экранов — [16-frontend.md](./16-frontend.md). API — [03-api.md](./03-api.md).
 
+Market `/market`: component tests через MSW обязаны проверять годы из coverage
+API, collecting state без запроса series, published/active labels, disabled
+weekly grain без complete week и отсутствие выдуманной истории.
+
 ---
 
 ## Содержание

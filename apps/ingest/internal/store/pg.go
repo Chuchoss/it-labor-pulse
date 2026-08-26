@@ -265,6 +265,61 @@ func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (strin
 	return *cursor, true, nil
 }
 
+// StartCycle creates or resumes the durable marker for an all-IT plan.
+func (s *PG) StartCycle(ctx context.Context, cycle Cycle) (string, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO ingest_cycles (
+			source, scope, scope_hash, cycle_end, status,
+			partition_count, completed_partitions, started_at
+		) VALUES ($1, $2, $3, $4, 'running', $5, $6, now())
+		ON CONFLICT (source, scope_hash, cycle_end) DO UPDATE
+		SET partition_count = EXCLUDED.partition_count
+		RETURNING id::text
+	`, cycle.Source, cycle.Scope, cycle.ScopeHash, cycle.CycleEnd.UTC(),
+		cycle.PartitionCount, cycle.CompletedPartitions).Scan(&id)
+	if err != nil {
+		return "", sanitizeDBError("start cycle", err)
+	}
+	return id, nil
+}
+
+// UpdateCycleProgress persists aggregate progress without declaring completeness.
+func (s *PG) UpdateCycleProgress(ctx context.Context, id string, completedPartitions int) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE ingest_cycles
+		SET completed_partitions = $2
+		WHERE id = $1::uuid AND status = 'running'
+	`, id, completedPartitions)
+	if err != nil {
+		return sanitizeDBError("update cycle progress", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("store update cycle progress: cycle is not running")
+	}
+	return nil
+}
+
+// CompleteCycle is the only transition that proves full all-IT coverage.
+func (s *PG) CompleteCycle(ctx context.Context, id string, completedPartitions int) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE ingest_cycles
+		SET completed_partitions = $2,
+			status = 'complete',
+			completed_at = COALESCE(completed_at, now())
+		WHERE id = $1::uuid
+		  AND status IN ('running', 'complete')
+		  AND partition_count = $2
+	`, id, completedPartitions)
+	if err != nil {
+		return sanitizeDBError("complete cycle", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("store complete cycle: partition coverage is incomplete")
+	}
+	return nil
+}
+
 // SyncRoles persists official source role ids as canonical roles plus source aliases.
 func (s *PG) SyncRoles(ctx context.Context, source string, roles []SourceRole) (map[string]string, error) {
 	result := make(map[string]string, len(roles))

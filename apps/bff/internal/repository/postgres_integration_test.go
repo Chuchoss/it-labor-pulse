@@ -91,6 +91,43 @@ func TestPostgresReadQueries(t *testing.T) {
 	`, source, fmt.Sprintf("missing-salary-%d", suffix), roleID, regionID, published)
 	require.NoError(t, err)
 
+	var cycleID, analyticsRunID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO ingest_cycles (
+			source, scope, scope_hash, cycle_end, status, partition_count,
+			completed_partitions, started_at, completed_at
+		) VALUES (
+			$1, 'all_it', repeat('a', 64), $2::timestamptz, 'complete', 1, 1,
+			$2::timestamptz - interval '1 hour', $2::timestamptz
+		)
+		RETURNING id::text
+	`, source, published).Scan(&cycleID)
+	require.NoError(t, err)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO analytics_runs (
+			run_type, target_period_start, source, source_cycle_id,
+			status, method_version, finished_at, row_count
+		) VALUES (
+			'daily_snapshot', $1::date, $2, $3::uuid,
+			'success', 'vacancy_demand_v1', now(), 2
+		)
+		RETURNING id::text
+	`, published, source, cycleID).Scan(&analyticsRunID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO vacancy_demand_daily (
+			snapshot_date, source, role_group, aggregation_level, region_id,
+			active_count, published_count, vacancies_with_salary,
+			median_salary_rub_net, cycle_complete, source_cycle_id,
+			analytics_run_id, method_version, observed_at
+		) VALUES
+			($1::date, $2, 'software_development', 'all_regions', NULL,
+			 2, 2, 1, 150000, true, $3::uuid, $4::uuid, 'vacancy_demand_v1', $1),
+			($1::date, $2, 'software_development', 'region', $5::uuid,
+			 2, 2, 1, 150000, true, $3::uuid, $4::uuid, 'vacancy_demand_v1', $1)
+	`, published, source, cycleID, analyticsRunID, regionID)
+	require.NoError(t, err)
+
 	repository := NewPostgres(tx)
 	page, err := repository.ListVacancies(ctx, readapi.VacancyFilter{
 		Query:      "Synthetic Go",
@@ -176,9 +213,13 @@ func TestPostgresReadQueries(t *testing.T) {
 	require.Len(t, salaries.Points, 1)
 	require.Equal(t, 150000.0, salaries.Points[0].Median)
 
-	demand, err := repository.DemandTrends(ctx, dimensionFilter, "month")
+	demandFilter := dimensionFilter
+	demandFilter.Source = source
+	demandFilter.RoleGroup = "software_development"
+	demand, err := repository.DemandTrends(ctx, demandFilter, "day")
 	require.NoError(t, err)
 	require.NotEmpty(t, demand.Points)
+	require.EqualValues(t, 2, demand.Points[0].PublishedCount)
 
 	skills, err := repository.TopSkills(ctx, dimensionFilter, 10)
 	require.NoError(t, err)

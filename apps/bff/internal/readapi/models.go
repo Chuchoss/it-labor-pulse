@@ -19,10 +19,11 @@ type Page struct {
 }
 
 type AnalyticsFilter struct {
-	Period   Period
-	RoleID   string
-	RegionID string
-	Source   string
+	Period    Period
+	RoleID    string
+	RoleGroup string
+	RegionID  string
+	Source    string
 }
 
 type DashboardSummary struct {
@@ -104,14 +105,40 @@ type SalaryTrends struct {
 }
 
 type DemandPoint struct {
-	PeriodStart string `json:"period_start"`
-	ActiveCount int64  `json:"active_count"`
-	NewCount    int64  `json:"new_count"`
+	PeriodStart    string `json:"period_start"`
+	ActiveCount    int64  `json:"active_count"`
+	PublishedCount int64  `json:"published_count"`
+	NewCount       int64  `json:"new_count"`
+	Complete       bool   `json:"complete"`
+	SourceDayCount int    `json:"source_day_count"`
 }
 
 type DemandTrends struct {
-	Grain  string        `json:"grain"`
-	Points []DemandPoint `json:"points"`
+	Grain         string        `json:"grain"`
+	Status        string        `json:"status"`
+	Source        string        `json:"source"`
+	MethodVersion string        `json:"method_version,omitempty"`
+	Points        []DemandPoint `json:"points"`
+}
+
+type CoverageRegion struct {
+	RegionID string `json:"region_id"`
+	Name     string `json:"name"`
+}
+
+type TrendsCoverage struct {
+	Status              string           `json:"status"`
+	Source              string           `json:"source"`
+	MethodVersion       string           `json:"method_version,omitempty"`
+	AvailableYears      []int            `json:"available_years"`
+	FirstObservation    *string          `json:"first_observation"`
+	LastObservation     *string          `json:"last_observation"`
+	PublicationFrom     *string          `json:"publication_from"`
+	PublicationTo       *string          `json:"publication_to"`
+	CompleteDailyCount  int64            `json:"complete_daily_count"`
+	CompleteWeeklyCount int64            `json:"complete_weekly_count"`
+	LatestCompleteCycle *time.Time       `json:"latest_complete_cycle"`
+	Regions             []CoverageRegion `json:"regions"`
 }
 
 type SkillStat struct {
@@ -168,6 +195,7 @@ type Repository interface {
 	GetRegion(context.Context, string, AnalyticsFilter) (RegionStat, error)
 	SalaryTrends(context.Context, AnalyticsFilter, string) (SalaryTrends, error)
 	DemandTrends(context.Context, AnalyticsFilter, string) (DemandTrends, error)
+	TrendsCoverage(context.Context) (TrendsCoverage, error)
 	TopSkills(context.Context, AnalyticsFilter, int) (TopSkills, error)
 	ListVacancies(context.Context, VacancyFilter) (VacancyPage, error)
 }

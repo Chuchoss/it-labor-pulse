@@ -12,6 +12,7 @@ type Memory struct {
 	Runs        map[string]Run
 	Checkpoints map[string]string // source|scope → cursor
 	Vacancies   map[string]VacancyWrite
+	Cycles      map[string]Cycle
 	Errors      []RunError
 }
 
@@ -29,6 +30,7 @@ func NewMemory() *Memory {
 		Runs:        make(map[string]Run),
 		Checkpoints: make(map[string]string),
 		Vacancies:   make(map[string]VacancyWrite),
+		Cycles:      make(map[string]Cycle),
 	}
 }
 
@@ -75,6 +77,50 @@ func (m *Memory) GetCheckpoint(_ context.Context, source, scopeHash string) (str
 	defer m.mu.Unlock()
 	cur, ok := m.Checkpoints[source+"|"+scopeHash]
 	return cur, ok, nil
+}
+
+func (m *Memory) StartCycle(_ context.Context, cycle Cycle) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, existing := range m.Cycles {
+		if existing.Source == cycle.Source &&
+			existing.ScopeHash == cycle.ScopeHash &&
+			existing.CycleEnd.Equal(cycle.CycleEnd) {
+			return id, nil
+		}
+	}
+	cycle.ID = fmt.Sprintf("00000000-0000-4000-8000-%012d", len(m.Cycles)+1)
+	cycle.Status = "running"
+	m.Cycles[cycle.ID] = cycle
+	return cycle.ID, nil
+}
+
+func (m *Memory) UpdateCycleProgress(_ context.Context, id string, completedPartitions int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cycle, ok := m.Cycles[id]
+	if !ok {
+		return fmt.Errorf("cycle not found: %s", id)
+	}
+	cycle.CompletedPartitions = completedPartitions
+	m.Cycles[id] = cycle
+	return nil
+}
+
+func (m *Memory) CompleteCycle(_ context.Context, id string, completedPartitions int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cycle, ok := m.Cycles[id]
+	if !ok {
+		return fmt.Errorf("cycle not found: %s", id)
+	}
+	if completedPartitions != cycle.PartitionCount {
+		return fmt.Errorf("cycle incomplete: %d/%d", completedPartitions, cycle.PartitionCount)
+	}
+	cycle.CompletedPartitions = completedPartitions
+	cycle.Status = "complete"
+	m.Cycles[id] = cycle
+	return nil
 }
 
 func (m *Memory) SyncRoles(_ context.Context, source string, roles []SourceRole) (map[string]string, error) {

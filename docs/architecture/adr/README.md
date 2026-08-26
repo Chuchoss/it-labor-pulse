@@ -14,6 +14,7 @@
 | [008](./008-github-pages-openapi.md) | GitHub Pages + Redoc/Swagger UI для OpenAPI |
 | [009](./009-otel-loki-tempo.md) | OpenTelemetry + Loki + Tempo (корреляция `trace_id`) |
 | [010](./010-api-gateway.md) | MVP: public BFF; отдельный gateway — Target |
+| [011](./011-phase1-market-snapshots.md) | Phase 1 market snapshots из полного all-IT cycle |
 
 Новый ADR: скопировать структуру, следующий номер, ссылка в эту таблицу.
 Связь с обзором: [00-overview.md](../00-overview.md).

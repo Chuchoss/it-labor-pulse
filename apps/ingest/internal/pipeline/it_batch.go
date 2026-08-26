@@ -31,6 +31,7 @@ type ITBatchOptions struct {
 // ITBatchResult summarizes one bounded all-IT batch.
 type ITBatchResult struct {
 	LastRunID      string
+	CycleID        string
 	Stats          store.Stats
 	CycleComplete  bool
 	CompletedParts int
@@ -45,6 +46,7 @@ type ITBatchSource interface {
 
 type itCycleCursor struct {
 	Version    int               `json:"version"`
+	CycleID    string            `json:"cycle_id"`
 	CycleEnd   time.Time         `json:"cycle_end"`
 	Next       int               `json:"next_partition"`
 	Complete   bool              `json:"complete"`
@@ -117,6 +119,13 @@ func RunITBatch(
 			Version: itCycleCursorVersion, CycleEnd: opts.Now,
 			Partitions: plan.Partitions,
 		}
+		cycle.CycleID, err = st.StartCycle(ctx, store.Cycle{
+			Source: hh.SourceCode, Scope: "all_it", ScopeHash: cycleScope,
+			CycleEnd: cycle.CycleEnd, PartitionCount: len(cycle.Partitions),
+		})
+		if err != nil {
+			return ITBatchResult{}, fmt.Errorf("it batch cycle start: %w", err)
+		}
 		requestsRemaining -= plan.ProbeRequests
 		if err := saveITCycle(ctx, st, cycleScope, cycle); err != nil {
 			return ITBatchResult{}, err
@@ -127,6 +136,19 @@ func RunITBatch(
 			"estimated_results", plan.EstimatedResults,
 			"probe_requests", plan.ProbeRequests,
 		)
+	}
+	if cycle.CycleID == "" {
+		cycle.CycleID, err = st.StartCycle(ctx, store.Cycle{
+			Source: hh.SourceCode, Scope: "all_it", ScopeHash: cycleScope,
+			CycleEnd: cycle.CycleEnd, PartitionCount: len(cycle.Partitions),
+			CompletedPartitions: cycle.Next,
+		})
+		if err != nil {
+			return ITBatchResult{}, fmt.Errorf("it batch cycle resume: %w", err)
+		}
+		if err := saveITCycle(ctx, st, cycleScope, cycle); err != nil {
+			return ITBatchResult{}, err
+		}
 	}
 
 	allowedRoles := hh.AllowedRoles()
@@ -145,7 +167,7 @@ func RunITBatch(
 		RoleByExternalID: map[string]map[string]string{hh.SourceCode: roleIDs},
 	}
 
-	result := ITBatchResult{}
+	result := ITBatchResult{CycleID: cycle.CycleID}
 	for cycle.Next < len(cycle.Partitions) {
 		if result.CompletedParts >= opts.MaxBatchParts {
 			break
@@ -157,6 +179,9 @@ func RunITBatch(
 			affordablePages = 1
 		}
 		if affordablePages < 1 {
+			if result.Stats.Pages == 0 {
+				return result, fmt.Errorf("it batch: request budget cannot fund one page")
+			}
 			break
 		}
 		maxPages := min(min(pages, affordablePages), opts.MaxPagesPerPart)
@@ -184,15 +209,22 @@ func RunITBatch(
 		if err := saveITCycle(ctx, st, cycleScope, cycle); err != nil {
 			return result, err
 		}
+		if err := st.UpdateCycleProgress(ctx, cycle.CycleID, cycle.Next); err != nil {
+			return result, fmt.Errorf("it batch cycle progress: %w", err)
+		}
 	}
 
 	if cycle.Next == len(cycle.Partitions) {
+		if err := st.CompleteCycle(ctx, cycle.CycleID, cycle.Next); err != nil {
+			return result, fmt.Errorf("it batch cycle complete: %w", err)
+		}
 		cycle.Complete = true
 		if err := saveITCycle(ctx, st, cycleScope, cycle); err != nil {
 			return result, err
 		}
 		result.CycleComplete = true
 		log.Info("it_cycle_completed",
+			"cycle_id", cycle.CycleID,
 			"cycle_end", cycle.CycleEnd.Format(time.RFC3339),
 			"partitions", len(cycle.Partitions),
 		)

@@ -15,6 +15,7 @@ service QueryService {
   rpc GetRegion(GetRegionRequest) returns (RegionStat);
   rpc GetSalaryTrends(GetSalaryTrendsRequest) returns (SalaryTrendsResponse);
   rpc GetDemandTrends(GetDemandTrendsRequest) returns (DemandTrendsResponse);
+  rpc GetTrendsCoverage(GetTrendsCoverageRequest) returns (TrendsCoverage);
   rpc GetTopSkills(GetTopSkillsRequest) returns (TopSkillsResponse);
   rpc ListVacancies(ListVacanciesRequest) returns (ListVacanciesResponse);
 }
@@ -130,20 +131,49 @@ message SalaryTrendsResponse {
 
 message GetDemandTrendsRequest {
   lma.common.v1.Period period = 1;
-  string role_id = 2;
+  string role_group = 2;
   string region_id = 3;
-  string grain = 4;
+  string grain = 4; // day|week
+  lma.common.v1.Source source = 5;
 }
 
 message DemandPoint {
   string period_start = 1;
   int64 active_count = 2;
-  int64 new_count = 3;
+  int64 new_count = 3; // deprecated alias of published_count
+  int64 published_count = 4;
+  bool complete = 5;
+  int32 source_day_count = 6;
 }
 
 message DemandTrendsResponse {
   string grain = 1;
   repeated DemandPoint points = 2;
+  string status = 3;
+  string source = 4;
+  string method_version = 5;
+}
+
+message GetTrendsCoverageRequest {}
+
+message CoverageRegion {
+  string region_id = 1;
+  string name = 2;
+}
+
+message TrendsCoverage {
+  string status = 1;
+  string source = 2;
+  string method_version = 3;
+  repeated int32 available_years = 4;
+  string first_observation = 5;
+  string last_observation = 6;
+  string publication_from = 7;
+  string publication_to = 8;
+  int64 complete_daily_count = 9;
+  int64 complete_weekly_count = 10;
+  string latest_complete_cycle = 11;
+  repeated CoverageRegion regions = 12;
 }
 
 message GetTopSkillsRequest {

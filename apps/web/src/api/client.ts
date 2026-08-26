@@ -8,6 +8,7 @@ import type {
   RoleStat,
   SalaryTrends,
   TopSkills,
+  TrendsCoverage,
   VacancyPage,
 } from './types'
 
@@ -77,6 +78,14 @@ export interface AnalyticsParams extends Record<string, string | undefined> {
   region_id?: string
 }
 
+export interface MarketParams extends Record<string, string | undefined> {
+  from: string
+  to: string
+  role_group?: string
+  region_id?: string
+  grain?: 'day' | 'week'
+}
+
 const DICTIONARY_PAGE_SIZE = 100
 
 async function getAllRegions(
@@ -124,6 +133,10 @@ export const api = {
     get<SalaryTrends>('/trends/salaries', { ...params, grain: 'week' }, signal),
   demandTrends: (params: AnalyticsParams, signal?: AbortSignal) =>
     get<DemandTrends>('/trends/demand', { ...params, grain: 'week' }, signal),
+  marketCoverage: (signal?: AbortSignal) =>
+    get<TrendsCoverage>('/trends/coverage', {}, signal),
+  marketDemand: (params: MarketParams, signal?: AbortSignal) =>
+    get<DemandTrends>('/trends/demand', params, signal),
   topSkills: (params: AnalyticsParams, signal?: AbortSignal) =>
     get<TopSkills>('/skills/top', { ...params, limit: 10 }, signal),
   regions: getAllRegions,

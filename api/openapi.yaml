@@ -207,20 +207,39 @@ paths:
     get:
       tags: [trends]
       operationId: getDemandTrends
-      summary: Спрос (active/new) по периодам
+      summary: Спрос (active/published) из полных снимков
+      description: |
+        Исторический active_count читается только из persisted snapshots.
+        new_count сохранён как deprecated alias published_count.
       parameters:
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
-        - $ref: "#/components/parameters/RoleIdOptional"
+        - $ref: "#/components/parameters/RoleGroupOptional"
         - $ref: "#/components/parameters/RegionIdOptional"
-        - $ref: "#/components/parameters/Grain"
+        - $ref: "#/components/parameters/SourceOptional"
+        - $ref: "#/components/parameters/DemandGrain"
       responses:
         "200":
-          description: Demand series
+          description: Ряд снимков или явный пустой ряд, если полных снимков нет
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/DemandTrendsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/trends/coverage:
+    get:
+      tags: [trends]
+      operationId: getTrendsCoverage
+      summary: Покрытие Phase 1 market snapshots
+      responses:
+        "200":
+          description: Доступные годы, границы наблюдений и полнота снимков
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrendsCoverage"
 
   /api/v1/trends/perspectives:
     get:
@@ -471,6 +490,13 @@ components:
       in: query
       schema:
         type: string
+    RoleGroupOptional:
+      name: role_group
+      in: query
+      description: Утверждённая группа официальных HH professional roles.
+      schema:
+        type: string
+        enum: [software_development, analytics, quality_assurance]
     RegionIdOptional:
       name: region_id
       in: query
@@ -561,6 +587,13 @@ components:
       schema:
         type: string
         enum: [day, week, month]
+        default: week
+    DemandGrain:
+      name: grain
+      in: query
+      schema:
+        type: string
+        enum: [day, week]
         default: week
   responses:
     BadRequest:
@@ -738,19 +771,86 @@ components:
 
     DemandPoint:
       type: object
+      required:
+        - period_start
+        - active_count
+        - published_count
+        - new_count
+        - complete
+        - source_day_count
       properties:
         period_start: { type: string, format: date }
         active_count: { type: integer }
-        new_count: { type: integer }
+        published_count:
+          type: integer
+          description: Число вакансий с published_at в UTC-окне снимка.
+        new_count:
+          type: integer
+          deprecated: true
+          description: Deprecated alias published_count для обратной совместимости.
+        complete:
+          type: boolean
+        source_day_count:
+          type: integer
+          minimum: 1
+          maximum: 7
 
     DemandTrendsResponse:
       type: object
+      required: [grain, status, source, points]
       properties:
-        grain: { type: string }
+        grain: { type: string, enum: [day, week] }
+        status:
+          type: string
+          enum: [ready, no_complete_snapshots]
+        source: { type: string, enum: [hh] }
+        method_version: { type: string }
         points:
           type: array
           items:
             $ref: "#/components/schemas/DemandPoint"
+
+    CoverageRegion:
+      type: object
+      required: [region_id, name]
+      properties:
+        region_id: { type: string, format: uuid }
+        name: { type: string }
+
+    TrendsCoverage:
+      type: object
+      required:
+        - status
+        - source
+        - available_years
+        - first_observation
+        - last_observation
+        - publication_from
+        - publication_to
+        - complete_daily_count
+        - complete_weekly_count
+        - latest_complete_cycle
+        - regions
+      properties:
+        status:
+          type: string
+          enum: [ready, collecting]
+        source: { type: string, enum: [hh] }
+        method_version: { type: string }
+        available_years:
+          type: array
+          items: { type: integer, minimum: 2026 }
+        first_observation: { type: [string, "null"], format: date }
+        last_observation: { type: [string, "null"], format: date }
+        publication_from: { type: [string, "null"], format: date }
+        publication_to: { type: [string, "null"], format: date }
+        complete_daily_count: { type: integer, minimum: 0 }
+        complete_weekly_count: { type: integer, minimum: 0 }
+        latest_complete_cycle: { type: [string, "null"], format: date-time }
+        regions:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoverageRegion"
 
     PerspectiveCoverage:
       type: object

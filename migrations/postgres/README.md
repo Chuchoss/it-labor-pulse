@@ -18,6 +18,8 @@ NNNNNN_description.down.sql
 | `000002_dictionaries` | `regions`, `region_external_ids`, `roles`, `role_aliases`, `skills`, `skill_aliases`, `employers` |
 | `000003_vacancies` | `vacancies`, `vacancy_skills` |
 | `000004_ingest` | `ingest_runs`, `ingest_checkpoints`, `ingest_run_errors` |
+| `000005_hh_role_scope` | Утверждённые HH role groups и reconciliation scope |
+| `000006_market_analytics` | `ingest_cycles`, analytics runs, daily/weekly demand snapshots |
 
 UUID PK: `DEFAULT gen_random_uuid()` (Supabase / PG 13+). AI / Perspectives tables — не здесь (Phase 4–5).
 

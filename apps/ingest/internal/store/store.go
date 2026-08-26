@@ -55,12 +55,27 @@ type Stats struct {
 	Pages     int `json:"pages"`
 }
 
+// Cycle is the durable proof of one complete all-IT coverage pass.
+type Cycle struct {
+	ID                  string
+	Source              string
+	Scope               string
+	ScopeHash           string
+	CycleEnd            time.Time
+	PartitionCount      int
+	CompletedPartitions int
+	Status              string
+}
+
 // Store persists ingest runs, checkpoints and vacancies.
 type Store interface {
 	CreateRun(ctx context.Context, run Run) error
 	FinishRun(ctx context.Context, id, status string, stats Stats, errMsg string) error
 	RecordError(ctx context.Context, runID, externalID, stage, message string) error
 	GetCheckpoint(ctx context.Context, source, scopeHash string) (cursor string, ok bool, err error)
+	StartCycle(ctx context.Context, cycle Cycle) (string, error)
+	UpdateCycleProgress(ctx context.Context, id string, completedPartitions int) error
+	CompleteCycle(ctx context.Context, id string, completedPartitions int) error
 	SyncRoles(ctx context.Context, source string, roles []SourceRole) (map[string]string, error)
 	// SavePage upserts all vacancies and advances checkpoint in one transaction.
 	SavePage(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (upserted, unchanged int, err error)

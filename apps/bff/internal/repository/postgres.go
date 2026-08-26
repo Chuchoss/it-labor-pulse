@@ -11,6 +11,8 @@ import (
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/readapi"
 )
 
+const marketMethodVersion = "vacancy_demand_v1"
+
 type DBTX interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -402,52 +404,186 @@ func (p *Postgres) DemandTrends(
 	filter readapi.AnalyticsFilter,
 	grain string,
 ) (readapi.DemandTrends, error) {
-	args := append(analyticsArgs(filter), grain)
-	rows, err := p.db.Query(ctx, `
-		WITH buckets AS (
-			SELECT generate_series(
-				date_trunc($6, $1::date),
-				date_trunc($6, $2::date),
-				CASE $6 WHEN 'day' THEN interval '1 day'
-					WHEN 'week' THEN interval '1 week'
-					ELSE interval '1 month' END
-			) AS bucket_start
-		)
-		SELECT to_char(b.bucket_start, 'YYYY-MM-DD'),
-			count(v.id) FILTER (WHERE v.is_active AND v.published_at < b.bucket_start +
-				CASE $6 WHEN 'day' THEN interval '1 day'
-					WHEN 'week' THEN interval '1 week'
-					ELSE interval '1 month' END),
-			count(v.id) FILTER (WHERE v.published_at >= b.bucket_start AND v.published_at < b.bucket_start +
-				CASE $6 WHEN 'day' THEN interval '1 day'
-					WHEN 'week' THEN interval '1 week'
-					ELSE interval '1 month' END)
-		FROM buckets b
-		LEFT JOIN vacancies v ON v.deleted_at IS NULL
-			AND EXISTS (SELECT 1 FROM roles sr WHERE sr.id = v.role_id
-				AND sr.family IN ('software_development', 'analytics', 'quality_assurance'))
-			AND v.published_at < ($2::date + interval '1 day')
-			AND ($3 = '' OR v.role_id = $3::uuid)
-			AND ($4 = '' OR v.region_id = $4::uuid)
-			AND ($5 = '' OR v.source = $5)
-		GROUP BY b.bucket_start
-		ORDER BY b.bucket_start
-	`, args...)
+	source := filter.Source
+	if source == "" {
+		source = "hh"
+	}
+	args := []any{
+		filter.Period.From.Format(time.DateOnly),
+		filter.Period.To.Format(time.DateOnly),
+		filter.RoleGroup,
+		filter.RegionID,
+		source,
+		marketMethodVersion,
+	}
+	query := `
+		SELECT to_char(snapshot_date, 'YYYY-MM-DD'),
+			sum(active_count)::bigint,
+			sum(published_count)::bigint,
+			bool_and(cycle_complete),
+			1
+		FROM vacancy_demand_daily
+		WHERE snapshot_date >= $1::date AND snapshot_date <= $2::date
+		  AND ($3 = '' OR role_group = $3)
+		  AND (
+			($4 = '' AND aggregation_level = 'all_regions' AND region_id IS NULL)
+			OR ($4 <> '' AND aggregation_level = 'region' AND region_id = $4::uuid)
+		  )
+		  AND source = $5
+		  AND method_version = $6
+		  AND cycle_complete
+		GROUP BY snapshot_date
+		ORDER BY snapshot_date
+	`
+	if grain == "week" {
+		query = `
+			SELECT to_char(week_start, 'YYYY-MM-DD'),
+				sum(active_count)::bigint,
+				sum(published_count)::bigint,
+				bool_and(complete),
+				min(source_daily_count)::integer
+			FROM vacancy_demand_weekly
+			WHERE week_start >= date_trunc('week', $1::date)::date
+			  AND week_start <= $2::date
+			  AND ($3 = '' OR role_group = $3)
+			  AND (
+				($4 = '' AND aggregation_level = 'all_regions' AND region_id IS NULL)
+				OR ($4 <> '' AND aggregation_level = 'region' AND region_id = $4::uuid)
+			  )
+			  AND source = $5
+			  AND method_version = $6
+			  AND complete
+			GROUP BY week_start
+			ORDER BY week_start
+		`
+	}
+	rows, err := p.db.Query(ctx, query, args...)
 	if err != nil {
 		return readapi.DemandTrends{}, fmt.Errorf("query demand trends: %w", err)
 	}
 	defer rows.Close()
 
-	result := readapi.DemandTrends{Grain: grain, Points: []readapi.DemandPoint{}}
+	result := readapi.DemandTrends{
+		Grain: grain, Status: "no_complete_snapshots", Source: source,
+		MethodVersion: marketMethodVersion, Points: []readapi.DemandPoint{},
+	}
 	for rows.Next() {
 		var point readapi.DemandPoint
-		if err := rows.Scan(&point.PeriodStart, &point.ActiveCount, &point.NewCount); err != nil {
+		if err := rows.Scan(
+			&point.PeriodStart,
+			&point.ActiveCount,
+			&point.PublishedCount,
+			&point.Complete,
+			&point.SourceDayCount,
+		); err != nil {
 			return readapi.DemandTrends{}, fmt.Errorf("scan demand trend: %w", err)
 		}
+		point.NewCount = point.PublishedCount
 		result.Points = append(result.Points, point)
 	}
 	if err := rows.Err(); err != nil {
 		return readapi.DemandTrends{}, fmt.Errorf("iterate demand trends: %w", err)
+	}
+	if len(result.Points) > 0 {
+		result.Status = "ready"
+	}
+	return result, nil
+}
+
+func (p *Postgres) TrendsCoverage(ctx context.Context) (readapi.TrendsCoverage, error) {
+	result := readapi.TrendsCoverage{
+		Status: "collecting", Source: "hh", AvailableYears: []int{},
+		Regions: []readapi.CoverageRegion{},
+	}
+	var first, last, publicationFrom, publicationTo *time.Time
+	err := p.db.QueryRow(ctx, `
+		SELECT
+			min(snapshot_date),
+			max(snapshot_date),
+			min(snapshot_date) FILTER (WHERE published_count > 0),
+			max(snapshot_date) FILTER (WHERE published_count > 0),
+			count(DISTINCT snapshot_date) FILTER (WHERE cycle_complete),
+			(
+				SELECT count(DISTINCT week_start)
+				FROM vacancy_demand_weekly
+				WHERE source = 'hh' AND method_version = $1 AND complete
+			),
+			(
+				SELECT max(cycle_end)
+				FROM ingest_cycles
+				WHERE source = 'hh' AND scope = 'all_it' AND status = 'complete'
+			)
+		FROM vacancy_demand_daily
+		WHERE source = 'hh' AND method_version = $1
+		  AND aggregation_level = 'all_regions'
+	`, marketMethodVersion).Scan(
+		&first,
+		&last,
+		&publicationFrom,
+		&publicationTo,
+		&result.CompleteDailyCount,
+		&result.CompleteWeeklyCount,
+		&result.LatestCompleteCycle,
+	)
+	if err != nil {
+		return readapi.TrendsCoverage{}, fmt.Errorf("query trends coverage: %w", err)
+	}
+	if first != nil {
+		result.FirstObservation = datePointer(*first)
+		result.LastObservation = datePointer(*last)
+		result.MethodVersion = marketMethodVersion
+		result.Status = "ready"
+	}
+	if publicationFrom != nil {
+		result.PublicationFrom = datePointer(*publicationFrom)
+		result.PublicationTo = datePointer(*publicationTo)
+	}
+
+	yearRows, err := p.db.Query(ctx, `
+		SELECT DISTINCT extract(year FROM snapshot_date)::integer
+		FROM vacancy_demand_daily
+		WHERE source = 'hh' AND method_version = $1 AND cycle_complete
+		ORDER BY 1
+	`, marketMethodVersion)
+	if err != nil {
+		return readapi.TrendsCoverage{}, fmt.Errorf("query coverage years: %w", err)
+	}
+	for yearRows.Next() {
+		var year int
+		if err := yearRows.Scan(&year); err != nil {
+			yearRows.Close()
+			return readapi.TrendsCoverage{}, fmt.Errorf("scan coverage year: %w", err)
+		}
+		result.AvailableYears = append(result.AvailableYears, year)
+	}
+	if err := yearRows.Err(); err != nil {
+		yearRows.Close()
+		return readapi.TrendsCoverage{}, fmt.Errorf("iterate coverage years: %w", err)
+	}
+	yearRows.Close()
+
+	regionRows, err := p.db.Query(ctx, `
+		SELECT DISTINCT r.id::text, r.name
+		FROM vacancy_demand_daily d
+		JOIN regions r ON r.id = d.region_id
+		WHERE d.source = 'hh'
+		  AND d.method_version = $1
+		  AND d.aggregation_level = 'region'
+		ORDER BY r.name, r.id::text
+	`, marketMethodVersion)
+	if err != nil {
+		return readapi.TrendsCoverage{}, fmt.Errorf("query coverage regions: %w", err)
+	}
+	defer regionRows.Close()
+	for regionRows.Next() {
+		var region readapi.CoverageRegion
+		if err := regionRows.Scan(&region.RegionID, &region.Name); err != nil {
+			return readapi.TrendsCoverage{}, fmt.Errorf("scan coverage region: %w", err)
+		}
+		result.Regions = append(result.Regions, region)
+	}
+	if err := regionRows.Err(); err != nil {
+		return readapi.TrendsCoverage{}, fmt.Errorf("iterate coverage regions: %w", err)
 	}
 	return result, nil
 }
@@ -613,4 +749,9 @@ func periodResponse(period readapi.Period) readapi.PeriodResponse {
 		From: period.From.Format(time.DateOnly),
 		To:   period.To.Format(time.DateOnly),
 	}
+}
+
+func datePointer(value time.Time) *string {
+	formatted := value.UTC().Format(time.DateOnly)
+	return &formatted
 }

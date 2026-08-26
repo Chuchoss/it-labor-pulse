@@ -33,12 +33,33 @@ export interface SalaryTrends {
 export interface DemandPoint {
   period_start: string
   active_count: number
+  published_count: number
   new_count: number
+  complete: boolean
+  source_day_count: number
 }
 
 export interface DemandTrends {
   grain?: string
+  status?: 'ready' | 'no_complete_snapshots'
+  source?: string
+  method_version?: string
   points?: DemandPoint[]
+}
+
+export interface TrendsCoverage {
+  status: 'ready' | 'collecting'
+  source: string
+  method_version?: string
+  available_years: number[]
+  first_observation: string | null
+  last_observation: string | null
+  publication_from: string | null
+  publication_to: string | null
+  complete_daily_count: number
+  complete_weekly_count: number
+  latest_complete_cycle: string | null
+  regions: Array<{ region_id: string; name: string }>
 }
 
 export interface SkillStat {

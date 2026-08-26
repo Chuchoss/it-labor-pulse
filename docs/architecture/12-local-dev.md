@@ -107,6 +107,8 @@ make migrate-up
 ```bash
 make run-bff          # public :8080
 make run-web          # Vite SPA :3000, /api proxy → BFF :8080
+make analytics-daily  # latest eligible complete all-IT cycle
+make analytics-weekly # current ISO week; incomplete stays hidden in API
 
 # UI / API
 # http://localhost:3000
@@ -116,6 +118,8 @@ make run-web          # Vite SPA :3000, /api proxy → BFF :8080
 # http://localhost:8080/api/v1/roles?from=2026-07-01&to=2026-08-01
 # http://localhost:8080/api/v1/regions?from=2026-07-01&to=2026-08-01
 # http://localhost:8080/api/v1/skills/top?from=2026-07-01&to=2026-08-01
+# http://localhost:8080/api/v1/trends/coverage
+# http://localhost:3000/market
 
 curl -X POST http://localhost:8080/api/v1/admin/ingest/runs \
   -H "Content-Type: application/json" \
@@ -231,6 +235,9 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `INGEST_SCHEDULER_JITTER_PERCENT` | нет | `20` | Симметричный jitter, `0..100` |
 | `INGEST_SCHEDULER_SHUTDOWN_TIMEOUT` | нет | `30s` | Bounded wait после отмены текущего run |
 | `INGEST_SCHEDULER_TEST_MODE` | нет | `false` | Разрешает интервал `<10m` только для явного local smoke/test |
+| `ANALYTICS_SCHEDULER_INTERVAL` | нет | `30m` | Poll complete cycle markers + weekly rollup |
+| `ANALYTICS_RUN_TIMEOUT` | нет | `2m` | Bounded daily/weekly SQL context |
+| `ANALYTICS_SCHEDULER_TEST_MODE` | нет | `false` | Разрешает analytics interval `<10m` только для smoke |
 
 Секреты только в `.env` (gitignored), не в Compose YAML и не в документации как реальные значения.
 
@@ -279,6 +286,8 @@ partition по одной роли и времени. Обычный старт 
 | `make ingest-hh-it-plan` | live aggregate-only planning, без vacancy content/записи | Phase 1 |
 | `make ingest-hh-it` | bounded/resumable IT crawl; при budget продолжить следующим запуском | Phase 1 |
 | `make run-ingest-scheduler` | dedicated scheduler: bounded/resumable all-IT batch по расписанию | Phase 1 |
+| `make analytics-daily` / `analytics-weekly` / `analytics-backfill` | Идемпотентные market snapshots | Phase 1 |
+| `make run-analytics-scheduler` | Poll durable complete cycles + weekly rollup | Phase 1 |
 | `make test` | `go test ./...` + Vitest web | **есть** |
 | `make proto` / `openapi-lint` / `smoke` / `fmt` / `lint` | по мере появления tooling | planned |
 
@@ -300,6 +309,9 @@ go run ./apps/ingest/cmd/ingest -scope it
 # dedicated scheduler; сам загружает корневой .env через godotenv:
 $env:INGEST_SCOPE = "it"
 go run ./apps/ingest/cmd/scheduler
+go run ./apps/analytics/cmd/worker -mode daily
+go run ./apps/analytics/cmd/worker -mode weekly
+go run ./apps/analytics/cmd/worker -mode backfill
 ```
 
 Scheduler использует process-local no-overlap и session-level PostgreSQL
@@ -309,6 +321,11 @@ advisory lock `549004801` на отдельном соединении. Втор
 полного cycle следующий tick создаёт новый план. Reconciliation `is_active`
 после полного cycle пока отложен: partial batch никогда не деактивирует
 невстреченные вакансии.
+
+`ingest_cycles.status=complete` появляется только после всех partitions.
+Scheduler вызывает daily analytics hook; при ошибке durable marker остаётся и
+`analytics-backfill` догоняет snapshot. До первого полного cycle
+`/trends/coverage` возвращает `collecting`, а `/market` не рисует ряд.
 
 ---
 

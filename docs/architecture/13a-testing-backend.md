@@ -2,6 +2,19 @@
 
 Детали unit / integration / contract для Go-сервисов LMA. Политика и CI — в [13-testing.md](./13-testing.md). Правила нормализации — [15-normalization-rules.md](./15-normalization-rules.md).
 
+## Market analytics Phase 1
+
+- Migration test: v5 → v6, затем `down 1`/`up 1` на disposable/local DB.
+- Unit: ISO week, non-Monday validation, cycle completeness transition,
+  incomplete-cycle skip, idempotent repeated daily/weekly run.
+- Integration (`-tags=integration`): synthetic complete `ingest_cycles` +
+  vacancies в транзакции → daily snapshot → coverage/demand; никаких live HH
+  вызовов и PII.
+- Contract: `/trends/coverage`, `role_group`, `grain=day|week`, deprecated
+  `new_count`, empty `status=no_complete_snapshots`.
+- Performance: `EXPLAIN (ANALYZE, BUFFERS)` representative snapshot, coverage и
+  series queries; индекс добавлять только по наблюдаемому plan.
+
 ---
 
 ## Содержание

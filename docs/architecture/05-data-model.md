@@ -10,7 +10,7 @@
 | Точечный GET vacancy by id | Да | Нет |
 | Медианы зарплат за год по разрезам | Можно на малых объёмах (MVP) | Да (Target / Phase 2) |
 | Ingest runs, AI jobs | Да | Нет |
-| Daily snapshots для трендов | Опционально materialized view | Да — основной store |
+| Daily snapshots для трендов | Да, Phase 1 market demand | Да — основной store с Phase 2 |
 
 **Правило:** если запрос сканирует миллионы строк по времени — ClickHouse. Если нужна транзакционная целостность и связи — PostgreSQL.
 
@@ -235,6 +235,40 @@ erDiagram
 | `message` | `TEXT` |
 | `created_at` | `TIMESTAMPTZ` |
 
+### `ingest_cycles` и market snapshots (Phase 1)
+
+`ingest_cycles` — долговечное доказательство полного all-IT coverage. Статус
+`complete` допустим только при `completed_partitions = partition_count`; обычный
+успешный `ingest_run` одной partition этого не доказывает.
+
+| Таблица | Natural key | Назначение |
+|---------|-------------|------------|
+| `analytics_runs` | `(run_type, target_period_start, source, method_version)` | Идемпотентный daily/weekly run, status, counts, sanitized error |
+| `vacancy_demand_daily` | date + source + role group + aggregation level + region + method | Сохранённые active/published/salary metrics полного cycle |
+| `vacancy_demand_weekly` | ISO Monday + те же dimensions + method | Воспроизводимый rollup из daily rows |
+
+Регион задаётся явно: `aggregation_level=all_regions` требует `region_id IS
+NULL`, `aggregation_level=region` — `region_id IS NOT NULL`; unique constraint
+использует `NULLS NOT DISTINCT`, поэтому all-Russia row не дублируется.
+
+Методика `vacancy_demand_v1`:
+
+- группы: development/leads (`96`, `104`), analytics (`148`, `150`, `156`,
+  `164`), QA (`124`);
+- `active_count` — active in-scope rows, наблюдавшиеся между start/complete
+  конкретного полного cycle;
+- `published_count` — их `published_at` в UTC-дне snapshot;
+- salary sample — валидный normalized RUB/net offered salary, `10 000..2 000 000`;
+- weekly `active_count` — последний daily snapshot недели;
+  `published_count` — сумма дней; weekly salary — медиана daily medians;
+- `source_daily_count < 7` означает `complete=false`, такой ряд BFF не показывает
+  как сопоставимую полную неделю.
+
+Skill snapshots отложены: текущий Market UI не показывает skill trend. Это
+отдельная методика, а не повод расширять v1 без потребности.
+
+Решение: [ADR 011](./adr/011-phase1-market-snapshots.md).
+
 ### `ai_jobs` (Target)
 
 | Column | Type |
@@ -270,7 +304,8 @@ erDiagram
 
 **Не писать миграции до Phase 5.** Логическая модель для multi-source «Тенденции» (см. [ADR 007](./adr/007-multi-source-trend-signals.md), [08](./08-integrations-and-extensibility.md)).
 
-Vacancy demand Phase 1 живёт в `vacancies` / CH snapshots и API `/trends/demand` — это **не** замена таблицам ниже.
+Vacancy demand Phase 1 живёт в `vacancy_demand_daily|weekly` (PG; CH с Phase 2)
+и API `/trends/demand` — это **не** замена таблицам ниже.
 
 ### Вариант реестра источников
 
@@ -422,7 +457,7 @@ Normalize: при конфликте unique → `UPSERT` обновляет по
 |-------------|-----|--------|
 | Vacancies + dicts | PG | PG |
 | Dashboard aggregates | SQL на PG (+ Redis) | CH + Redis |
-| Trends > 90 дней (salary/demand) | ограничено | CH |
+| Trends > 90 дней (salary/demand) | PG snapshots, ограничено | CH |
 | Perspectives signals / composite scores | — | PG (+ опц. CH), Phase 5 |
 | Raw JSON payload | PG JSONB краткосрочно | S3/MinIO + hash в PG |
 | AI tables | — | PG |

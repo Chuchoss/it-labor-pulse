@@ -25,6 +25,7 @@ type ReadService interface {
 	GetRegion(context.Context, string, readapi.AnalyticsFilter) (readapi.RegionStat, error)
 	SalaryTrends(context.Context, readapi.AnalyticsFilter, string) (readapi.SalaryTrends, error)
 	DemandTrends(context.Context, readapi.AnalyticsFilter, string) (readapi.DemandTrends, error)
+	TrendsCoverage(context.Context) (readapi.TrendsCoverage, error)
 	TopSkills(context.Context, readapi.AnalyticsFilter, int) (readapi.TopSkills, error)
 	ListVacancies(context.Context, readapi.VacancyFilter) (readapi.VacancyPage, error)
 }
@@ -49,6 +50,7 @@ func (h *ReadHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/regions/{region_id}", h.getRegion)
 	mux.HandleFunc("GET /api/v1/trends/salaries", h.salaryTrends)
 	mux.HandleFunc("GET /api/v1/trends/demand", h.demandTrends)
+	mux.HandleFunc("GET /api/v1/trends/coverage", h.trendsCoverage)
 	mux.HandleFunc("GET /api/v1/skills/top", h.topSkills)
 	mux.HandleFunc("GET /api/v1/vacancies", h.listVacancies)
 }
@@ -148,7 +150,21 @@ func (h *ReadHandler) salaryTrends(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ReadHandler) demandTrends(w http.ResponseWriter, r *http.Request) {
-	h.trends(w, r, false)
+	filter, err := parseDemandFilter(r.URL.Query())
+	if err != nil {
+		h.validationError(w, r, err)
+		return
+	}
+	grain := queryDefault(r.URL.Query(), "grain", "week")
+	if grain != "day" && grain != "week" {
+		h.validationError(w, r, fieldError{"grain", "must be day or week"})
+		return
+	}
+	if h.requireService(w, r) {
+		return
+	}
+	result, serviceErr := h.service.DemandTrends(r.Context(), filter, grain)
+	h.respond(w, r, result, serviceErr)
 }
 
 func (h *ReadHandler) trends(w http.ResponseWriter, r *http.Request, salary bool) {
@@ -172,6 +188,14 @@ func (h *ReadHandler) trends(w http.ResponseWriter, r *http.Request, salary bool
 	}
 	result, serviceErr := h.service.DemandTrends(r.Context(), filter, grain)
 	h.respond(w, r, result, serviceErr)
+}
+
+func (h *ReadHandler) trendsCoverage(w http.ResponseWriter, r *http.Request) {
+	if h.requireService(w, r) {
+		return
+	}
+	result, err := h.service.TrendsCoverage(r.Context())
+	h.respond(w, r, result, err)
 }
 
 func (h *ReadHandler) topSkills(w http.ResponseWriter, r *http.Request) {
@@ -356,6 +380,43 @@ func parseAnalyticsFilter(values url.Values, allowRole, allowSource bool) (reada
 		if err := validateSource(filter.Source); err != nil {
 			return readapi.AnalyticsFilter{}, err
 		}
+	}
+	return filter, nil
+}
+
+func parseDemandFilter(values url.Values) (readapi.AnalyticsFilter, error) {
+	from, err := parseDate(values, "from")
+	if err != nil {
+		return readapi.AnalyticsFilter{}, err
+	}
+	to, err := parseDate(values, "to")
+	if err != nil {
+		return readapi.AnalyticsFilter{}, err
+	}
+	if from.After(to) {
+		return readapi.AnalyticsFilter{}, fieldError{"from", "must not be after to"}
+	}
+	filter := readapi.AnalyticsFilter{
+		Period:    readapi.Period{From: from, To: to},
+		RoleGroup: strings.TrimSpace(values.Get("role_group")),
+		RegionID:  strings.TrimSpace(values.Get("region_id")),
+		Source:    strings.TrimSpace(values.Get("source")),
+	}
+	switch filter.RoleGroup {
+	case "", "software_development", "analytics", "quality_assurance":
+	default:
+		return readapi.AnalyticsFilter{}, fieldError{
+			"role_group",
+			"must be software_development, analytics or quality_assurance",
+		}
+	}
+	if filter.RegionID != "" {
+		if err := validateUUID("region_id", filter.RegionID); err != nil {
+			return readapi.AnalyticsFilter{}, err
+		}
+	}
+	if err := validateSource(filter.Source); err != nil {
+		return readapi.AnalyticsFilter{}, err
 	}
 	return filter, nil
 }

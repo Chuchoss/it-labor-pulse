@@ -76,6 +76,13 @@ func (s stubReadService) DemandTrends(
 	return readapi.DemandTrends{Points: []readapi.DemandPoint{}}, nil
 }
 
+func (s stubReadService) TrendsCoverage(context.Context) (readapi.TrendsCoverage, error) {
+	return readapi.TrendsCoverage{
+		Status: "collecting", Source: "hh",
+		AvailableYears: []int{}, Regions: []readapi.CoverageRegion{},
+	}, nil
+}
+
 func (s stubReadService) TopSkills(
 	context.Context,
 	readapi.AnalyticsFilter,
@@ -114,6 +121,8 @@ func TestReadHandlerValidation(t *testing.T) {
 		{name: "reversed_salary", path: "/api/v1/vacancies?salary_min=200000&salary_max=100000"},
 		{name: "invalid_sort", path: "/api/v1/roles?from=2026-08-01&to=2026-08-26&sort=title"},
 		{name: "invalid_grain", path: "/api/v1/trends/salaries?from=2026-08-01&to=2026-08-26&grain=year"},
+		{name: "invalid_demand_grain", path: "/api/v1/trends/demand?from=2026-08-01&to=2026-08-26&grain=month"},
+		{name: "invalid_role_group", path: "/api/v1/trends/demand?from=2026-08-01&to=2026-08-26&role_group=ai"},
 		{name: "invalid_limit", path: "/api/v1/skills/top?from=2026-08-01&to=2026-08-26&limit=0"},
 	}
 
@@ -272,6 +281,7 @@ func TestReadRoutesMatchOpenAPIPhaseOneSurface(t *testing.T) {
 		"/api/v1/regions/20000000-0000-4000-8000-000000000001" + period,
 		"/api/v1/trends/salaries" + period,
 		"/api/v1/trends/demand" + period,
+		"/api/v1/trends/coverage",
 		"/api/v1/skills/top" + period,
 		"/api/v1/vacancies",
 	}
@@ -307,6 +317,8 @@ func expectedField(path string) string {
 		return "sort"
 	case stringsContains(path, "grain"):
 		return "grain"
+	case stringsContains(path, "role_group"):
+		return "role_group"
 	default:
 		return "limit"
 	}
@@ -336,6 +348,10 @@ func expectedReason(path string) string {
 		return "is outside the allowed range"
 	case stringsContains(path, "sort"):
 		return "must be count or median_salary"
+	case stringsContains(path, "role_group"):
+		return "must be software_development, analytics or quality_assurance"
+	case stringsContains(path, "trends/demand"):
+		return "must be day or week"
 	default:
 		return "must be day, week or month"
 	}

@@ -62,7 +62,7 @@
 | `ts` | RFC3339 / RFC3339Nano | всегда |
 | `level` | `debug` / `info` / `warn` / `error` | всегда |
 | `msg` | короткий стабильный текст | всегда |
-| `service` | `bff` / `query` / `ingest` / `normalizer` / `scheduler` / `ai-analyzer` | всегда |
+| `service` | `bff` / `query` / `ingest` / `normalizer` / `scheduler` / `analytics` / `ai-analyzer` | всегда |
 | `env` | `local` / `dev` / `stage` / `prod` | всегда (`APP_ENV`) |
 | `trace_id` | 32 hex (W3C) | HTTP/gRPC/Kafka; из `traceparent`; **не** ULID — см. [23](./23-observability-tracing.md) |
 | `request_id` | ULID/UUID | `X-Request-Id` для клиентов/error body; рядом с `trace_id`, не вместо |
@@ -242,6 +242,14 @@ flowchart TB
 | `scheduler_trigger_ok` | info | ingest_run_id / http status |
 | `scheduler_trigger_skipped` | info/warn | reason=lock|disabled |
 | `scheduler_trigger_failed` | error | error |
+
+### Market analytics worker
+
+| Событие | Level | Поля |
+|---------|-------|------|
+| `analytics_run_finished` | info | analytics_run_id, run_type, source_cycle_id, rows, method_version |
+| `analytics_run_skipped` | info | reason=lock\|no_complete_cycle\|no_daily_snapshots |
+| `analytics_cycle_trigger_failed` | error | source_cycle_id, error_category без SQL/DSN |
 
 ### AI (later)
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	analytics "github.com/Chuchoss/it-labor-pulse/apps/analytics/worker"
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/config"
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/hh"
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/pipeline"
@@ -41,6 +42,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = st.Close() }()
+	analyticsWorker, err := analytics.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Error("analytics_database_open_failed", "error_category", "database")
+		os.Exit(1)
+	}
+	defer analyticsWorker.Close()
 
 	engine := &scheduler.Engine{
 		Config: scheduler.Config{
@@ -78,6 +85,24 @@ func main() {
 					MaxBatchParts: cfg.Scheduler.MaxPartitions, MaxPagesPerPart: cfg.MaxPages,
 					MaxRequests: cfg.ITMaxReqs, RequestedBy: schedulerRunID,
 				})
+			}
+			if err == nil && result.CycleComplete {
+				snapshotCtx, cancelSnapshot := context.WithTimeout(parent, 2*time.Minute)
+				snapshot, snapshotErr := analyticsWorker.RunDaily(snapshotCtx, result.CycleID)
+				cancelSnapshot()
+				if snapshotErr != nil {
+					log.Error("analytics_cycle_trigger_failed",
+						"source_cycle_id", result.CycleID,
+						"error_category", "database",
+					)
+				} else {
+					log.Info("analytics_cycle_trigger_finished",
+						"source_cycle_id", result.CycleID,
+						"analytics_run_id", snapshot.RunID,
+						"rows", snapshot.Rows,
+						"method_version", analytics.MethodVersion,
+					)
+				}
 			}
 			return scheduler.BatchResult{
 				IngestRunID:   result.LastRunID,

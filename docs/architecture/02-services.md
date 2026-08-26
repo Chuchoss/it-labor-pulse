@@ -11,6 +11,7 @@
 | `ingest` | Go | HTTP admin `:8082` | gRPC `:9092` | MVP |
 | `normalizer` | Go | — | Kafka consumer | Phase 2 (Phase 1: in-process) |
 | `scheduler` | Go / CronJob | — | HTTP/gRPC → ingest | MVP |
+| `analytics` | Go worker/process | — | PG cycle markers → PG snapshots | Phase 1 MVP |
 | `ai-analyzer` | Go | — | Kafka consumer + gRPC optional | Target (Phase 4) |
 | `signals-ingest` (или расширение `ingest`) | Go | HTTP admin optional | Kafka `signals.raw` / in-process | Target (Phase 5) |
 | `signals-aggregator` (job/worker) | Go | — | cron → PG/CH scores | Target (Phase 5) |
@@ -70,6 +71,18 @@
   `POST /internal/v1/ingest/runs` фиксируется при production deployment.
 - Не содержит бизнес-логики парсинга
 
+### Market analytics worker (`analytics`)
+
+- Отдельный process/package в монорепо, без сетевого порта и public API.
+- Читает только `ingest_cycles.status=complete`; bounded ingest-run не считается
+  полным coverage.
+- Daily snapshot вызывается scheduler после завершения cycle и может быть
+  догнан `-mode backfill`; weekly rollup строится только из daily rows.
+- Session advisory locks `549004802` / `549004803` на отдельном соединении,
+  bounded context, идемпотентный key с `method_version`.
+- Команда: `go run ./apps/analytics/cmd/worker -mode daily|weekly|backfill|scheduler`.
+- BFF остаётся единственным публичным edge и только читает snapshot tables.
+
 ### AI Analyzer (`ai-analyzer`) — Target
 
 - Consume `ai.jobs` или poll PG `ai_jobs`
@@ -109,6 +122,7 @@
 | ingest | 9092 | gRPC | ClusterIP |
 | ingest | 8082 | HTTP admin/health | ClusterIP (Ingress только admin path + auth via bff) |
 | normalizer | — | Kafka | — |
+| analytics | — | PostgreSQL | internal worker |
 | ai-analyzer | 8085 | HTTP health | ClusterIP |
 | postgres | 5432 | SQL | ClusterIP / managed |
 | clickhouse | 8123/9000 | HTTP/native | ClusterIP / managed |
@@ -135,7 +149,7 @@ flowchart LR
 
 | Store | Owner (writer) | Readers | Содержимое |
 |-------|----------------|---------|------------|
-| PostgreSQL `core` | normalizer (vacancies, dicts), ingest (runs, checkpoints), ai-analyzer (insights/jobs), signals-ingest (`trend_signals`), signals-aggregator (`trend_scores_daily`) | query, bff (через query) | OLTP |
+| PostgreSQL `core` | normalizer (vacancies, dicts), ingest (runs/checkpoints/cycles), analytics (market snapshots), ai-analyzer (insights/jobs), signals-ingest (`trend_signals`), signals-aggregator (`trend_scores_daily`) | query, bff (через query) | OLTP + ограниченные Phase 1 snapshots |
 | ClickHouse | normalizer (facts/snapshots), ai-analyzer (optional aggregates), signals-aggregator (opt. scores) | query | OLAP |
 | Redis | query (cache), ingest (locks), ingest (HH dict cache) | bff/query | ephemeral |
 | Kafka | ingest, scheduler-triggered flow; ai enqueue; signals-ingest (Phase 5) | normalizer, ai-analyzer, signals-aggregator (opt.) | events |

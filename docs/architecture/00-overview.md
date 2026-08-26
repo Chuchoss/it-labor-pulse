@@ -128,9 +128,11 @@ flowchart TB
 - Normalizer → PostgreSQL (vacancies, roles, regions, skills)
 - Идемпотентная обработка **страницы**: fetch → adapter draft → shared normalize + сохранение всех записей страницы; `cursor`/номер страницы сохраняется в `ingest_checkpoints` только после успешного завершения этой последовательности. При сбое checkpoint не меняется, страница безопасно повторяется благодаря unique `(source, external_id)` и `content_hash`.
 - Query REST: dashboard summary, roles, regions, salary trends (из PG агрегатов или materialized views)
+- Отдельный analytics worker: daily snapshot только после полного all-IT cycle,
+  weekly rollup из семи daily snapshots; история active demand хранится в PG
 - Redis cache-aside для summary
 - Scheduler (cron в Compose или k8s CronJob позже)
-- Vacancy-based demand/salary на экране `/trends` — **это не** полный продукт «Тенденции» (Perspectives)
+- Vacancy-based demand/salary на экране `/market` — **это не** полный продукт «Тенденции» (Perspectives)
 - **Label:** MVP
 
 ### Phase 2 — Event-driven + OLAP

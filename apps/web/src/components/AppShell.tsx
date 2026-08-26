@@ -2,6 +2,7 @@ import DarkModeOutlinedIcon from '@mui/icons-material/DarkModeOutlined'
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded'
 import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined'
 import MenuRoundedIcon from '@mui/icons-material/MenuRounded'
+import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import WorkOutlineRoundedIcon from '@mui/icons-material/WorkOutlineRounded'
 import {
   AppBar,
@@ -24,6 +25,7 @@ import { Link, useLocation } from 'react-router-dom'
 const drawerWidth = 236
 const navigation = [
   { label: 'Обзор', path: '/', icon: <DashboardRoundedIcon /> },
+  { label: 'Рынок', path: '/market', icon: <QueryStatsRoundedIcon /> },
   { label: 'Вакансии', path: '/vacancies', icon: <WorkOutlineRoundedIcon /> },
 ]
 
