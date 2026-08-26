@@ -857,7 +857,7 @@ message AIInsight {
 
 ## Валюта отображения и source links (Phase 1)
 
-- `GET /api/v1/currencies` возвращает RUB/USD/EUR/CNY, дату последнего
+- `GET /api/v1/currencies` возвращает RUB/USD/EUR/CNY/KZT/AMD, дату последнего
   официального курса ЦБ, provider и stale state.
 - Salary-bearing GET принимают `currency`, default `RUB`. Текущие
   карточки/рейтинги используют latest rate; исторические points — date-specific

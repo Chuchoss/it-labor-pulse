@@ -1109,29 +1109,35 @@ func datePointer(value time.Time) *string {
 	return &formatted
 }
 
+var supportedDisplayCurrencies = []readapi.CurrencyRate{
+	{Code: "RUB", Label: "Российский рубль", Symbol: "₽", Available: true},
+	{Code: "USD", Label: "Доллар США", Symbol: "$"},
+	{Code: "EUR", Label: "Евро", Symbol: "€"},
+	{Code: "CNY", Label: "Китайский юань", Symbol: "¥"},
+	{Code: "KZT", Label: "Казахстанский тенге", Symbol: "₸"},
+	{Code: "AMD", Label: "Армянский драм", Symbol: "֏"},
+}
+
 func (p *Postgres) Currencies(ctx context.Context) (readapi.CurrenciesResponse, error) {
 	result := readapi.CurrenciesResponse{
 		BaseCurrency: "RUB",
-		Rates: []readapi.CurrencyRate{{
-			Code: "RUB", Label: "Российский рубль", Symbol: "₽", Available: true,
-		}},
+		Rates:        []readapi.CurrencyRate{supportedDisplayCurrencies[0]},
 	}
 	rows, err := p.db.Query(ctx, `
 		SELECT DISTINCT ON (quote_currency)
 			quote_currency, rate_date, provider,
 			(current_date - rate_date)::integer
 		FROM fx_rates
-		WHERE quote_currency = ANY(ARRAY['USD', 'EUR', 'CNY'])
+		WHERE quote_currency = ANY($1)
 		ORDER BY quote_currency, rate_date DESC, provider
-	`)
+	`, displayCurrencyCodes()[1:])
 	if err != nil {
 		return readapi.CurrenciesResponse{}, fmt.Errorf("query currencies: %w", err)
 	}
 	defer rows.Close()
-	metadata := map[string]readapi.CurrencyRate{
-		"USD": {Code: "USD", Label: "Доллар США", Symbol: "$"},
-		"EUR": {Code: "EUR", Label: "Евро", Symbol: "€"},
-		"CNY": {Code: "CNY", Label: "Китайский юань", Symbol: "¥"},
+	metadata := make(map[string]readapi.CurrencyRate, len(supportedDisplayCurrencies)-1)
+	for _, currency := range supportedDisplayCurrencies[1:] {
+		metadata[currency.Code] = currency
 	}
 	for rows.Next() {
 		var code, provider string
@@ -1151,10 +1157,18 @@ func (p *Postgres) Currencies(ctx context.Context) (readapi.CurrenciesResponse, 
 	if err := rows.Err(); err != nil {
 		return readapi.CurrenciesResponse{}, fmt.Errorf("iterate currencies: %w", err)
 	}
-	for _, code := range []string{"USD", "EUR", "CNY"} {
+	for _, code := range displayCurrencyCodes()[1:] {
 		result.Rates = append(result.Rates, metadata[code])
 	}
 	return result, nil
+}
+
+func displayCurrencyCodes() []string {
+	codes := make([]string, 0, len(supportedDisplayCurrencies))
+	for _, currency := range supportedDisplayCurrencies {
+		codes = append(codes, currency.Code)
+	}
+	return codes
 }
 
 func (p *Postgres) currentDisplayRate(ctx context.Context, currency string) (displayRate, error) {
@@ -1235,7 +1249,7 @@ func historicalRateFromTable(
 
 func displayCurrency(currency string) string {
 	switch currency {
-	case "USD", "EUR", "CNY":
+	case "USD", "EUR", "CNY", "KZT", "AMD":
 		return currency
 	default:
 		return "RUB"

@@ -4,7 +4,7 @@ info:
   description: |
     Публичный REST контракт BFF для React SPA (IT Labor Market Analytics).
     Это канонический контракт; docs/architecture/03-api.md описывает его семантику и внутреннее отображение.
-    Salary-поля поддерживают RUB/USD/EUR/CNY; канон хранения остаётся RUB/net.
+    Salary-поля поддерживают RUB/USD/EUR/CNY/KZT/AMD; канон хранения остаётся RUB/net.
     AI- и Perspectives («Тенденции»)-маршруты помечены x-lifecycle: target.
   version: 1.0.0
   contact:
@@ -555,7 +555,7 @@ components:
       description: Валюта отображения; конвертация не изменяет канонические RUB/net суммы.
       schema:
         type: string
-        enum: [RUB, USD, EUR, CNY]
+        enum: [RUB, USD, EUR, CNY, KZT, AMD]
         default: RUB
     From:
       name: from
@@ -779,7 +779,7 @@ components:
           description: Медиана offered salaries (net estimate, см. docs/architecture/15-normalization-rules.md)
         salary_currency:
           type: string
-          enum: [RUB, USD, EUR, CNY]
+          enum: [RUB, USD, EUR, CNY, KZT, AMD]
         salary_rate_date: { type: [string, "null"], format: date }
         salary_rate_provider: { type: string, enum: [cbr] }
         salary_sample_size:
@@ -808,7 +808,7 @@ components:
         median_salary: { type: number }
         p25_salary: { type: number }
         p75_salary: { type: number }
-        currency: { type: string, enum: [RUB, USD, EUR, CNY] }
+        currency: { type: string, enum: [RUB, USD, EUR, CNY, KZT, AMD] }
         rate_date: { type: [string, "null"], format: date }
         rate_provider: { type: string, enum: [cbr] }
 
@@ -833,7 +833,7 @@ components:
         median_salary: { type: number }
         p25_salary: { type: number }
         p75_salary: { type: number }
-        currency: { type: string, enum: [RUB, USD, EUR, CNY] }
+        currency: { type: string, enum: [RUB, USD, EUR, CNY, KZT, AMD] }
         rate_date: { type: [string, "null"], format: date }
         rate_provider: { type: string, enum: [cbr] }
 
@@ -865,7 +865,7 @@ components:
       type: object
       properties:
         grain: { type: string }
-        currency: { type: string, enum: [RUB, USD, EUR, CNY] }
+        currency: { type: string, enum: [RUB, USD, EUR, CNY, KZT, AMD] }
         points:
           type: array
           items:
@@ -897,7 +897,7 @@ components:
           minimum: 1
           maximum: 7
         median_salary: { type: [number, "null"] }
-        currency: { type: string, enum: [RUB, USD, EUR, CNY] }
+        currency: { type: string, enum: [RUB, USD, EUR, CNY, KZT, AMD] }
         rate_date: { type: [string, "null"], format: date }
         rate_provider: { type: string, enum: [cbr] }
         coverage_warning: { type: string, enum: [fx_rate_unavailable] }
@@ -1099,7 +1099,7 @@ components:
         page: { type: integer, minimum: 1 }
         page_size: { type: integer, minimum: 1, maximum: 100 }
         total: { type: integer, minimum: 0 }
-        currency: { type: string, enum: [RUB, USD, EUR, CNY] }
+        currency: { type: string, enum: [RUB, USD, EUR, CNY, KZT, AMD] }
         rate_date: { type: [string, "null"], format: date }
         rate_provider: { type: string, enum: [cbr] }
 
@@ -1144,7 +1144,7 @@ components:
       type: object
       required: [code, label, symbol, rate_date, stale_days, available]
       properties:
-        code: { type: string, enum: [RUB, USD, EUR, CNY] }
+        code: { type: string, enum: [RUB, USD, EUR, CNY, KZT, AMD] }
         label: { type: string }
         symbol: { type: string }
         rate_date: { type: [string, "null"], format: date }

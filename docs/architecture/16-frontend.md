@@ -191,9 +191,10 @@ Nav: пункт «Тенденции» не добавлять в MVP shell до
 
 ### Валюта и ссылки источника
 
-- Global MUI selector: RUB/USD/EUR/CNY; выбор хранится в
+- Global MUI selector: RUB/USD/EUR/CNY/KZT/AMD; выбор хранится в
   `localStorage` (`lma-display-currency`) и входит только в salary query keys.
-- Форматирование — `Intl.NumberFormat`; рядом показывается «Курс ЦБ на DATE».
+- Форматирование — `Intl.NumberFormat`; описание селектора сообщает «Курс ЦБ на
+  DATE» без tooltip-слоя над интерактивным контролом.
   Это официальный дневной справочный курс, не realtime и не финансовый совет.
 - Исторический график использует rate metadata каждого point.
 - Vacancy link берётся только из API, открывается с

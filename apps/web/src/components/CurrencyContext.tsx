@@ -1,11 +1,17 @@
 /* oxlint-disable react/only-export-components */
 import { createContext, useContext, type ReactNode } from 'react'
 
-export type DisplayCurrency = 'RUB' | 'USD' | 'EUR' | 'CNY'
+export type DisplayCurrency = 'RUB' | 'USD' | 'EUR' | 'CNY' | 'KZT' | 'AMD'
 
 export function readStoredCurrency(storage: Pick<Storage, 'getItem'>): DisplayCurrency {
   const saved = storage.getItem('lma-display-currency')
-  return saved === 'USD' || saved === 'EUR' || saved === 'CNY' ? saved : 'RUB'
+  return saved === 'USD' ||
+    saved === 'EUR' ||
+    saved === 'CNY' ||
+    saved === 'KZT' ||
+    saved === 'AMD'
+    ? saved
+    : 'RUB'
 }
 
 export function storeCurrency(storage: Pick<Storage, 'setItem'>, currency: DisplayCurrency) {

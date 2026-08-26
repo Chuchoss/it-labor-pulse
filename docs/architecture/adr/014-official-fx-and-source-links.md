@@ -26,7 +26,7 @@ HH-специфичного поля в общей модели.
 - Канонические суммы RUB/net не переписываются при смене валюты отображения.
   При отсутствии курса raw salary сохраняется, canonical salary остаётся
   недоступной и исключается из salary aggregates.
-- UI поддерживает RUB, USD, EUR, CNY и пишет «Курс ЦБ на DATE».
+- UI поддерживает RUB, USD, EUR, CNY, KZT, AMD и сообщает «Курс ЦБ на DATE».
 - `vacancies.source_url` — nullable source-neutral URL. Adapter принимает
   только абсолютный HTTP(S) URL без userinfo/control chars и применяет policy
   доменов источника. Для существующих HH строк разрешён server-side backfill

@@ -163,39 +163,60 @@ export function AppShell({ children, mode, onToggleMode }: AppShellProps) {
           >
             Рынок IT в России
           </Typography>
-          <Tooltip title={rateLabel}>
-            <FormControl
-              size="small"
+          <FormControl
+            size="small"
+            sx={{
+              width: { xs: 148, sm: 210 },
+              mr: { xs: 0.5, sm: 1 },
+              ml: { xs: 'auto', sm: 0 },
+              flexShrink: 0,
+            }}
+          >
+            <InputLabel id="salary-currency-label">Валюта зарплат</InputLabel>
+            <Select
+              labelId="salary-currency-label"
+              label="Валюта зарплат"
+              aria-describedby="salary-currency-description"
+              value={currency}
+              onChange={(event) => setCurrency(event.target.value as DisplayCurrency)}
+              renderValue={(code) => {
+                const option = currencyOptions.find((item) => item.code === code)
+                return option ? `${option.code} · ${option.symbol}` : code
+              }}
+              endAdornment={
+                currencies.isLoading ? (
+                  <CircularProgress
+                    size={16}
+                    aria-label="Загрузка курсов валют"
+                    sx={{ mr: 2.5 }}
+                  />
+                ) : undefined
+              }
+            >
+              {currencyOptions.map((item) => (
+                <MenuItem key={item.code} value={item.code}>
+                  {item.code} · {item.label} · {item.symbol}
+                </MenuItem>
+              ))}
+            </Select>
+            <Box
+              component="span"
+              id="salary-currency-description"
               sx={{
-                width: { xs: 158, sm: 190 },
-                mr: { xs: 0.5, sm: 1 },
-                ml: { xs: 'auto', sm: 0 },
+                position: 'absolute',
+                width: 1,
+                height: 1,
+                p: 0,
+                m: -1,
+                overflow: 'hidden',
+                clip: 'rect(0 0 0 0)',
+                whiteSpace: 'nowrap',
+                border: 0,
               }}
             >
-              <InputLabel id="salary-currency-label">Валюта зарплат</InputLabel>
-              <Select
-                labelId="salary-currency-label"
-                label="Валюта зарплат"
-                value={currency}
-                onChange={(event) => setCurrency(event.target.value as DisplayCurrency)}
-                endAdornment={
-                  currencies.isLoading ? (
-                    <CircularProgress
-                      size={16}
-                      aria-label="Загрузка курсов валют"
-                      sx={{ mr: 2.5 }}
-                    />
-                  ) : undefined
-                }
-              >
-                {currencyOptions.map((item) => (
-                  <MenuItem key={item.code} value={item.code}>
-                    {item.code} · {item.symbol}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Tooltip>
+              {rateLabel}
+            </Box>
+          </FormControl>
           {currencies.isError && (
             <Tooltip title="Курсы временно недоступны — зарплаты показаны в RUB.">
               <Box

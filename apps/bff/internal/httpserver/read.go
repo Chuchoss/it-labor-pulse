@@ -453,10 +453,10 @@ func parseCurrency(values url.Values) (string, error) {
 		return "RUB", nil
 	}
 	switch currency {
-	case "RUB", "USD", "EUR", "CNY":
+	case "RUB", "USD", "EUR", "CNY", "KZT", "AMD":
 		return currency, nil
 	default:
-		return "", fieldError{"currency", "must be RUB, USD, EUR or CNY"}
+		return "", fieldError{"currency", "must be RUB, USD, EUR, CNY, KZT or AMD"}
 	}
 }
 

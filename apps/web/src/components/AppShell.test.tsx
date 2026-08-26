@@ -79,7 +79,7 @@ describe('AppShell salary currency selector', () => {
     expect(select).toHaveTextContent('RUB')
     await user.click(select)
     const listbox = screen.getByRole('listbox')
-    for (const code of ['RUB', 'USD', 'EUR', 'CNY']) {
+    for (const code of ['RUB', 'USD', 'EUR', 'CNY', 'KZT', 'AMD']) {
       expect(within(listbox).getByRole('option', { name: new RegExp(`^${code}`) })).toBeVisible()
     }
     await user.click(within(listbox).getByRole('option', { name: /^USD/ }))
@@ -92,6 +92,18 @@ describe('AppShell salary currency selector', () => {
     expect(await screen.findByRole('combobox', { name: 'Валюта зарплат' })).toHaveTextContent(
       'USD',
     )
+  })
+
+  it('opens without a tooltip overlay on the selector', async () => {
+    const user = userEvent.setup()
+    renderShell()
+    const select = await screen.findByRole('combobox', { name: 'Валюта зарплат' })
+
+    await user.hover(select)
+    await expect(screen.findByRole('tooltip', {}, { timeout: 300 })).rejects.toThrow()
+    await user.click(select)
+    expect(screen.getByRole('listbox')).toBeVisible()
+    expect(select).toHaveAccessibleDescription(/Базовая валюта зарплат/)
   })
 
   it('falls back to usable RUB when currency metadata is unavailable', async () => {
@@ -117,6 +129,8 @@ describe('AppShell salary currency selector', () => {
       USD: 2973.47,
       EUR: 2532.18,
       CNY: 21164.91,
+      KZT: 1_357_567.57,
+      AMD: 1_210_361.45,
     }
     const requestedCurrencies: string[] = []
     server.use(
@@ -138,7 +152,7 @@ describe('AppShell salary currency selector', () => {
     const user = userEvent.setup()
     renderShell()
 
-    for (const currency of ['RUB', 'USD', 'EUR', 'CNY'] as const) {
+    for (const currency of ['RUB', 'USD', 'EUR', 'CNY', 'KZT', 'AMD'] as const) {
       const select = await screen.findByRole('combobox', { name: 'Валюта зарплат' })
       if (!select.textContent?.includes(currency)) {
         await user.click(select)
@@ -151,6 +165,8 @@ describe('AppShell salary currency selector', () => {
       )
     }
 
-    expect(requestedCurrencies).toEqual(expect.arrayContaining(['RUB', 'USD', 'EUR', 'CNY']))
+    expect(requestedCurrencies).toEqual(
+      expect.arrayContaining(['RUB', 'USD', 'EUR', 'CNY', 'KZT', 'AMD']),
+    )
   })
 })

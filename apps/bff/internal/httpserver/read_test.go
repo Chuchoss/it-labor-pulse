@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -127,16 +128,30 @@ func (s stubReadService) Currencies(context.Context) (readapi.CurrenciesResponse
 	return readapi.CurrenciesResponse{BaseCurrency: "RUB", Rates: []readapi.CurrencyRate{}}, nil
 }
 
-func TestVacanciesRejectUnsupportedCurrency(t *testing.T) {
+func TestCurrencyValidation(t *testing.T) {
 	t.Parallel()
-	handler := NewReadHandler(stubReadService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	mux := http.NewServeMux()
-	handler.Register(mux)
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/vacancies?currency=GBP", nil)
-	response := httptest.NewRecorder()
-	mux.ServeHTTP(response, request)
-	require.Equal(t, http.StatusBadRequest, response.Code)
-	require.Contains(t, response.Body.String(), "VALIDATION_ERROR")
+
+	for _, currency := range []string{"KZT", "AMD"} {
+		currency := currency
+		t.Run("accepts_"+currency, func(t *testing.T) {
+			t.Parallel()
+			parsed, err := parseCurrency(url.Values{"currency": {currency}})
+			require.NoError(t, err)
+			require.Equal(t, currency, parsed)
+		})
+	}
+
+	t.Run("rejects_unsupported", func(t *testing.T) {
+		t.Parallel()
+		handler := NewReadHandler(stubReadService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		mux := http.NewServeMux()
+		handler.Register(mux)
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/vacancies?currency=GBP", nil)
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		require.Equal(t, http.StatusBadRequest, response.Code)
+		require.Contains(t, response.Body.String(), "VALIDATION_ERROR")
+	})
 }
 
 func TestTopSkillsPagination(t *testing.T) {

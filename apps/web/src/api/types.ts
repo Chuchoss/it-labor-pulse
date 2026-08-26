@@ -8,7 +8,7 @@ export interface DashboardSummary {
   vacancies_active: number
   vacancies_new?: number
   median_salary: number
-  salary_currency: 'RUB' | 'USD' | 'EUR' | 'CNY'
+  salary_currency: 'RUB' | 'USD' | 'EUR' | 'CNY' | 'KZT' | 'AMD'
   salary_rate_date?: string | null
   salary_rate_provider?: string
   salary_sample_size?: number
@@ -31,7 +31,7 @@ export interface SalaryPoint {
 
 export interface SalaryTrends {
   grain?: string
-  currency?: 'RUB' | 'USD' | 'EUR' | 'CNY'
+  currency?: 'RUB' | 'USD' | 'EUR' | 'CNY' | 'KZT' | 'AMD'
   points?: SalaryPoint[]
 }
 
@@ -43,7 +43,7 @@ export interface DemandPoint {
   complete: boolean
   source_day_count: number
   median_salary?: number | null
-  currency?: 'RUB' | 'USD' | 'EUR' | 'CNY'
+  currency?: 'RUB' | 'USD' | 'EUR' | 'CNY' | 'KZT' | 'AMD'
   rate_date?: string | null
   rate_provider?: string
   coverage_warning?: string
@@ -112,7 +112,7 @@ export interface RankingPage {
   page: number
   page_size: number
   total: number
-  currency: 'RUB' | 'USD' | 'EUR' | 'CNY'
+  currency: 'RUB' | 'USD' | 'EUR' | 'CNY' | 'KZT' | 'AMD'
   rate_date?: string | null
   rate_provider?: string
 }
@@ -179,7 +179,7 @@ export interface ApiErrorBody {
 }
 
 export interface CurrencyRate {
-  code: 'RUB' | 'USD' | 'EUR' | 'CNY'
+  code: 'RUB' | 'USD' | 'EUR' | 'CNY' | 'KZT' | 'AMD'
   label: string
   symbol: string
   rate_date: string | null

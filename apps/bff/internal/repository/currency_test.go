@@ -7,6 +7,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSupportedDisplayCurrenciesIncludeTengeAndDram(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, []string{"RUB", "USD", "EUR", "CNY", "KZT", "AMD"}, displayCurrencyCodes())
+	require.Equal(t, "Казахстанский тенге", supportedDisplayCurrencies[4].Label)
+	require.Equal(t, "₸", supportedDisplayCurrencies[4].Symbol)
+	require.Equal(t, "Армянский драм", supportedDisplayCurrencies[5].Label)
+	require.Equal(t, "֏", supportedDisplayCurrencies[5].Symbol)
+}
+
 func TestMoneyConversionAndHistoricalFallback(t *testing.T) {
 	t.Parallel()
 	date := "2026-08-21"
@@ -25,12 +35,26 @@ func TestMoneyConversionAndHistoricalFallback(t *testing.T) {
 	require.Zero(t, historicalRateFromTable("USD", stale, rates).factor)
 }
 
-func TestNominalRateRoundTrip(t *testing.T) {
+func TestNominalRatesRoundTrip(t *testing.T) {
 	t.Parallel()
-	// CBR Value=18.5 for Nominal=100 means 0.185 RUB per KZT.
-	rate := displayRate{factor: 18.5 / 100}
-	rub := 18_500.0
-	display := convertMoney(rub, rate)
-	require.Equal(t, 100_000.0, display)
-	require.Equal(t, rub, *toCanonicalRUB(&display, rate))
+	tests := []struct {
+		currency string
+		value    float64
+		nominal  float64
+		rub      float64
+		display  float64
+	}{
+		{currency: "KZT", value: 18.5, nominal: 100, rub: 18_500, display: 100_000},
+		{currency: "AMD", value: 20.75, nominal: 100, rub: 20_750, display: 100_000},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.currency, func(t *testing.T) {
+			t.Parallel()
+			rate := displayRate{factor: tt.value / tt.nominal}
+			converted := convertMoney(tt.rub, rate)
+			require.Equal(t, tt.display, converted)
+			require.Equal(t, tt.rub, *toCanonicalRUB(&converted, rate))
+		})
+	}
 }
