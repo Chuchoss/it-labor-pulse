@@ -45,6 +45,7 @@ func main() {
 		BatchSize: intEnv("ASSISTANT_BATCH_SIZE", 25),
 		Log:       log,
 		Cutoff:    time.Now().UTC().Add(-24 * time.Hour),
+		AIBudget:  intEnv("ASSISTANT_MAX_AI_CALLS_PER_RUN", 20),
 	}
 	var store assistant.WorkerStore = localStore{}
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -74,7 +75,7 @@ func main() {
 		log.Error("assistant_worker_external_gate_denied", "kind", "requires_ai_enabled_and_live_test")
 		os.Exit(1)
 	}
-	if *allowExternal {
+	if envBool("ASSISTANT_AI_ENABLED", false) {
 		cfg := assistant.LoadConfig()
 		provider, err := assistant.NewDeepSeek(assistant.DeepSeekConfig{
 			APIKey: cfg.DeepSeekAPIKey, BaseURL: cfg.DeepSeekBaseURL,

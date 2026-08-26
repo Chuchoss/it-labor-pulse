@@ -43,6 +43,14 @@ type AIStore interface {
 	SaveAIResult(context.Context, WorkerMatch, MatchOutput) error
 }
 
+type AutomationStore interface {
+	AutomationSettings(context.Context, string) (AutomationSettings, error)
+}
+
+type WorkItemStore interface {
+	CompleteWorkItem(context.Context, string, string) error
+}
+
 type WorkerDelivery struct {
 	UserID, VacancyID string
 	PreferenceVersion int
@@ -56,6 +64,7 @@ type WorkerOptions struct {
 	Log         *slog.Logger
 	AIProvider  AIProvider
 	AIThreshold float64
+	AIBudget    int
 }
 
 type WorkerStats struct {
@@ -82,6 +91,9 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (Worker
 	if opts.Now.IsZero() {
 		opts.Now = time.Now().UTC()
 	}
+	if opts.AIBudget < 1 || opts.AIBudget > 100 {
+		opts.AIBudget = 20
+	}
 	release, acquired, err := store.TryLock(ctx)
 	if err != nil || !acquired {
 		return WorkerStats{}, err
@@ -106,6 +118,18 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (Worker
 		}
 		stats.Processed++
 		for _, user := range users {
+			settings := AutomationSettings{AIEnabled: true, MaxAICallsPerHour: 1}
+			if settingsStore, ok := store.(AutomationStore); ok {
+				var settingsErr error
+				settings, settingsErr = settingsStore.AutomationSettings(ctx, user.ID)
+				if settingsErr != nil {
+					return stats, settingsErr
+				}
+			}
+			if settings.ActivationAt != nil && candidate.ObservedAt.Before(*settings.ActivationAt) {
+				stats.Skipped++
+				continue
+			}
 			result := Match(candidate.Vacancy, toPreferences(user.Preference), opts.Now)
 			if result.Decision != DecisionMatch {
 				stats.Skipped++
@@ -123,7 +147,8 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (Worker
 				continue
 			}
 			stats.Matched++
-			if opts.AIProvider != nil && aiCalls == 0 &&
+			if settings.AIEnabled && opts.AIProvider != nil && aiCalls < opts.AIBudget &&
+				(settings.MaxAICallsPerHour <= 0 || aiCalls < settings.MaxAICallsPerHour) &&
 				(opts.AIThreshold <= 0 || result.Score >= opts.AIThreshold) {
 				evidence := make(map[string]bool, len(result.Evidence))
 				for _, id := range result.Evidence {
@@ -150,6 +175,11 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (Worker
 			}
 			// Delivery creation is intentionally separate: a disabled notifier
 			// simply never calls this method.
+		}
+		if workItems, ok := store.(WorkItemStore); ok {
+			if err := workItems.CompleteWorkItem(ctx, candidate.Source, candidate.ExternalID); err != nil {
+				return stats, err
+			}
 		}
 	}
 	if len(candidates) > 0 {

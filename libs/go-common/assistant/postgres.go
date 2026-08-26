@@ -76,6 +76,13 @@ type TelegramStatus struct {
 	OptedIn    bool
 }
 
+type AutomationSettings struct {
+	AIEnabled         bool       `json:"ai_enabled"`
+	TelegramEnabled   bool       `json:"telegram_enabled"`
+	ActivationAt      *time.Time `json:"activation_at,omitempty"`
+	MaxAICallsPerHour int        `json:"max_ai_calls_per_hour"`
+}
+
 // PostgresRepository persists preferences and reads assistant results without
 // exposing secrets or raw vacancy descriptions.
 type PostgresRepository struct {
@@ -382,6 +389,66 @@ func (r *PostgresRepository) TelegramStatus(ctx context.Context, userID string, 
 	return TelegramStatus{Configured: configured, Linked: linked, OptedIn: optedIn}, nil
 }
 
+func (r *PostgresRepository) SetTelegramOptIn(ctx context.Context, userID string, optedIn bool) error {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE telegram_connections
+		SET opted_in = $2, updated_at = now()
+		WHERE user_id = $1::uuid AND revoked_at IS NULL AND linked_at IS NOT NULL
+	`, userID, optedIn)
+	if err != nil {
+		return fmt.Errorf("set telegram opt-in: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("telegram connection is not verified")
+	}
+	return nil
+}
+
+func (r *PostgresRepository) AutomationSettings(ctx context.Context, userID string) (AutomationSettings, error) {
+	var settings AutomationSettings
+	err := r.db.QueryRow(ctx, `
+		SELECT ai_enabled, telegram_enabled, activation_at, max_ai_calls_per_hour
+		FROM assistant_automation_settings WHERE user_id = $1::uuid
+	`, userID).Scan(&settings.AIEnabled, &settings.TelegramEnabled, &settings.ActivationAt, &settings.MaxAICallsPerHour)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AutomationSettings{MaxAICallsPerHour: 20}, nil
+	}
+	if err != nil {
+		return AutomationSettings{}, fmt.Errorf("get assistant automation settings: %w", err)
+	}
+	return settings, nil
+}
+
+func (r *PostgresRepository) SaveAutomationSettings(ctx context.Context, userID string, settings AutomationSettings) (AutomationSettings, error) {
+	if settings.MaxAICallsPerHour < 1 || settings.MaxAICallsPerHour > 100 {
+		settings.MaxAICallsPerHour = 20
+	}
+	if settings.AIEnabled && settings.ActivationAt == nil {
+		now := time.Now().UTC()
+		settings.ActivationAt = &now
+	}
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO assistant_automation_settings
+			(user_id, ai_enabled, telegram_enabled, activation_at, max_ai_calls_per_hour)
+		VALUES ($1::uuid, $2, $3, $4, $5)
+		ON CONFLICT (user_id) DO UPDATE SET
+			ai_enabled = EXCLUDED.ai_enabled,
+			telegram_enabled = EXCLUDED.telegram_enabled,
+			activation_at = CASE
+				WHEN EXCLUDED.ai_enabled AND NOT assistant_automation_settings.ai_enabled
+					THEN COALESCE(EXCLUDED.activation_at, now())
+				WHEN NOT EXCLUDED.ai_enabled THEN NULL
+				ELSE assistant_automation_settings.activation_at
+			END,
+			max_ai_calls_per_hour = EXCLUDED.max_ai_calls_per_hour,
+			updated_at = now()
+	`, userID, settings.AIEnabled, settings.TelegramEnabled, settings.ActivationAt, settings.MaxAICallsPerHour)
+	if err != nil {
+		return AutomationSettings{}, fmt.Errorf("save assistant automation settings: %w", err)
+	}
+	return r.AutomationSettings(ctx, userID)
+}
+
 func (r *PostgresRepository) Users(ctx context.Context) ([]WorkerUser, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT u.id::text, p.id::text, p.version, p.note, p.hard_criteria,
@@ -426,22 +493,34 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, cuto
 		limit = 25
 	}
 	rows, err := r.db.Query(ctx, `
-		WITH cursor AS (
-			SELECT observed_at, external_id FROM assistant_cursors WHERE source = $1
+		WITH recovered AS (
+			UPDATE assistant_work_items
+			SET status = 'pending', lease_until = NULL, claimed_by = NULL, updated_at = now()
+			WHERE status = 'processing' AND lease_until < now()
+			RETURNING id
+		), claimed AS (
+			UPDATE assistant_work_items
+			SET status = 'processing', lease_until = now() + interval '10 minutes',
+			    claimed_by = 'assistant-worker', updated_at = now()
+			WHERE id IN (
+				SELECT id FROM assistant_work_items
+				WHERE source = $1 AND status IN ('pending', 'failed')
+				  AND available_at <= now()
+				ORDER BY available_at, id
+				LIMIT $3
+				FOR UPDATE SKIP LOCKED
+			)
+			RETURNING source, external_id
 		)
 		SELECT v.id::text, v.source, v.external_id, v.title, v.source_url,
 			v.salary_mid, v.role_id::text, v.region_id::text, v.published_at,
 			v.collected_at, COALESCE(array_agg(s.slug) FILTER (WHERE s.slug IS NOT NULL), '{}')
 		FROM vacancies v
+		JOIN claimed w ON w.source = v.source AND w.external_id = v.external_id
 		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
 		LEFT JOIN skills s ON s.id = vs.skill_id
 		WHERE v.source = $1 AND v.is_active AND v.deleted_at IS NULL
 			AND COALESCE(v.published_at, v.collected_at) >= $2
-			AND (
-				NOT EXISTS (SELECT 1 FROM cursor)
-				OR (v.collected_at, v.external_id) >
-					((SELECT observed_at FROM cursor), (SELECT external_id FROM cursor))
-			)
 		GROUP BY v.id
 		ORDER BY v.collected_at, v.external_id
 		LIMIT $3
@@ -475,6 +554,15 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, cuto
 		candidates = append(candidates, c)
 	}
 	return candidates, rows.Err()
+}
+
+func (r *PostgresRepository) CompleteWorkItem(ctx context.Context, source, externalID string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE assistant_work_items
+		SET status = 'done', completed_at = now(), lease_until = NULL, updated_at = now()
+		WHERE source = $1 AND external_id = $2 AND status = 'processing'
+	`, source, externalID)
+	return err
 }
 
 func (r *PostgresRepository) SaveMatch(ctx context.Context, match WorkerMatch) (bool, error) {

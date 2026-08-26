@@ -714,6 +714,80 @@ paths:
           description: Отозвано
         "401":
           $ref: "#/components/responses/Unauthorized"
+    patch:
+      tags: [assistant]
+      operationId: updateTelegramOptIn
+      summary: Изменить отдельное согласие на Telegram-уведомления
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [opted_in]
+              properties:
+                opted_in: { type: boolean }
+      responses:
+        "200":
+          description: Согласие изменено
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [opted_in]
+                properties:
+                  opted_in: { type: boolean }
+        "409":
+          description: Telegram не связан и не подтверждён
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/assistant/automation:
+    get:
+      tags: [assistant]
+      operationId: getAssistantAutomation
+      summary: Получить настройки автоматического анализа
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Персональные opt-in настройки и activation cutoff
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssistantAutomationSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [assistant]
+      operationId: updateAssistantAutomation
+      summary: Включить или выключить AI и Telegram отдельно
+      description: Включение AI фиксирует activation_at; старые вакансии не backfill-ятся.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ai_enabled: { type: boolean }
+                telegram_enabled: { type: boolean }
+                max_ai_calls_per_hour: { type: integer, minimum: 1, maximum: 100 }
+      responses:
+        "200":
+          description: Сохранённые настройки
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssistantAutomationSettings" }
+        "409":
+          description: Серверный provider не настроен
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
 components:
   securitySchemes:
@@ -1540,3 +1614,18 @@ components:
         configured: { type: boolean }
         linked: { type: boolean }
         opted_in: { type: boolean }
+
+    AssistantAutomationSettings:
+      type: object
+      required: [ai_enabled, telegram_enabled, max_ai_calls_per_hour]
+      properties:
+        ai_enabled: { type: boolean }
+        telegram_enabled: { type: boolean }
+        activation_at:
+          type: [string, "null"]
+          format: date-time
+          description: Cutoff включения; вакансии, наблюдённые ранее, не backfill-ятся.
+        max_ai_calls_per_hour:
+          type: integer
+          minimum: 1
+          maximum: 100

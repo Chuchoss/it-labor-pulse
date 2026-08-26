@@ -23,6 +23,8 @@ NNNNNN_description.down.sql
 | `000007_dashboard_rankings` | Языковая taxonomy и отдельные listing/management scopes |
 | `000008_daily_discovery` | Search-only daily observations/progress и salary coverage для `vacancy_demand_v2` |
 | `000009_fx_and_source_links` | Официальные дневные FX, canonical salary provenance и source-neutral URL |
+| `000012-000015_assistant` | Персональные критерии, AI foundation, bounded worker и lifecycle |
+| `000016_assistant_automation` | Явные AI/Telegram opt-in, activation cutoff, leased outbox и delivery idempotency |
 
 UUID PK: `DEFAULT gen_random_uuid()` (Supabase / PG 13+). AI / Perspectives tables — не здесь (Phase 4–5).
 

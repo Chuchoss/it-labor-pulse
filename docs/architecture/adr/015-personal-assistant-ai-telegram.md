@@ -33,6 +33,21 @@ Lifecycle preferences остаётся append-only: UI показывает со
 перезапуска BFF. Обычная кнопка запуска ограничена 25 новыми кандидатами и не
 включает платный provider.
 
+Автоматический режим использует `assistant_work_items` как PostgreSQL outbox:
+запись создаётся в той же транзакции, что и upsert вакансии, и уникальна по
+`(source, external_id)`. Worker атомарно claim-ит bounded batch через
+`FOR UPDATE SKIP LOCKED`, держит lease и возвращает просроченные leases в
+`pending`; завершённые элементы не выбираются после рестарта. AI и Telegram
+управляются отдельными пользовательскими настройками
+`assistant_automation_settings`, обе по умолчанию выключены. Включение AI
+фиксирует `activation_at`, поэтому старые `first_observed_at` не backfill-ятся;
+`published_at` остаётся только показателем свежести HH.
+
+Telegram delivery остаётся at-least-once: уникальный ключ notification,
+provider message id, bounded retries и cooldown защищают от повторных
+уведомлений, но exactly-once внешний Bot API не обещается. При отсутствии
+подтверждённой связи и отдельного opt-in сообщение не ставится в отправку.
+
 ## Consequences
 
 (+) Нет AI/Telegram вызовов при обычном локальном старте; deterministic matching
@@ -42,3 +57,6 @@ Lifecycle preferences остаётся append-only: UI показывает со
 
 (-) Production auth, полноценный webhook/polling worker и multi-user tenancy
 остаются следующими задачами; dev identity нельзя использовать публично.
+
+(-) Retention/операционные лимиты очереди должны применяться отдельным
+maintenance job; dead-letter элементы не переотправляются автоматически.

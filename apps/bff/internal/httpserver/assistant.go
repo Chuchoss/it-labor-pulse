@@ -31,6 +31,9 @@ type AssistantRepository interface {
 	QueueAnalysis(context.Context, string, string) (string, error)
 	ListMatches(context.Context, string, int) ([]assistant.MatchRecord, error)
 	TelegramStatus(context.Context, string, bool) (assistant.TelegramStatus, error)
+	AutomationSettings(context.Context, string) (assistant.AutomationSettings, error)
+	SaveAutomationSettings(context.Context, string, assistant.AutomationSettings) (assistant.AutomationSettings, error)
+	SetTelegramOptIn(context.Context, string, bool) error
 }
 
 type assistantPreferencesPayload struct {
@@ -67,6 +70,7 @@ func (h *assistantHandler) register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/assistant/matches", h.matches)
 	mux.HandleFunc("/api/v1/assistant/telegram/link", h.link)
 	mux.HandleFunc("/api/v1/assistant/telegram", h.telegram)
+	mux.HandleFunc("/api/v1/assistant/automation", h.automation)
 }
 
 func (h *assistantHandler) authorized(r *http.Request) bool {
@@ -300,6 +304,27 @@ func (h *assistantHandler) telegram(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
 		return
 	}
+	if r.Method == http.MethodPatch {
+		var body struct {
+			OptedIn bool `json:"opted_in"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024)).Decode(&body) != nil {
+			writeAPIError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid JSON", nil, "")
+			return
+		}
+		if h.opts.Repository != nil {
+			if err := h.opts.Repository.SetTelegramOptIn(r.Context(), userID, body.OptedIn); err != nil {
+				writeAPIError(w, http.StatusConflict, "TELEGRAM_NOT_VERIFIED", "Telegram must be linked and verified first", nil, "")
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"opted_in": body.OptedIn})
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 	if h.opts.Repository == nil {
 		writeJSON(w, http.StatusOK, map[string]bool{"configured": h.opts.TelegramConfigured, "linked": false, "opted_in": false})
 		return
@@ -310,6 +335,71 @@ func (h *assistantHandler) telegram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"configured": status.Configured, "linked": status.Linked, "opted_in": status.OptedIn})
+}
+
+func (h *assistantHandler) automation(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	userID, err := h.user(r.Context(), r)
+	if err != nil {
+		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		return
+	}
+	if h.opts.Repository == nil {
+		writeJSON(w, http.StatusOK, assistant.AutomationSettings{MaxAICallsPerHour: 20})
+		return
+	}
+	if r.Method == http.MethodGet {
+		settings, err := h.opts.Repository.AutomationSettings(r.Context(), userID)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not read automation settings", nil, "")
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+		return
+	}
+	if r.Method != http.MethodPatch {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		AIEnabled       *bool `json:"ai_enabled"`
+		TelegramEnabled *bool `json:"telegram_enabled"`
+		MaxAICalls      int   `json:"max_ai_calls_per_hour"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024)).Decode(&body) != nil {
+		writeAPIError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid JSON", nil, "")
+		return
+	}
+	current, err := h.opts.Repository.AutomationSettings(r.Context(), userID)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not read automation settings", nil, "")
+		return
+	}
+	if body.AIEnabled != nil {
+		if *body.AIEnabled && !h.opts.AIConfigured {
+			writeAPIError(w, http.StatusConflict, "AI_NOT_CONFIGURED", "AI provider is not configured on the server", nil, "")
+			return
+		}
+		current.AIEnabled = *body.AIEnabled
+	}
+	if body.TelegramEnabled != nil {
+		if *body.TelegramEnabled && !h.opts.TelegramConfigured {
+			writeAPIError(w, http.StatusConflict, "TELEGRAM_NOT_CONFIGURED", "Telegram is not configured on the server", nil, "")
+			return
+		}
+		current.TelegramEnabled = *body.TelegramEnabled
+	}
+	if body.MaxAICalls != 0 {
+		current.MaxAICallsPerHour = body.MaxAICalls
+	}
+	saved, err := h.opts.Repository.SaveAutomationSettings(r.Context(), userID, current)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid automation settings", nil, "")
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
 }
 
 func preferencePayload(value assistant.PreferenceRecord) assistantPreferencesPayload {

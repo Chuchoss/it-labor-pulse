@@ -894,6 +894,16 @@ func savePageInTx(
 		if err != nil {
 			return 0, 0, err
 		}
+		// The outbox row is written in the same transaction as the vacancy
+		// upsert. A unique source/external_id key makes retries harmless.
+		_, err = tx.Exec(ctx, `
+			INSERT INTO assistant_work_items (source, external_id)
+			VALUES ($1, $2)
+			ON CONFLICT (source, external_id) DO NOTHING
+		`, item.Vacancy.Source, item.Vacancy.ExternalID)
+		if err != nil {
+			return 0, 0, atDBStage("assistant outbox", err)
+		}
 		if changed {
 			upserted++
 		} else {

@@ -250,6 +250,10 @@ export const api = {
   runAssistantAnalysis: () => mutate<{ run_id: string; status: string }>('/assistant/analyze', 'POST'),
   assistantMatches: () => get<import('./types').AssistantMatch[]>('/assistant/matches', {}),
   telegramStatus: () => get<import('./types').TelegramStatus>('/assistant/telegram', {}),
+  assistantAutomation: () => get<import('./types').AssistantAutomationSettings>('/assistant/automation', {}),
+  updateAssistantAutomation: (value: Partial<import('./types').AssistantAutomationSettings>) =>
+    mutate<import('./types').AssistantAutomationSettings>('/assistant/automation', 'PATCH', value),
+  updateTelegramOptIn: (optedIn: boolean) => mutate<{ opted_in: boolean }>('/assistant/telegram', 'PATCH', { opted_in: optedIn }),
   telegramLink: () => mutate<{ deep_link: string; expires_at: string }>('/assistant/telegram/link', 'POST'),
   revokeTelegram: () => mutate<void>('/assistant/telegram', 'DELETE'),
 }

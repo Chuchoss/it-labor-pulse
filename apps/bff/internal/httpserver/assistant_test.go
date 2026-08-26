@@ -51,6 +51,13 @@ func (f *assistantRepositoryFake) ListMatches(context.Context, string, int) ([]a
 func (f *assistantRepositoryFake) TelegramStatus(context.Context, string, bool) (assistant.TelegramStatus, error) {
 	return assistant.TelegramStatus{}, nil
 }
+func (f *assistantRepositoryFake) AutomationSettings(context.Context, string) (assistant.AutomationSettings, error) {
+	return assistant.AutomationSettings{MaxAICallsPerHour: 20}, nil
+}
+func (f *assistantRepositoryFake) SaveAutomationSettings(_ context.Context, _ string, settings assistant.AutomationSettings) (assistant.AutomationSettings, error) {
+	return settings, nil
+}
+func (f *assistantRepositoryFake) SetTelegramOptIn(context.Context, string, bool) error { return nil }
 
 func TestAssistantPreferencesUseStableDevSubjectAndSupportPatch(t *testing.T) {
 	repo := &assistantRepositoryFake{}

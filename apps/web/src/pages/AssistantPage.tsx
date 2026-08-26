@@ -1,4 +1,4 @@
-import { Alert, Button, Card, CardContent, Chip, Divider, Stack, TextField, Typography } from '@mui/material'
+import { Alert, Button, Card, CardContent, Chip, Divider, Stack, Switch, TextField, Typography } from '@mui/material'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
@@ -10,9 +10,10 @@ export function AssistantPage() {
   const status = useQuery({ queryKey: ['assistant-status'], queryFn: api.assistantStatus, refetchInterval: 3000 })
   const matches = useQuery({ queryKey: ['assistant-matches'], queryFn: api.assistantMatches })
   const telegram = useQuery({ queryKey: ['telegram-status'], queryFn: api.telegramStatus })
+  const automation = useQuery({ queryKey: ['assistant-automation'], queryFn: api.assistantAutomation })
   const [note, setNote] = useState<string>()
   const [confirmed, setConfirmed] = useState(false)
-  const [confirmAction, setConfirmAction] = useState<'archive' | 'run' | null>(null)
+  const [confirmAction, setConfirmAction] = useState<'archive' | 'run' | 'ai' | 'telegram' | null>(null)
   const noteValue = note ?? preferences.data?.note ?? ''
   const hardCriteriaValue = preferences.data?.hard_criteria ?? {}
   const softCriteriaValue = preferences.data?.soft_criteria ?? {}
@@ -45,6 +46,14 @@ export function AssistantPage() {
     setConfirmAction(null)
     void client.invalidateQueries({ queryKey: ['assistant-status'] })
   } })
+  const updateAutomation = useMutation({
+    mutationFn: (value: { ai_enabled?: boolean; telegram_enabled?: boolean }) => api.updateAssistantAutomation(value),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['assistant-automation'] }),
+  })
+  const updateTelegramOptIn = useMutation({
+    mutationFn: (value: boolean) => api.updateTelegramOptIn(value),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['telegram-status'] }),
+  })
 
   return (
     <Stack spacing={3}>
@@ -53,6 +62,27 @@ export function AssistantPage() {
         <Typography color="text.secondary">Локальный помощник: сначала прозрачные критерии, затем опциональный AI.</Typography>
       </div>
       <Alert severity="info">Режим разработки. DeepSeek и Telegram выключены по умолчанию; ключи не вводятся в браузере.</Alert>
+      <Card variant="outlined"><CardContent>
+        <Stack spacing={1}>
+          <Typography variant="h6">Автоматизация</Typography>
+          <Typography variant="body2" color="text.secondary">
+            AI анализирует только вакансии, впервые наблюдённые после включения. Это может расходовать лимит провайдера; Telegram включается отдельно.
+          </Typography>
+          <Stack direction="row" sx={{ alignItems: 'center' }}>
+            <Switch checked={automation.data?.ai_enabled ?? false} disabled={!status.data?.ai_configured || updateAutomation.isPending}
+              onChange={() => setConfirmAction('ai')} slotProps={{ input: { 'aria-label': 'Автоматический AI-анализ' } }} />
+            <Typography>Автоматический AI-анализ</Typography>
+          </Stack>
+          <Stack direction="row" sx={{ alignItems: 'center' }}>
+            <Switch checked={automation.data?.telegram_enabled ?? false} disabled={!telegram.data?.configured || updateAutomation.isPending}
+              onChange={() => setConfirmAction('telegram')} slotProps={{ input: { 'aria-label': 'Отправлять совпадения в Telegram' } }} />
+            <Typography>Отправлять совпадения в Telegram</Typography>
+          </Stack>
+          <Typography variant="caption" color="text.secondary">
+            {automation.data?.activation_at ? `Активировано: ${new Date(automation.data.activation_at).toLocaleString('ru-RU')}` : 'Автоматический режим выключен'}
+          </Typography>
+        </Stack>
+      </CardContent></Card>
       <Card variant="outlined"><CardContent>
         <Stack spacing={2}>
           <Typography variant="h6">Статус анализа</Typography>
@@ -114,14 +144,30 @@ export function AssistantPage() {
           {link.data && <Alert severity="success">Откройте одноразовую ссылку: <a href={link.data.deep_link}>{link.data.deep_link}</a></Alert>}
           <Stack direction="row" spacing={1}>
             <Button variant="outlined" disabled={!telegram.data?.configured || link.isPending} onClick={() => void link.mutate()}>Создать ссылку</Button>
+            <Button variant="outlined" disabled={!telegram.data?.linked || updateTelegramOptIn.isPending}
+              onClick={() => void updateTelegramOptIn.mutate(!telegram.data?.opted_in)}>
+              {telegram.data?.opted_in ? 'Отозвать согласие' : 'Согласиться на уведомления'}
+            </Button>
             <Button color="warning" disabled={!telegram.data?.linked || revoke.isPending} onClick={() => void revoke.mutate()}>Отозвать</Button>
           </Stack>
         </Stack>
       </CardContent></Card>
       {confirmAction && <div role="dialog" aria-label="Подтверждение действия">
-        <Typography>{confirmAction === 'archive' ? 'Архивировать текущую версию? Она останется в истории, совпадения не удаляются.' : 'Запустить bounded-анализ? Будет обработано не более 25 новых вакансий; внешний AI выключен без серверного opt-in.'}</Typography>
+        <Typography>{confirmAction === 'archive'
+          ? 'Архивировать текущую версию? Она останется в истории, совпадения не удаляются.'
+          : confirmAction === 'run'
+            ? 'Запустить bounded-анализ? Будет обработано не более 25 новых вакансий; внешний AI выключен без серверного opt-in.'
+            : confirmAction === 'ai'
+              ? `${automation.data?.ai_enabled ? 'Выключить' : 'Включить'} автоматический AI-анализ? Внешний провайдер может расходовать средства; исторические вакансии не будут обработаны.`
+              : `${automation.data?.telegram_enabled ? 'Выключить' : 'Включить'} отправку совпадений в Telegram? Сначала требуется отдельное согласие на уведомления.`}</Typography>
         <Button onClick={() => setConfirmAction(null)}>Отмена</Button>
-        <Button onClick={() => confirmAction === 'archive' ? void archive.mutate() : void run.mutate()}>Подтвердить</Button>
+        <Button onClick={() => {
+          if (confirmAction === 'archive') void archive.mutate()
+          else if (confirmAction === 'run') void run.mutate()
+          else if (confirmAction === 'ai') void updateAutomation.mutate({ ai_enabled: !automation.data?.ai_enabled })
+          else if (confirmAction === 'telegram') void updateAutomation.mutate({ telegram_enabled: !automation.data?.telegram_enabled })
+          setConfirmAction(null)
+        }}>Подтвердить</Button>
       </div>}
     </Stack>
   )
