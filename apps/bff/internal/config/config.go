@@ -8,13 +8,15 @@ import (
 
 // Config holds BFF runtime settings from environment.
 type Config struct {
-	HTTPAddr                string
-	DatabaseURL             string
-	RedisURL                string
-	AppEnv                  string
-	LogLevel                string
-	AssistantEnabled        bool
-	AssistantDevAuthEnabled bool
+	HTTPAddr                 string
+	DatabaseURL              string
+	RedisURL                 string
+	AppEnv                   string
+	LogLevel                 string
+	AssistantEnabled         bool
+	AssistantLocalStore      bool
+	AssistantDevAuthEnabled  bool
+	AssistantTelegramEnabled bool
 }
 
 // Load reads BFF config from env.
@@ -22,13 +24,15 @@ type Config struct {
 // BFF is the public MVP edge (ADR 010). DATABASE_URL and REDIS_URL optional for health ping.
 func Load() Config {
 	return Config{
-		HTTPAddr:                resolveHTTPAddr(),
-		DatabaseURL:             strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		RedisURL:                strings.TrimSpace(os.Getenv("REDIS_URL")),
-		AppEnv:                  envOr("APP_ENV", "local"),
-		LogLevel:                envOr("LOG_LEVEL", "info"),
-		AssistantEnabled:        envBool("ASSISTANT_ENABLED", false),
-		AssistantDevAuthEnabled: envBool("ASSISTANT_DEV_AUTH_ENABLED", false),
+		HTTPAddr:                 resolveHTTPAddr(),
+		DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
+		AppEnv:                   envOr("APP_ENV", "local"),
+		LogLevel:                 envOr("LOG_LEVEL", "info"),
+		AssistantEnabled:         envBool("ASSISTANT_ENABLED", false),
+		AssistantLocalStore:      envBool("ASSISTANT_LOCAL_STORE", false),
+		AssistantDevAuthEnabled:  envBool("ASSISTANT_DEV_AUTH_ENABLED", false),
+		AssistantTelegramEnabled: envBool("ASSISTANT_TELEGRAM_ENABLED", false) && strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")) != "",
 	}
 }
 

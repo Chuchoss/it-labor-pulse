@@ -76,4 +76,54 @@ func TestLinkerOneTimeAndExpiry(t *testing.T) {
 	}
 }
 
+type workerFake struct {
+	locked     bool
+	users      []WorkerUser
+	candidates []WorkerCandidate
+	matches    []WorkerMatch
+	cursor     string
+}
+
+func (f *workerFake) TryLock(context.Context) (func() error, bool, error) {
+	if f.locked {
+		return func() error { return nil }, false, nil
+	}
+	f.locked = true
+	return func() error { f.locked = false; return nil }, true, nil
+}
+func (f *workerFake) Users(context.Context) ([]WorkerUser, error) { return f.users, nil }
+func (f *workerFake) Candidates(context.Context, string, time.Time, int) ([]WorkerCandidate, error) {
+	return f.candidates, nil
+}
+func (f *workerFake) SaveMatch(_ context.Context, match WorkerMatch) (bool, error) {
+	for _, existing := range f.matches {
+		if existing.UserID == match.UserID && existing.VacancyID == match.VacancyID &&
+			existing.PreferenceVersion == match.PreferenceVersion {
+			return false, nil
+		}
+	}
+	f.matches = append(f.matches, match)
+	return true, nil
+}
+func (f *workerFake) SaveDelivery(context.Context, WorkerDelivery) (bool, error) { return false, nil }
+func (f *workerFake) AdvanceCursor(_ context.Context, _ string, _ time.Time, id string) error {
+	f.cursor = id
+	return nil
+}
+
+func TestWorkerIsBoundedAndIdempotent(t *testing.T) {
+	fake := &workerFake{
+		users:      []WorkerUser{{ID: "u1", Preference: PreferenceRecord{Version: 1}}},
+		candidates: []WorkerCandidate{{ID: "v1", Source: "hh", ExternalID: "1", Vacancy: Vacancy{ID: "v1"}}},
+	}
+	stats, err := RunOnce(context.Background(), fake, WorkerOptions{BatchSize: 1})
+	if err != nil || stats.Processed != 1 || stats.Matched != 1 {
+		t.Fatalf("first run: %+v, %v", stats, err)
+	}
+	stats, err = RunOnce(context.Background(), fake, WorkerOptions{BatchSize: 1})
+	if err != nil || stats.Matched != 0 || len(fake.matches) != 1 {
+		t.Fatalf("rerun: %+v, %v", stats, err)
+	}
+}
+
 func ptr(v float64) *float64 { return &v }

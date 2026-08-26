@@ -18,6 +18,7 @@ import (
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/readapi"
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/redisx"
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/repository"
+	"github.com/Chuchoss/it-labor-pulse/libs/go-common/assistant"
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/logging"
 )
 
@@ -35,6 +36,7 @@ func main() {
 
 	var dbPinger db.Pinger
 	var readService httpserver.ReadService
+	var assistantRepository httpserver.AssistantRepository
 	if cfg.DatabaseURL != "" {
 		p, err := db.Open(cfg.DatabaseURL)
 		if err != nil {
@@ -44,10 +46,20 @@ func main() {
 		}
 		dbPinger = p
 		readService = readapi.NewService(repository.NewPostgres(p.Pool()))
+		assistantRepository = assistant.NewPostgresRepository(p.Pool())
 		defer func() { _ = dbPinger.Close() }()
 		log.Info("database_configured")
 	} else {
 		log.Info("database_not_configured")
+	}
+	if cfg.AssistantEnabled && assistantRepository == nil &&
+		!cfg.AssistantLocalStore && cfg.AppEnv != "local" && cfg.AppEnv != "dev" {
+		log.Error("assistant_store_missing", "kind", "persistent_store_required")
+		os.Exit(1)
+	}
+	if cfg.AssistantEnabled && assistantRepository == nil && !cfg.AssistantLocalStore {
+		log.Error("assistant_store_missing", "kind", "set_database_url_or_assistant_local_store")
+		os.Exit(1)
 	}
 
 	var redisPinger redisx.Pinger
@@ -72,8 +84,10 @@ func main() {
 		Redis:       redisPinger,
 		ReadService: readService,
 		Assistant: httpserver.AssistantOptions{
-			Enabled:        cfg.AssistantEnabled,
-			DevAuthEnabled: cfg.AssistantDevAuthEnabled && (cfg.AppEnv == "local" || cfg.AppEnv == "dev"),
+			Enabled:            cfg.AssistantEnabled,
+			DevAuthEnabled:     cfg.AssistantDevAuthEnabled && (cfg.AppEnv == "local" || cfg.AppEnv == "dev"),
+			Repository:         assistantRepository,
+			TelegramConfigured: cfg.AssistantTelegramEnabled,
 		},
 	})
 

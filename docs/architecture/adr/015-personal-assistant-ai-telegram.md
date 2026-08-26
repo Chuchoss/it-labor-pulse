@@ -16,6 +16,15 @@ assistant для одной локальной учётной записи.
 nonce через `/start`, а не произвольным `chat_id`. Public vacancy listing и
 Phase 5 Perspectives остаются отдельными.
 
+Локальный BFF и worker используют PostgreSQL как durable store: версии
+preferences append-only, request idempotency keys возвращают исходную версию,
+а match/delivery/work state защищены unique keys. Worker обрабатывает bounded
+fresh window с PostgreSQL advisory lock и cursor. `X-Dev-User` допустим только
+в `local`/`dev` и является явной single-user development identity, а не
+production auth. One-candidate DeepSeek validation требует одновременно
+`ASSISTANT_AI_ENABLED=true`, `ASSISTANT_AI_LIVE_TEST=true` и CLI
+`-allow-external`; Telegram остаётся выключенным до отдельного opt-in.
+
 ## Consequences
 
 (+) Нет AI/Telegram вызовов при обычном локальном старте; deterministic matching

@@ -516,6 +516,34 @@ redis-cli -h localhost -p 6379 PING
 Сервисы Go (когда появятся) на хосте читают `DATABASE_URL` (или `POSTGRES_*`) и `REDIS_URL` (или `REDIS_ADDR` + `REDIS_PASSWORD`).  
 Внутри Docker-сети Compose: при `local-redis` — `redis:6379`; при `local-pg` — `postgres:5432` (сеть `lma_net`).
 
+### Локальный assistant и безопасная AI-проверка
+
+При `ASSISTANT_ENABLED=true` BFF использует только PostgreSQL-репозиторий,
+если задан `DATABASE_URL`. `ASSISTANT_LOCAL_STORE=true` разрешает пустой
+in-memory fallback только в `local`/`dev` для тестов; это не режим production.
+Идентичность локального пользователя явно задаётся заголовком `X-Dev-User`,
+поэтому она не является заменой JWT-аутентификации.
+
+Worker запускается ограниченным one-shot окном:
+
+```powershell
+go run ./apps/assistant/cmd/worker -once
+```
+
+Он берёт только свежий bounded batch, использует PostgreSQL advisory lock и
+durable cursor. AI и Telegram по умолчанию не вызываются. Для ровно одной
+проверки DeepSeek нужен отдельный явный запуск:
+
+```powershell
+$env:ASSISTANT_AI_ENABLED="true"
+$env:ASSISTANT_AI_LIVE_TEST="true"
+go run ./apps/assistant/cmd/worker -once -allow-external
+```
+
+Команда требует серверный `DEEPSEEK_API_KEY`, не принимает prompt или URL от UI
+и не обрабатывает исторический полный набор. `ASSISTANT_TELEGRAM_ENABLED`
+остаётся `false`; связка и отправка Telegram до отдельного opt-in не выполняются.
+
 ---
 
 ## Порты (local)
