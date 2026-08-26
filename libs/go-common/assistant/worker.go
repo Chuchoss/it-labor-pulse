@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
 	"log/slog"
 	"time"
 )
@@ -31,9 +32,15 @@ type WorkerCandidate struct {
 }
 
 type WorkerMatch struct {
-	UserID, VacancyID, Source, ExternalID string
-	PreferenceVersion                     int
-	Result                                Result
+	UserID, VacancyID, Source, ExternalID  string
+	PreferenceVersion                      int
+	Result                                 Result
+	Method, Provider, Model, PromptVersion string
+	InputSnapshotHash                      []byte
+}
+
+type AIStore interface {
+	SaveAIResult(context.Context, WorkerMatch, MatchOutput) error
 }
 
 type WorkerDelivery struct {
@@ -123,8 +130,20 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (Worker
 					evidence[id] = true
 				}
 				input := MinimizedInput(candidate.Title, candidate.SalaryText, nil, evidence)
-				if _, err := opts.AIProvider.Complete(ctx, Request{InputSnapshot: input, Evidence: evidence}); err != nil {
+				output, err := opts.AIProvider.Complete(ctx, Request{InputSnapshot: input, Evidence: evidence})
+				if err != nil {
 					return stats, err
+				}
+				if durable, ok := store.(AIStore); ok {
+					aiResult := Result{Decision: Decision(output.Decision), Score: output.Score,
+						Reasons: output.Matched, Unknowns: output.Unknowns, Conflicts: output.Conflicts, Evidence: output.Evidence}
+					if err := durable.SaveAIResult(ctx, WorkerMatch{
+						UserID: user.ID, VacancyID: candidate.ID, PreferenceVersion: user.Preference.Version,
+						Result: aiResult, Method: "ai", Provider: "deepseek",
+						InputSnapshotHash: sha256Bytes(input),
+					}, output); err != nil {
+						return stats, err
+					}
 				}
 				aiCalls++
 				stats.AICalls++
@@ -147,6 +166,11 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (Worker
 		opts.Log.Info("assistant_worker_complete", "stats", stats)
 	}
 	return stats, nil
+}
+
+func sha256Bytes(value string) []byte {
+	sum := sha256.Sum256([]byte(value))
+	return sum[:]
 }
 
 func toPreferences(p PreferenceRecord) Preferences {

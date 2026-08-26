@@ -366,18 +366,57 @@ func (r *PostgresRepository) SaveMatch(ctx context.Context, match WorkerMatch) (
 	tag, err := r.db.Exec(ctx, `
 		INSERT INTO vacancy_match_results
 			(user_id, preference_id, vacancy_id, decision, method, score, rationale,
-			 evidence_ids, conflicts, unknowns)
-		SELECT $1::uuid, p.id, $2::uuid, $3, 'deterministic', $4, $5, $6::jsonb, $7::jsonb, $8::jsonb
+			 evidence_ids, conflicts, unknowns, provider, model, input_snapshot_hash)
+		SELECT $1::uuid, p.id, $2::uuid, $3, COALESCE(NULLIF($10, ''), 'deterministic'), $4, $5,
+			$6::jsonb, $7::jsonb, $8::jsonb, NULLIF($11, ''), NULLIF($12, ''), $13
 		FROM vacancy_preferences p
 		WHERE p.user_id = $1::uuid AND p.version = $9
 		ON CONFLICT DO NOTHING
 	`, match.UserID, match.VacancyID, string(match.Result.Decision), match.Result.Score,
 		strings.Join(match.Result.Reasons, "; "), string(evidence), string(conflicts), string(unknowns),
-		match.PreferenceVersion)
+		match.PreferenceVersion, match.Method, match.Provider, match.Model, match.InputSnapshotHash)
 	if err != nil {
 		return false, fmt.Errorf("save assistant match: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+func (r *PostgresRepository) SaveAIResult(ctx context.Context, match WorkerMatch, output MatchOutput) error {
+	inputHash := match.InputSnapshotHash
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO assistant_ai_jobs
+			(user_id, preference_id, vacancy_id, status, provider, model, input_snapshot_hash, finished_at)
+		SELECT $1::uuid, p.id, $2::uuid, 'complete', $3, $4, $5, now()
+		FROM vacancy_preferences p
+		WHERE p.user_id = $1::uuid AND p.version = $6
+		ON CONFLICT (user_id, preference_id, vacancy_id) DO UPDATE SET
+			status = EXCLUDED.status, provider = EXCLUDED.provider, model = EXCLUDED.model,
+			input_snapshot_hash = EXCLUDED.input_snapshot_hash, finished_at = EXCLUDED.finished_at
+	`, match.UserID, match.VacancyID, match.Provider, match.Model, inputHash, match.PreferenceVersion)
+	if err != nil {
+		return fmt.Errorf("save assistant AI job: %w", err)
+	}
+	_, err = r.db.Exec(ctx, `
+		INSERT INTO vacancy_match_results
+			(user_id, preference_id, vacancy_id, decision, method, score, confidence,
+			 rationale, evidence_ids, conflicts, unknowns, provider, model, input_snapshot_hash)
+		SELECT $1::uuid, p.id, $2::uuid, $3, 'ai', $4, $5, $6, $7::jsonb, $8::jsonb,
+			$9::jsonb, $10, $11, $12
+		FROM vacancy_preferences p
+		WHERE p.user_id = $1::uuid AND p.version = $13
+		ON CONFLICT DO NOTHING
+	`, match.UserID, match.VacancyID, output.Decision, output.Score, output.Confidence,
+		output.Rationale, jsonArray(output.Evidence), jsonArray(output.Conflicts),
+		jsonArray(output.Unknowns), match.Provider, match.Model, inputHash, match.PreferenceVersion)
+	if err != nil {
+		return fmt.Errorf("save assistant AI result: %w", err)
+	}
+	return nil
+}
+
+func jsonArray(values []string) string {
+	data, _ := json.Marshal(values)
+	return string(data)
 }
 
 func (r *PostgresRepository) SaveDelivery(ctx context.Context, delivery WorkerDelivery) (bool, error) {
