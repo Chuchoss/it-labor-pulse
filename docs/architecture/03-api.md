@@ -456,6 +456,19 @@ aliases из [runbook assistant](../runbooks/personal-assistant.md): извес�
 `approved_roles`; неизвестное возвращает `400 VALIDATION_ERROR`. Старая строка
 в `vacancy_preferences` не обновляется.
 
+#### `/api/v1/assistant/analyze` и `/api/v1/assistant/status` (Phase 4)
+
+`POST /analyze` фиксирует конечный снимок всех `is_active=true`,
+`deleted_at IS NULL` вакансий активных sources на момент создания run. Scope
+ограничен `snapshot_cutoff` и проходит keyset-пакетами `(created_at, id)`;
+созданные позже вакансии остаются для следующего запуска и инкрементального
+outbox. Один активный run на пользователя; повтор того же `Idempotency-Key`
+возвращает исходный `run_id`.
+
+`GET /status` возвращает `processed/total`, `matched`, `ai_calls` и состояние.
+AI выключенный не блокирует deterministic scan. AI возможен только для
+deterministic matches при пользовательском и серверном opt-in.
+
 ---
 
 ## OpenAPI sketch (фрагмент)

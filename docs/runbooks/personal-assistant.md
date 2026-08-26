@@ -42,10 +42,13 @@ evidence совпадений остаются доступны для ауди�
 `GET /api/v1/assistant/status` читает последний run из PostgreSQL. Состояния
 `never_run`, `queued`, `running`, `succeeded`, `failed`, `disabled` и счётчики
 детерминированного matcher/AI не являются in-memory состоянием. Кнопка запуска
-ставит в очередь только bounded-окно (до 25 новых вакансий), не запускает
-Telegram и не сканирует исторические вакансии. Внешний DeepSeek требует
-отдельного server-side opt-in (`ASSISTANT_AI_ENABLED` и explicit live-test gate);
-обычный запуск не создаёт расхода провайдера.
+фиксирует снимок всех текущих активных неудалённых вакансий активных источников.
+Worker обрабатывает снимок пакетами до 25 строк по keyset cursor; `total` известен
+при создании, progress сохраняется после каждого пакета. Созданные после cutoff
+вакансии остаются для следующего ручного запуска и outbox. Внешний DeepSeek
+требует отдельного server-side opt-in (`ASSISTANT_AI_ENABLED` и explicit
+live-test gate); при выключенном AI полный deterministic scan завершается без
+внешних вызовов.
 
 ## Конфигурация
 
@@ -94,8 +97,9 @@ Telegram delivery — at-least-once: timeout после принятия Bot API
 неопределённым исходом и может привести к повтору; exactly-once не обещается.
 Вакансия отправляется только при глобальном флаге, пользовательском флаге,
 подтверждённой неотозванной связи, opt-in и deterministic/AI `match`.
-`activation_at` исключает исторический backlog; AI выключенный не блокирует
-deterministic match.
+`activation_at` исключает исторический backlog только из автоматического
+outbox-пути; ручной snapshot намеренно анализирует существующие вакансии.
+Пересечение snapshot/outbox безопасно дедуплицируется unique result key.
 
 ## Безопасный smoke
 
@@ -119,7 +123,7 @@ go run ./apps/assistant/cmd/worker -once
 Без настроенного persistent assistant store команда завершается с агрегатами
 `users=0`, не создаёт локальную identity и не вызывает внешние API. В рабочем
 контуре worker должен быть подключён к PostgreSQL repository, запускаться одним
-экземпляром (advisory lock) и обрабатывать только свежий cursor window.
+экземпляром (advisory lock) и обрабатывать ручной snapshot либо свежий outbox.
 
 ## Включение по явному opt-in
 

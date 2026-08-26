@@ -647,7 +647,7 @@ paths:
     get:
       tags: [assistant]
       operationId: getAssistantStatus
-      summary: Статус последнего bounded анализа
+      summary: Статус последнего анализа снимка вакансий
       security:
         - bearerAuth: []
       responses:
@@ -661,8 +661,8 @@ paths:
     post:
       tags: [assistant]
       operationId: runAssistantAnalysis
-      summary: Поставить bounded анализ в очередь
-      description: Не более 25 новых вакансий; Telegram не отправляется. Внешний AI требует отдельного server-side opt-in.
+      summary: Запустить анализ всех текущих вакансий
+      description: Фиксирует конечный снимок всех активных неудалённых вакансий активных источников и обрабатывает его bounded keyset-пакетами. Новые вакансии после cutoff остаются для следующего запуска и инкрементального outbox. AI применяется только к deterministic matches и требует отдельного server-side opt-in.
       security:
         - bearerAuth: []
       responses:
@@ -1640,7 +1640,7 @@ components:
 
     AssistantStatus:
       type: object
-      required: [ai_configured, state, processed, eligible, matched, ai_calls, skipped, pending_candidates]
+      required: [ai_configured, state, processed, total, eligible, matched, ai_calls, skipped, pending_candidates]
       properties:
         ai_configured: { type: boolean }
         state: { type: string, enum: [never_run, queued, running, succeeded, failed, disabled] }
@@ -1648,6 +1648,7 @@ components:
         finished_at: { type: [string, "null"], format: date-time }
         last_checked_at: { type: [string, "null"], format: date-time }
         processed: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 0 }
         eligible: { type: integer, minimum: 0 }
         matched: { type: integer, minimum: 0 }
         ai_calls: { type: integer, minimum: 0 }

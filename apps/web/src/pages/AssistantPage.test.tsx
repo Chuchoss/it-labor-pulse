@@ -209,4 +209,33 @@ describe('AssistantPage', () => {
     expect(hardCriteria.role).toBeUndefined()
     expect(hardCriteria.min_salary_rub).toBeUndefined()
   })
+
+  it('starts a full current-vacancy scan and shows meaningful progress', async () => {
+    let started = false
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        id: 'preference-1', version: 1, note: '', hard_criteria: {},
+        soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        ai_configured: false, state: 'succeeded', processed: 25, total: 151,
+        eligible: 25, matched: 3, ai_calls: 0, skipped: 22, pending_candidates: false,
+      })),
+      http.post('*/api/v1/assistant/analyze', () => {
+        started = true
+        return HttpResponse.json({ run_id: 'run-full', status: 'queued' }, { status: 202 })
+      }),
+    )
+
+    const user = userEvent.setup()
+    renderPage(<AssistantPage />)
+    expect(await screen.findByText(/25 из 151 вакансий/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Запустить анализ' }))
+    expect(screen.getByText(/анализ всех текущих активных вакансий/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Подтвердить' }))
+
+    await waitFor(() => expect(started).toBe(true))
+    expect(await screen.findByText(/ID запуска: run-full/)).toBeInTheDocument()
+  })
 })

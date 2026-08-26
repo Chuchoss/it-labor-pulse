@@ -40,6 +40,7 @@ type AnalysisStatus struct {
 	FinishedAt        *time.Time `json:"finished_at,omitempty"`
 	LastCheckedAt     time.Time  `json:"last_checked_at"`
 	Processed         int        `json:"processed"`
+	Total             int        `json:"total"`
 	Eligible          int        `json:"eligible"`
 	Matched           int        `json:"matched"`
 	AICalls           int        `json:"ai_calls"`
@@ -56,8 +57,18 @@ type AnalysisStatus struct {
 }
 
 type AssistantRun struct {
-	ID     string
-	UserID string
+	ID              string
+	UserID          string
+	PreferenceID    string
+	SnapshotCutoff  time.Time
+	Total           int
+	Processed       int
+	Eligible        int
+	Matched         int
+	AICalls         int
+	Skipped         int
+	CursorCreatedAt *time.Time
+	CursorVacancyID string
 }
 
 type AssistantRunStore interface {
@@ -66,7 +77,7 @@ type AssistantRunStore interface {
 }
 
 type ScopedWorkerStore interface {
-	UsersForAssistantRun(context.Context, string) ([]WorkerUser, error)
+	UsersForAssistantRun(context.Context, AssistantRun) ([]WorkerUser, error)
 }
 
 var ErrInvalidPreferences = errors.New("invalid assistant preferences")
@@ -205,10 +216,10 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 	var s AnalysisStatus
 	var cursorAt *time.Time
 	err := r.db.QueryRow(ctx, `SELECT state, started_at, finished_at, last_checked_at,
-		processed, eligible, matched, ai_calls, skipped, error_category, request_id,
+		processed, snapshot_total, eligible, matched, ai_calls, skipped, error_category, request_id,
 		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version
 		FROM assistant_runs WHERE user_id = $1::uuid ORDER BY created_at DESC LIMIT 1`, userID).Scan(
-		&s.State, &s.StartedAt, &s.FinishedAt, &s.LastCheckedAt, &s.Processed, &s.Eligible,
+		&s.State, &s.StartedAt, &s.FinishedAt, &s.LastCheckedAt, &s.Processed, &s.Total, &s.Eligible,
 		&s.Matched, &s.AICalls, &s.Skipped, &s.ErrorCategory, &s.RequestID, &s.CursorSource,
 		&cursorAt, &s.PendingCandidates, &s.Provider, &s.Model, &s.PromptVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -228,10 +239,36 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 
 func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestID string) (string, error) {
 	var id string
-	err := r.db.QueryRow(ctx, `INSERT INTO assistant_runs (user_id, state, request_id)
-		SELECT $1::uuid, 'queued', NULLIF($2, '')
-		WHERE NOT EXISTS (SELECT 1 FROM assistant_runs WHERE user_id = $1::uuid AND state IN ('queued','running'))
-		RETURNING id::text`, userID, requestID).Scan(&id)
+	err := r.db.QueryRow(ctx, `
+		WITH locked AS (
+			SELECT pg_advisory_xact_lock(hashtextextended($1, 1))
+		), existing_request AS (
+			SELECT id FROM assistant_runs CROSS JOIN locked
+			WHERE user_id = $1::uuid AND request_id = NULLIF($2, '')
+		), active AS (
+			SELECT id FROM assistant_runs
+			WHERE user_id = $1::uuid AND state IN ('queued','running')
+		), preference AS (
+			SELECT id FROM vacancy_preferences
+			WHERE user_id = $1::uuid AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		), scope AS (
+			SELECT clock_timestamp() AS cutoff, count(v.id)::integer AS total
+			FROM vacancies v JOIN sources s ON s.code = v.source AND s.is_active
+			WHERE v.is_active AND v.deleted_at IS NULL
+		), inserted AS (
+			INSERT INTO assistant_runs
+				(user_id, state, request_id, preference_id, snapshot_cutoff, snapshot_total)
+			SELECT $1::uuid, 'queued', NULLIF($2, ''), preference.id, scope.cutoff, scope.total
+			FROM preference CROSS JOIN scope
+			WHERE NOT EXISTS (SELECT 1 FROM existing_request)
+			  AND NOT EXISTS (SELECT 1 FROM active)
+			RETURNING id
+		)
+		SELECT id::text FROM existing_request
+		UNION ALL SELECT id::text FROM inserted
+		LIMIT 1
+	`, userID, requestID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("analysis already running")
 	}
@@ -245,15 +282,20 @@ func (r *PostgresRepository) ClaimAssistantRun(ctx context.Context) (AssistantRu
 	var run AssistantRun
 	err := r.db.QueryRow(ctx, `
 		UPDATE assistant_runs
-		SET state = 'running', started_at = now(), last_checked_at = now()
+		SET state = 'running', started_at = COALESCE(started_at, now()),
+			last_checked_at = now(), lease_until = now() + interval '10 minutes'
 		WHERE id = (
 			SELECT id FROM assistant_runs
-			WHERE state = 'queued'
+			WHERE state = 'queued' OR (state = 'running' AND lease_until < now())
 			ORDER BY created_at, id
 			FOR UPDATE SKIP LOCKED LIMIT 1
 		)
-		RETURNING id::text, user_id::text
-	`).Scan(&run.ID, &run.UserID)
+		RETURNING id::text, user_id::text, preference_id::text, snapshot_cutoff,
+			snapshot_total, processed, eligible, matched, ai_calls, skipped,
+			snapshot_cursor_created_at, COALESCE(snapshot_cursor_vacancy_id::text, '')
+	`).Scan(&run.ID, &run.UserID, &run.PreferenceID, &run.SnapshotCutoff, &run.Total,
+		&run.Processed, &run.Eligible, &run.Matched, &run.AICalls, &run.Skipped,
+		&run.CursorCreatedAt, &run.CursorVacancyID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssistantRun{}, false, nil
 	}
@@ -271,7 +313,7 @@ func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, st
 		UPDATE assistant_runs
 		SET state = $2, finished_at = now(), last_checked_at = now(),
 			processed = $3, eligible = $4, matched = $5, ai_calls = $6,
-			skipped = $7, error_category = NULLIF($8, '')
+			skipped = $7, error_category = NULLIF($8, ''), lease_until = NULL
 		WHERE id = $1::uuid
 	`, runID, state, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls, stats.Skipped, errorCategory)
 	if err != nil {
@@ -603,7 +645,7 @@ func (r *PostgresRepository) Users(ctx context.Context) ([]WorkerUser, error) {
 		FROM assistant_users u
 		JOIN LATERAL (
 			SELECT id, version, note, hard_criteria, soft_criteria, weights, active_from
-			FROM vacancy_preferences WHERE user_id = u.id
+			FROM vacancy_preferences WHERE user_id = u.id AND archived_at IS NULL
 			ORDER BY version DESC LIMIT 1
 		) p ON true
 		ORDER BY u.id
@@ -640,18 +682,113 @@ func (r *PostgresRepository) Users(ctx context.Context) ([]WorkerUser, error) {
 	return users, rows.Err()
 }
 
-func (r *PostgresRepository) UsersForAssistantRun(ctx context.Context, userID string) ([]WorkerUser, error) {
-	users, err := r.Users(ctx)
+func (r *PostgresRepository) UsersForAssistantRun(ctx context.Context, run AssistantRun) ([]WorkerUser, error) {
+	var user WorkerUser
+	var hard, soft, weights []byte
+	err := r.db.QueryRow(ctx, `
+		SELECT p.user_id::text, p.version, p.note, p.hard_criteria,
+			p.soft_criteria, p.weights, p.active_from
+		FROM vacancy_preferences p
+		WHERE p.id = $1::uuid AND p.user_id = $2::uuid
+	`, run.PreferenceID, run.UserID).Scan(&user.ID, &user.Preference.Version, &user.Preference.Note,
+		&hard, &soft, &weights, &user.Preference.ActiveFrom)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load assistant run preference: %w", err)
+	}
+	if err := json.Unmarshal(hard, &user.Preference.HardCriteria); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(soft, &user.Preference.SoftCriteria); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(weights, &user.Preference.Weights); err != nil {
+		return nil, err
+	}
+	normalized, _, err := NormalizePreferenceRoles(user.Preference)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]WorkerUser, 0, 1)
-	for _, user := range users {
-		if user.ID == userID {
-			result = append(result, user)
-		}
+	user.Preference = normalized
+	return []WorkerUser{user}, nil
+}
+
+func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run AssistantRun, limit int) ([]WorkerCandidate, error) {
+	if limit < 1 || limit > 100 {
+		limit = 25
 	}
-	return result, nil
+	rows, err := r.db.Query(ctx, `
+		SELECT v.id::text, v.source, v.external_id, v.title, v.source_url,
+			v.salary_mid, COALESCE(ra.pattern, v.role_id::text), v.region_id::text,
+			v.published_at, v.collected_at, v.created_at,
+			COALESCE(array_agg(sk.slug) FILTER (WHERE sk.slug IS NOT NULL), '{}')
+		FROM vacancies v
+		JOIN sources src ON src.code = v.source AND src.is_active
+		LEFT JOIN role_aliases ra ON ra.role_id = v.role_id AND ra.source = v.source
+		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
+		LEFT JOIN skills sk ON sk.id = vs.skill_id
+		WHERE v.is_active AND v.deleted_at IS NULL AND v.created_at <= $1
+		  AND ($2::timestamptz IS NULL OR (v.created_at, v.id) >
+		      ($2::timestamptz, NULLIF($3, '')::uuid))
+		GROUP BY v.id, ra.pattern
+		ORDER BY v.created_at, v.id
+		LIMIT $4
+	`, run.SnapshotCutoff, run.CursorCreatedAt, run.CursorVacancyID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list assistant snapshot candidates: %w", err)
+	}
+	defer rows.Close()
+	candidates := make([]WorkerCandidate, 0, limit)
+	for rows.Next() {
+		var c WorkerCandidate
+		var salary *float64
+		var sourceURL, roleID, regionID *string
+		var published *time.Time
+		var skills []string
+		if err := rows.Scan(&c.ID, &c.Source, &c.ExternalID, &c.Title, &sourceURL,
+			&salary, &roleID, &regionID, &published, &c.ObservedAt, &c.CreatedAt, &skills); err != nil {
+			return nil, fmt.Errorf("scan assistant snapshot candidate: %w", err)
+		}
+		if sourceURL != nil {
+			c.SourceURL = *sourceURL
+		}
+		c.Vacancy = Vacancy{ID: c.ID, Title: c.Title, SalaryRUB: salary, PublishedAt: published, Skills: skills}
+		if roleID != nil {
+			c.Vacancy.RoleID = *roleID
+		}
+		if regionID != nil {
+			c.Vacancy.RegionID = *regionID
+		}
+		candidates = append(candidates, c)
+	}
+	return candidates, rows.Err()
+}
+
+func (r *PostgresRepository) UpdateAssistantRunProgress(
+	ctx context.Context,
+	runID string,
+	stats WorkerStats,
+	last *WorkerCandidate,
+) error {
+	var cursorAt any
+	var cursorID any
+	if last != nil {
+		cursorAt = last.CreatedAt
+		cursorID = last.ID
+	}
+	_, err := r.db.Exec(ctx, `
+		UPDATE assistant_runs SET processed=$2, eligible=$3, matched=$4, ai_calls=$5,
+			skipped=$6, snapshot_cursor_created_at=COALESCE($7, snapshot_cursor_created_at),
+			snapshot_cursor_vacancy_id=COALESCE($8::uuid, snapshot_cursor_vacancy_id),
+			last_checked_at=now(), lease_until=now() + interval '10 minutes'
+		WHERE id=$1::uuid AND state='running'
+	`, runID, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls, stats.Skipped, cursorAt, cursorID)
+	if err != nil {
+		return fmt.Errorf("update assistant run progress: %w", err)
+	}
+	return nil
 }
 
 func (r *PostgresRepository) Candidates(ctx context.Context, source string, cutoff time.Time, limit int) ([]WorkerCandidate, error) {

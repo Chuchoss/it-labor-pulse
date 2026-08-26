@@ -225,10 +225,14 @@ export function AssistantPage() {
             <Chip label={status.data?.state ?? 'загрузка'} color={status.data?.state === 'succeeded' ? 'success' : status.data?.state === 'failed' ? 'error' : 'default'} />
             <Button size="small" onClick={() => void status.refetch()}>Обновить</Button>
           </Stack>
-          {(status.data?.state === 'queued' || status.data?.state === 'running') && <Typography>Анализ выполняется…</Typography>}
-          <Typography>Детерминированный анализ: {status.data?.processed ?? 0} вакансий</Typography>
+          {status.data?.state === 'queued' && <Typography>Подготавливаем снимок всех текущих вакансий…</Typography>}
+          {status.data?.state === 'running' && <Typography>Анализируем все текущие вакансии…</Typography>}
+          <Typography>
+            Детерминированный анализ: {status.data?.processed ?? 0}
+            {status.data?.total !== undefined ? ` из ${status.data.total}` : ''} вакансий
+          </Typography>
           <Typography>AI-анализ: {status.data?.ai_calls ?? 0} вакансий · Совпадения: {status.data?.matched ?? 0}</Typography>
-          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключена; ручной детерминированный анализ ещё не запускался.' : status.data?.state === 'never_run' ? 'Анализ ещё не запускался.' : status.data?.state === 'queued' ? 'Поставлено в очередь; worker ещё не начал обработку.' : status.data?.state === 'running' ? 'Worker обрабатывает bounded-пакет.' : status.data?.state === 'failed' ? 'Анализ завершился с безопасной ошибкой; повторите запуск.' : status.data?.pending_candidates ? 'Есть кандидаты, ожидающие обработки.' : 'Анализ завершён; подходящих кандидатов нет или очередь обработана.'}</Typography>
+          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключена; ручной детерминированный анализ ещё не запускался.' : status.data?.state === 'never_run' ? 'Анализ ещё не запускался.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала анализа.' : status.data?.state === 'running' ? 'Обработка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.' : status.data?.state === 'failed' ? 'Анализ завершился с безопасной ошибкой; повторите запуск.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Анализ всех вакансий из снимка завершён.'}</Typography>
           {status.data?.finished_at && <Typography variant="body2">Последний анализ: {new Date(status.data.finished_at).toLocaleString('ru-RU')}</Typography>}
           <Button variant="contained" disabled={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'} onClick={() => setConfirmAction('run')}>Запустить анализ</Button>
           {run.data && <Alert severity="info">Поставлено в очередь. ID запуска: {run.data.run_id}</Alert>}
@@ -379,7 +383,7 @@ export function AssistantPage() {
         <Typography>{confirmAction === 'archive'
           ? 'Архивировать текущую версию? Она останется в истории, совпадения не удаляются.'
           : confirmAction === 'run'
-            ? 'Запустить bounded-анализ? Будет обработано не более 25 новых вакансий; внешний AI выключен без серверного opt-in.'
+            ? 'Запустить анализ всех текущих активных вакансий? Снимок фиксируется сейчас; новые вакансии попадут в следующий запуск. Внешний AI выключен без отдельного серверного разрешения.'
             : confirmAction === 'ai'
               ? `${automation.data?.ai_enabled ? 'Выключить' : 'Включить'} автоматический AI-анализ? Внешний провайдер может расходовать средства; исторические вакансии не будут обработаны.`
               : confirmAction === 'test'

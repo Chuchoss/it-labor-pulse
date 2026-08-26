@@ -216,6 +216,7 @@ export interface AssistantStatus {
   finished_at?: string
   last_checked_at?: string
   processed: number
+  total: number
   eligible: number
   matched: number
   ai_calls: number

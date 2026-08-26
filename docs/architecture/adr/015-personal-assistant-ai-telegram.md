@@ -30,8 +30,11 @@ Lifecycle preferences остаётся append-only: UI показывает со
 архивировании последней активной версии новый запуск не должен обрабатывать
 профиль до сохранения новой версии. `assistant_runs` хранит состояние и
 агрегированные counters в PostgreSQL; UI может безопасно обновляться после
-перезапуска BFF. Обычная кнопка запуска ограничена 25 новыми кандидатами и не
-включает платный provider.
+перезапуска BFF. Ручная кнопка фиксирует `snapshot_cutoff`, текущую
+immutable-версию preferences и количество всех активных неудалённых вакансий
+активных источников. Worker проходит этот конечный scope keyset-пакетами
+`(created_at, id)` и сохраняет cursor/progress между пакетами. Вакансии,
+созданные после cutoff, не входят в запуск.
 
 Автоматический режим использует `assistant_work_items` как PostgreSQL outbox:
 запись создаётся в той же транзакции, что и upsert вакансии, и уникальна по
@@ -42,6 +45,12 @@ Lifecycle preferences остаётся append-only: UI показывает со
 `assistant_automation_settings`, обе по умолчанию выключены. Включение AI
 фиксирует `activation_at`, поэтому старые `first_observed_at` не backfill-ятся;
 `published_at` остаётся только показателем свежести HH.
+
+Ручной snapshot и outbox не создают отдельные копии вакансий. Если одна вакансия
+попала в оба пути, unique key результата `(user, preference, vacancy, method, …)`
+делает повторную запись безопасной. Один активный run на пользователя
+обеспечивается partial unique index, claim/recovery — lease,
+`FOR UPDATE SKIP LOCKED` и advisory worker lock.
 
 Telegram delivery остаётся at-least-once: уникальный ключ notification,
 provider message id, bounded retries, lease, advisory lock и cooldown защищают
@@ -57,6 +66,9 @@ Long-poll linker подтверждает только одноразовый ha
 
 (+) Нет AI/Telegram вызовов при обычном локальном старте; deterministic matching
 работает без ключей; delivery идемпотентна на уровне БД.
+
+(+) Ручной запуск охватывает существующие вакансии, а не только события,
+появившиеся после включения assistant.
 
 (+) Prompt input минимизирован, PII redacted, vacancy text маркирован DATA.
 

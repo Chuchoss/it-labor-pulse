@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -19,6 +20,11 @@ type WorkerStore interface {
 	AdvanceCursor(context.Context, string, time.Time, string) error
 }
 
+type SnapshotWorkerStore interface {
+	SnapshotCandidates(context.Context, AssistantRun, int) ([]WorkerCandidate, error)
+	UpdateAssistantRunProgress(context.Context, string, WorkerStats, *WorkerCandidate) error
+}
+
 type WorkerUser struct {
 	ID         string
 	Preference PreferenceRecord
@@ -29,6 +35,7 @@ type WorkerCandidate struct {
 	Vacancy                                  Vacancy
 	SalaryText                               string
 	ObservedAt                               time.Time
+	CreatedAt                                time.Time
 }
 
 type WorkerMatch struct {
@@ -85,8 +92,8 @@ func (s WorkerStats) LogValue() slog.Value {
 	)
 }
 
-// RunOnce processes one bounded cursor window. It never falls back to a
-// historical full-table scan and exits cleanly when no users exist.
+// RunOnce completes one queued manual snapshot run in bounded keyset batches.
+// With no manual run it processes one bounded incremental outbox batch.
 func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats WorkerStats, err error) {
 	if opts.BatchSize < 1 || opts.BatchSize > 100 {
 		opts.BatchSize = 25
@@ -105,11 +112,9 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 		return WorkerStats{}, err
 	}
 	defer func() { _ = release() }()
-	users, err := store.Users(ctx)
-	if err != nil {
-		return WorkerStats{}, err
-	}
+	var users []WorkerUser
 	var claimedRunID string
+	completionCtx := context.WithoutCancel(ctx)
 	defer func() {
 		if claimedRunID == "" {
 			return
@@ -122,26 +127,58 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 		if err != nil {
 			state, category = "failed", "worker_failed"
 		}
-		_ = runStore.CompleteAssistantRun(context.Background(), claimedRunID, state, stats, category)
+		_ = runStore.CompleteAssistantRun(completionCtx, claimedRunID, state, stats, category)
 	}()
 	if runStore, ok := store.(AssistantRunStore); ok {
 		run, claimed, claimErr := runStore.ClaimAssistantRun(ctx)
 		if claimErr != nil {
 			return WorkerStats{}, claimErr
 		}
-		if !claimed {
-			return WorkerStats{}, nil
-		}
-		claimedRunID = run.ID
-		if scoped, ok := store.(ScopedWorkerStore); ok {
-			users, err = scoped.UsersForAssistantRun(ctx, run.UserID)
-			if err != nil {
-				return WorkerStats{}, err
+		if claimed {
+			claimedRunID = run.ID
+			if scoped, ok := store.(ScopedWorkerStore); ok {
+				users, err = scoped.UsersForAssistantRun(ctx, run)
+				if err != nil {
+					return WorkerStats{}, err
+				}
 			}
+			stats = WorkerStats{
+				Users: len(users), RunID: claimedRunID, Processed: run.Processed,
+				Eligible: run.Eligible, Matched: run.Matched, AICalls: run.AICalls, Skipped: run.Skipped,
+			}
+			if len(users) == 0 {
+				return stats, nil
+			}
+			snapshot, ok := store.(SnapshotWorkerStore)
+			if !ok {
+				return stats, errors.New("assistant snapshot store is not configured")
+			}
+			for {
+				candidates, candidateErr := snapshot.SnapshotCandidates(ctx, run, opts.BatchSize)
+				if candidateErr != nil {
+					return stats, candidateErr
+				}
+				if len(candidates) == 0 {
+					break
+				}
+				if err = processCandidates(ctx, store, opts, users, candidates, &stats, true); err != nil {
+					return stats, err
+				}
+				last := candidates[len(candidates)-1]
+				if err = snapshot.UpdateAssistantRunProgress(ctx, run.ID, stats, &last); err != nil {
+					return stats, err
+				}
+				run.CursorCreatedAt = &last.CreatedAt
+				run.CursorVacancyID = last.ID
+			}
+			return stats, nil
 		}
 	}
-	stats = WorkerStats{Users: len(users), RunID: claimedRunID}
-	aiCalls := 0
+	users, err = store.Users(ctx)
+	if err != nil {
+		return WorkerStats{}, err
+	}
+	stats = WorkerStats{Users: len(users)}
 	if len(users) == 0 {
 		return stats, nil
 	}
@@ -149,9 +186,38 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 	if err != nil {
 		return stats, err
 	}
+	if err = processCandidates(ctx, store, opts, users, candidates, &stats, false); err != nil {
+		return stats, err
+	}
+	if len(candidates) > 0 {
+		last := candidates[len(candidates)-1]
+		observedAt := last.ObservedAt
+		if observedAt.IsZero() {
+			observedAt = opts.Now
+		}
+		if err := store.AdvanceCursor(ctx, opts.Source, observedAt, last.ExternalID); err != nil {
+			return stats, err
+		}
+	}
+	if opts.Log != nil {
+		opts.Log.Info("assistant_worker_complete", "stats", stats)
+	}
+	return stats, nil
+}
+
+func processCandidates(
+	ctx context.Context,
+	store WorkerStore,
+	opts WorkerOptions,
+	users []WorkerUser,
+	candidates []WorkerCandidate,
+	stats *WorkerStats,
+	manual bool,
+) error {
+	aiCalls := stats.AICalls
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
-			return stats, err
+			return err
 		}
 		stats.Processed++
 		for _, user := range users {
@@ -160,10 +226,10 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 				var settingsErr error
 				settings, settingsErr = settingsStore.AutomationSettings(ctx, user.ID)
 				if settingsErr != nil {
-					return stats, settingsErr
+					return settingsErr
 				}
 			}
-			if settings.ActivationAt != nil && candidate.ObservedAt.Before(*settings.ActivationAt) {
+			if !manual && settings.ActivationAt != nil && candidate.ObservedAt.Before(*settings.ActivationAt) {
 				stats.Skipped++
 				continue
 			}
@@ -179,18 +245,18 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 				Result: result,
 			})
 			if err != nil {
-				return stats, err
+				return err
 			}
+			stats.Matched++
 			if !created {
 				continue
 			}
-			stats.Matched++
 			if opts.TelegramEnabled && settings.TelegramEnabled {
 				eligible := true
 				if eligibility, ok := store.(TelegramEligibilityStore); ok {
 					eligible, err = eligibility.TelegramEligible(ctx, user.ID)
 					if err != nil {
-						return stats, err
+						return err
 					}
 				}
 				if eligible {
@@ -199,7 +265,7 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 						PreferenceVersion: user.Preference.Version,
 					})
 					if err != nil {
-						return stats, err
+						return err
 					}
 					if created {
 						stats.Notified++
@@ -216,7 +282,7 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 				input := MinimizedInput(candidate.Title, candidate.SalaryText, nil, evidence)
 				output, err := opts.AIProvider.Complete(ctx, Request{InputSnapshot: input, Evidence: evidence})
 				if err != nil {
-					return stats, err
+					return err
 				}
 				if durable, ok := store.(AIStore); ok {
 					aiResult := Result{Decision: Decision(output.Decision), Score: output.Score,
@@ -226,33 +292,23 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 						Result: aiResult, Method: "ai", Provider: "deepseek",
 						InputSnapshotHash: sha256Bytes(input),
 					}, output); err != nil {
-						return stats, err
+						return err
 					}
 				}
 				aiCalls++
 				stats.AICalls++
 			}
 		}
-		if workItems, ok := store.(WorkItemStore); ok {
-			if err := workItems.CompleteWorkItem(ctx, candidate.Source, candidate.ExternalID); err != nil {
-				return stats, err
+		if !manual {
+			workItems, ok := store.(WorkItemStore)
+			if ok {
+				if err := workItems.CompleteWorkItem(ctx, candidate.Source, candidate.ExternalID); err != nil {
+					return err
+				}
 			}
 		}
 	}
-	if len(candidates) > 0 {
-		last := candidates[len(candidates)-1]
-		observedAt := last.ObservedAt
-		if observedAt.IsZero() {
-			observedAt = opts.Now
-		}
-		if err := store.AdvanceCursor(ctx, opts.Source, observedAt, last.ExternalID); err != nil {
-			return stats, err
-		}
-	}
-	if opts.Log != nil {
-		opts.Log.Info("assistant_worker_complete", "stats", stats)
-	}
-	return stats, nil
+	return nil
 }
 
 func sha256Bytes(value string) []byte {

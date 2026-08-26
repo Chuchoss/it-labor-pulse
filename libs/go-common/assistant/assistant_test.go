@@ -170,7 +170,7 @@ func TestWorkerIsBoundedAndIdempotent(t *testing.T) {
 		t.Fatalf("first run: %+v, %v", stats, err)
 	}
 	stats, err = RunOnce(context.Background(), fake, WorkerOptions{BatchSize: 1})
-	if err != nil || stats.Matched != 0 || len(fake.matches) != 1 {
+	if err != nil || stats.Matched != 1 || len(fake.matches) != 1 {
 		t.Fatalf("rerun: %+v, %v", stats, err)
 	}
 }
@@ -193,8 +193,27 @@ func (f *queuedWorkerFake) CompleteAssistantRun(_ context.Context, _, state stri
 	f.completed = state
 	return nil
 }
-func (f *queuedWorkerFake) UsersForAssistantRun(context.Context, string) ([]WorkerUser, error) {
+func (f *queuedWorkerFake) UsersForAssistantRun(context.Context, AssistantRun) ([]WorkerUser, error) {
 	return f.users, nil
+}
+func (f *queuedWorkerFake) SnapshotCandidates(_ context.Context, run AssistantRun, limit int) ([]WorkerCandidate, error) {
+	result := make([]WorkerCandidate, 0, limit)
+	for _, candidate := range f.candidates {
+		if !run.SnapshotCutoff.IsZero() && candidate.CreatedAt.After(run.SnapshotCutoff) {
+			continue
+		}
+		if run.CursorVacancyID != "" && candidate.ID <= run.CursorVacancyID {
+			continue
+		}
+		result = append(result, candidate)
+		if len(result) == limit {
+			break
+		}
+	}
+	return result, nil
+}
+func (f *queuedWorkerFake) UpdateAssistantRunProgress(context.Context, string, WorkerStats, *WorkerCandidate) error {
+	return nil
 }
 
 func TestWorkerClaimsAndCompletesQueuedRunWithoutAI(t *testing.T) {
@@ -208,6 +227,38 @@ func TestWorkerClaimsAndCompletesQueuedRunWithoutAI(t *testing.T) {
 	stats, err := RunOnce(context.Background(), fake, WorkerOptions{BatchSize: 1})
 	if err != nil || stats.RunID != "run-1" || fake.completed != "succeeded" || stats.AICalls != 0 {
 		t.Fatalf("queued run: %+v, completed=%q, err=%v", stats, fake.completed, err)
+	}
+}
+
+func TestManualSnapshotProcessesAllBatchesAndExcludesLaterArrivals(t *testing.T) {
+	cutoff := time.Now().UTC()
+	fake := &queuedWorkerFake{
+		workerFake: &workerFake{
+			users: []WorkerUser{{ID: "u1", Preference: PreferenceRecord{Version: 1}}},
+			candidates: []WorkerCandidate{
+				{ID: "v1", Source: "hh", ExternalID: "1", CreatedAt: cutoff.Add(-time.Minute), Vacancy: Vacancy{ID: "v1"}},
+				{ID: "v2", Source: "hh", ExternalID: "2", CreatedAt: cutoff, Vacancy: Vacancy{ID: "v2"}},
+				{ID: "v3", Source: "hh", ExternalID: "3", CreatedAt: cutoff.Add(time.Minute), Vacancy: Vacancy{ID: "v3"}},
+			},
+		},
+		run: AssistantRun{ID: "run-1", UserID: "u1", SnapshotCutoff: cutoff},
+	}
+	stats, err := RunOnce(context.Background(), fake, WorkerOptions{BatchSize: 1})
+	if err != nil || stats.Processed != 2 || stats.Eligible != 2 || stats.Matched != 2 ||
+		len(fake.matches) != 2 || fake.completed != "succeeded" {
+		t.Fatalf("manual snapshot: stats=%+v matches=%d completed=%q err=%v",
+			stats, len(fake.matches), fake.completed, err)
+	}
+}
+
+func TestManualSnapshotZeroVacanciesSucceeds(t *testing.T) {
+	fake := &queuedWorkerFake{
+		workerFake: &workerFake{users: []WorkerUser{{ID: "u1", Preference: PreferenceRecord{Version: 1}}}},
+		run:        AssistantRun{ID: "run-empty", UserID: "u1", SnapshotCutoff: time.Now()},
+	}
+	stats, err := RunOnce(context.Background(), fake, WorkerOptions{BatchSize: 2})
+	if err != nil || stats.Processed != 0 || fake.completed != "succeeded" {
+		t.Fatalf("empty snapshot: stats=%+v completed=%q err=%v", stats, fake.completed, err)
 	}
 }
 

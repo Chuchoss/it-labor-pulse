@@ -92,7 +92,7 @@ func main() {
 		log.Warn("assistant_worker_external_ai_enabled", "max_calls", 1)
 	}
 	run := func() error {
-		runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		runCtx, cancel := context.WithTimeout(ctx, durationEnv("ASSISTANT_RUN_TIMEOUT", 10*time.Minute))
 		defer cancel()
 		stats, err := assistant.RunOnce(runCtx, store, opts)
 		if err == nil {
