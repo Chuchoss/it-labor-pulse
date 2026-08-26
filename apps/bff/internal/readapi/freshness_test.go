@@ -29,6 +29,24 @@ func TestIsFresh(t *testing.T) {
 	}
 }
 
+func TestVacancyStatus(t *testing.T) {
+	tests := []struct {
+		name, reason, want string
+		active       bool
+	}{
+		{name: "active vacancy", active: true, want: "active"},
+		{name: "missing from complete cycle", reason: "missing_from_complete_cycle", want: "missing_from_last_complete_cycle"},
+		{name: "detail inactive", reason: "detail_not_found", want: "inactive"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := VacancyStatus(test.active, test.reason); got != test.want {
+				t.Fatalf("VacancyStatus() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func timePointer(value time.Time) *time.Time {
 	return &value
 }

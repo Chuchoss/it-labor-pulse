@@ -184,6 +184,14 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 				if !disappeared {
 					pageOK = false
 				}
+				if disappeared {
+					if inactiveErr := r.Store.MarkVacancyInactive(
+						ctx, hh.SourceCode, item.ID, "detail_not_found",
+					); inactiveErr != nil {
+						pageOK = false
+						_ = r.Store.RecordError(ctx, runID, item.ID, "status", inactiveErr.Error())
+					}
+				}
 				_ = r.Store.RecordError(ctx, runID, item.ID, "fetch", err.Error())
 				log.Warn("ingest_vacancy_fetch_failed",
 					"ingest_run_id", runID,

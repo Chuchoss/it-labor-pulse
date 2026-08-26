@@ -138,6 +138,8 @@ export interface Vacancy {
   first_observed_at?: string | null
   is_fresh?: boolean
   is_active?: boolean
+  status?: 'active' | 'inactive' | 'missing_from_last_complete_cycle'
+  deactivated_at?: string | null
   skills?: string[]
 }
 

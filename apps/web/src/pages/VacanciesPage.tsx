@@ -54,6 +54,16 @@ function vacancyLinkLabel(vacancy: Vacancy) {
   return `Открыть вакансию «${vacancy.title || 'Без названия'}» на ${vacancySourceLabel(vacancy)} в новой вкладке`
 }
 
+function vacancyStatus(vacancy: Vacancy) {
+  if (vacancy.status === 'missing_from_last_complete_cycle') {
+    return { label: 'Не найдена в последнем полном срезе', color: 'warning' as const }
+  }
+  if (vacancy.status === 'inactive' || vacancy.is_active !== true) {
+    return { label: 'Неактивна', color: 'default' as const }
+  }
+  return { label: 'Активна', color: 'success' as const }
+}
+
 function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
   return (
     <Stack spacing={1}>
@@ -627,6 +637,7 @@ export function VacanciesPage({
               <TableBody>
                 {rows.map((vacancy) => {
                   const isNew = newVacancyIDs.has(vacancyKey(vacancy))
+                  const status = vacancyStatus(vacancy)
                   return (
                     <TableRow
                       key={vacancyKey(vacancy)}
@@ -672,8 +683,8 @@ export function VacanciesPage({
                       <TableCell>
                         <Chip
                           size="small"
-                          color={vacancy.is_active ? 'success' : 'default'}
-                          label={vacancy.is_active ? 'Активна' : 'Закрыта'}
+                          color={status.color}
+                          label={status.label}
                         />
                       </TableCell>
                     </TableRow>
@@ -686,6 +697,7 @@ export function VacanciesPage({
           <Stack sx={{ display: { xs: 'flex', md: 'none' }, p: 2 }} spacing={1.5}>
             {rows.map((vacancy) => {
               const isNew = newVacancyIDs.has(vacancyKey(vacancy))
+              const status = vacancyStatus(vacancy)
               return (
                 <Card
                   key={vacancyKey(vacancy)}
@@ -731,8 +743,8 @@ export function VacanciesPage({
                           </Typography>
                           <Chip
                             size="small"
-                            color={vacancy.is_active ? 'success' : 'default'}
-                            label={vacancy.is_active ? 'Активна' : 'Закрыта'}
+                            color={status.color}
+                            label={status.label}
                           />
                         </Stack>
                       </CardContent>
@@ -752,8 +764,8 @@ export function VacanciesPage({
                         </Typography>
                         <Chip
                           size="small"
-                          color={vacancy.is_active ? 'success' : 'default'}
-                          label={vacancy.is_active ? 'Активна' : 'Закрыта'}
+                          color={status.color}
+                          label={status.label}
                         />
                       </Stack>
                     </CardContent>

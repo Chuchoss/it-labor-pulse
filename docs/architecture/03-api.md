@@ -296,6 +296,10 @@ OpenAPI: `x-lifecycle: target`.
 - `is_fresh=true` только для `published_at` (время публикации на HH) в
   rolling UTC-окне `[server_now-24h, server_now]`. `NULL` и будущие значения
   считаются не свежими; `first_observed_at` для этого поля не используется.
+- `status` — статус доступности вакансии, а не работодателя: `active`,
+  `inactive` или `missing_from_last_complete_cycle`. Последний означает, что
+  вакансия не встретилась в последнем полном discovery-срезе HH; неполный или
+  ошибочный цикл статусы не меняет. По умолчанию выдаются только `active`.
 
 ```json
 {
@@ -315,6 +319,8 @@ OpenAPI: `x-lifecycle: target`.
       "first_observed_at": "2026-08-10T10:05:00Z",
       "is_fresh": false,
       "is_active": true,
+      "status": "active",
+      "deactivated_at": null,
       "skills": ["Go", "Kafka", "PostgreSQL"]
     }
   ],

@@ -202,6 +202,28 @@ describe('VacanciesPage', () => {
     expect(screen.getAllByText('Missing freshness')).toHaveLength(2)
   })
 
+  it('renders inactive lifecycle statuses from the API instead of assuming active', async () => {
+    server.use(
+      http.get('*/api/v1/vacancies', () =>
+        HttpResponse.json({
+          data: [
+            { id: 'missing', title: 'Missing vacancy', is_active: false, status: 'missing_from_last_complete_cycle' },
+            { id: 'inactive', title: 'Inactive vacancy', is_active: false, status: 'inactive' },
+          ],
+          page: 1,
+          page_size: 20,
+          total: 2,
+        }),
+      ),
+    )
+
+    renderPage(<VacanciesPage pollIntervalMs={0} />)
+
+    expect(await screen.findAllByText('Не найдена в последнем полном срезе')).toHaveLength(2)
+    expect(screen.getAllByText('Неактивна')).toHaveLength(2)
+    expect(screen.queryByText('Активна')).toBeNull()
+  })
+
   it('resets accumulated pages when a filter changes', async () => {
     vi.stubGlobal('IntersectionObserver', IntersectionObserverMock)
     const requestedQueries: string[] = []

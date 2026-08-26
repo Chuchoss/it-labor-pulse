@@ -607,6 +607,88 @@ func (s *PG) CompleteDiscoveryCycle(ctx context.Context, cycleID string) error {
 	return nil
 }
 
+// ReconcileDiscoveryStatuses applies status changes only for a complete daily
+// discovery cycle. The update is set-based so a large cycle does not issue
+// one statement per vacancy.
+func (s *PG) ReconcileDiscoveryStatuses(ctx context.Context, cycleID string) (StatusReconciliation, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return StatusReconciliation{}, sanitizeDBError("begin status reconciliation", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	var result StatusReconciliation
+	err = tx.QueryRow(ctx, `
+		WITH cycle AS (
+			SELECT id, source
+			FROM ingest_cycles
+			WHERE id = $1::uuid
+			  AND source = 'hh'
+			  AND scope = 'daily_discovery'
+			  AND status = 'complete'
+			  AND method_version = $2
+		), seen AS (
+			SELECT o.external_id, max(o.observed_at) AS observed_at
+			FROM ingest_cycle_observations o
+			JOIN cycle c ON c.id = o.cycle_id
+			GROUP BY o.external_id
+		), reactivated AS (
+			UPDATE vacancies v
+			SET is_active = true,
+			    last_seen_at = seen.observed_at,
+			    last_seen_cycle_id = $1::uuid,
+			    deactivated_at = NULL,
+			    deactivation_reason = NULL,
+			    updated_at = now()
+			FROM seen
+			WHERE v.source = 'hh'
+			  AND v.external_id = seen.external_id
+			  AND v.is_active = false
+			RETURNING 1
+		), seen_active AS (
+			UPDATE vacancies v
+			SET last_seen_at = seen.observed_at,
+			    last_seen_cycle_id = $1::uuid,
+			    updated_at = now()
+			FROM seen
+			WHERE v.source = 'hh'
+			  AND v.external_id = seen.external_id
+			  AND v.is_active = true
+			RETURNING 1
+		), deactivated AS (
+			UPDATE vacancies v
+			SET is_active = false,
+			    deactivated_at = COALESCE(v.deactivated_at, now()),
+			    deactivation_reason = 'missing_from_complete_cycle',
+			    updated_at = now()
+			WHERE v.source = 'hh'
+			  AND v.deleted_at IS NULL
+			  AND EXISTS (SELECT 1 FROM cycle)
+			  AND EXISTS (
+				SELECT 1 FROM vacancy_role_scopes scope
+				WHERE scope.vacancy_id = v.id
+				  AND scope.scope = 'vacancy_listing'
+			  )
+			  AND NOT EXISTS (SELECT 1 FROM seen WHERE seen.external_id = v.external_id)
+			  AND v.is_active
+			RETURNING 1
+		)
+		SELECT
+			(SELECT count(*) FROM reactivated),
+			(SELECT count(*) FROM deactivated),
+			(SELECT count(*) FROM seen_active)
+	`, cycleID, "vacancy_demand_v2").Scan(
+		&result.Reactivated, &result.Deactivated, &result.StillActive,
+	)
+	if err != nil {
+		return StatusReconciliation{}, sanitizeDBError("reconcile vacancy statuses", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return StatusReconciliation{}, sanitizeDBError("commit status reconciliation", err)
+	}
+	return result, nil
+}
+
 // FailDiscoveryCycle records a terminal miss without publishing observations.
 func (s *PG) FailDiscoveryCycle(ctx context.Context, cycleID string) error {
 	_, err := s.pool.Exec(ctx, `
@@ -747,6 +829,21 @@ func (s *PG) SavePage(ctx context.Context, source, scopeHash, nextCursor string,
 	return upserted, unchanged, nil
 }
 
+func (s *PG) MarkVacancyInactive(ctx context.Context, source, externalID, reason string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE vacancies
+		SET is_active = false,
+		    deactivated_at = COALESCE(deactivated_at, now()),
+		    deactivation_reason = NULLIF($3, ''),
+		    updated_at = now()
+		WHERE source = $1 AND external_id = $2 AND deleted_at IS NULL
+	`, source, externalID, reason)
+	if err != nil {
+		return sanitizeDBError("mark vacancy inactive", err)
+	}
+	return nil
+}
+
 func (s *PG) savePageOnce(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
@@ -872,6 +969,9 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			UPDATE vacancies
 			SET collected_at = $2,
 			    is_active = $3,
+			    last_seen_at = CASE WHEN $3 THEN $2 ELSE last_seen_at END,
+			    deactivated_at = CASE WHEN $3 THEN NULL ELSE COALESCE(deactivated_at, now()) END,
+			    deactivation_reason = CASE WHEN $3 THEN NULL ELSE COALESCE(deactivation_reason, 'detail_reported_inactive') END,
 			    region_id = $4::uuid,
 			    role_id = $5::uuid,
 			    employer_id = $6::uuid,
@@ -900,12 +1000,13 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			salary_from, salary_to, salary_currency, salary_gross, salary_mid,
 			salary_from_rub_net, salary_to_rub_net, salary_rate_date, salary_rate_provider,
 			description_text, published_at, collected_at, first_observed_at, is_active, deleted_at,
-			content_hash, raw_payload, updated_at
+			last_seen_at, content_hash, raw_payload, updated_at
 		) VALUES (
 			$1, $2, NULLIF($3, ''), $4, $5::uuid, $6::uuid, $7::uuid,
 			$8, $9, NULLIF($10, ''), $11, $12,
 			$13, $14, $15, NULLIF($16, ''),
 			NULLIF($17, ''), $18, $19, $19, $20, NULL,
+			CASE WHEN $20 THEN $19 ELSE NULL END,
 			$21, $22::jsonb, now()
 		)
 		ON CONFLICT (source, external_id) DO UPDATE SET
@@ -927,6 +1028,9 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			published_at = EXCLUDED.published_at,
 			collected_at = EXCLUDED.collected_at,
 			is_active = EXCLUDED.is_active,
+			last_seen_at = CASE WHEN EXCLUDED.is_active THEN EXCLUDED.collected_at ELSE vacancies.last_seen_at END,
+			deactivated_at = CASE WHEN EXCLUDED.is_active THEN NULL ELSE COALESCE(vacancies.deactivated_at, now()) END,
+			deactivation_reason = CASE WHEN EXCLUDED.is_active THEN NULL ELSE COALESCE(vacancies.deactivation_reason, 'detail_reported_inactive') END,
 			deleted_at = NULL,
 			content_hash = EXCLUDED.content_hash,
 			raw_payload = EXCLUDED.raw_payload,

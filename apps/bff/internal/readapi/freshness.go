@@ -15,3 +15,13 @@ func IsFresh(publishedAt *time.Time, now time.Time) bool {
 	now = now.UTC()
 	return !published.After(now) && !published.Before(now.Add(-FreshnessWindow))
 }
+
+func VacancyStatus(isActive bool, inactiveReason string) string {
+	if isActive {
+		return "active"
+	}
+	if inactiveReason == "missing_from_complete_cycle" {
+		return "missing_from_last_complete_cycle"
+	}
+	return "inactive"
+}

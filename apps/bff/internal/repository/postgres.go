@@ -1028,6 +1028,8 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 				AND v.published_at <= current_timestamp
 				AND v.published_at >= current_timestamp - interval '24 hours'),
 			v.is_active,
+			v.deactivation_reason,
+			v.deactivated_at,
 			coalesce(array_agg(s.name ORDER BY s.name) FILTER (WHERE s.id IS NOT NULL), ARRAY[]::text[])
 		FROM vacancies v
 		JOIN sources src ON src.code = v.source
@@ -1051,6 +1053,7 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 	}
 	for rows.Next() {
 		var item readapi.Vacancy
+		var inactiveReason *string
 		if err := rows.Scan(
 			&item.ID,
 			&item.Source,
@@ -1070,10 +1073,17 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 			&item.FirstObservedAt,
 			&item.IsFresh,
 			&item.IsActive,
+			&inactiveReason,
+			&item.DeactivatedAt,
 			&item.Skills,
 		); err != nil {
 			return readapi.VacancyPage{}, fmt.Errorf("scan vacancy: %w", err)
 		}
+		reason := ""
+		if inactiveReason != nil {
+			reason = *inactiveReason
+		}
+		item.Status = readapi.VacancyStatus(item.IsActive, reason)
 		if item.PublishedAt != nil {
 			publishedAt := item.PublishedAt.UTC()
 			item.PublishedAt = &publishedAt

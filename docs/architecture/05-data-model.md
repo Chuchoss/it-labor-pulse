@@ -53,6 +53,10 @@ erDiagram
     timestamptz deleted_at
     timestamptz collected_at
     timestamptz first_observed_at
+    timestamptz last_seen_at
+    uuid last_seen_cycle_id
+    timestamptz deactivated_at
+    text deactivation_reason
     bytea content_hash
   }
 ```
@@ -182,6 +186,10 @@ Bash и 1C имеют явные отдельные категории и в н�
 | `first_observed_at` | `TIMESTAMPTZ` NOT NULL | UTC-время первого наблюдения; не изменяется при повторном ingest |
 | `is_active` | `BOOLEAN` NOT NULL DEFAULT true | soft availability |
 | `deleted_at` | `TIMESTAMPTZ` NULL | soft-delete |
+| `last_seen_at` | `TIMESTAMPTZ` NULL | последнее подтверждённое наблюдение источника |
+| `last_seen_cycle_id` | `UUID` NULL → `ingest_cycles.id` | полный discovery-цикл, подтвердивший доступность |
+| `deactivated_at` | `TIMESTAMPTZ` NULL | время последнего перехода в inactive |
+| `deactivation_reason` | `TEXT` NULL | `missing_from_complete_cycle` или `detail_not_found` и другие причины источника |
 | `content_hash` | `BYTEA`/`CHAR(64)` | для skip unchanged |
 | `raw_payload` | `JSONB` NULL | MVP optional; Target — object storage / TTL cleanup |
 | `created_at` / `updated_at` | `TIMESTAMPTZ` | |

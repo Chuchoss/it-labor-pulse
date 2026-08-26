@@ -1131,6 +1131,13 @@ components:
           type: boolean
           description: true, если published_at находится в UTC-окне [server_now-24h, server_now]. NULL и будущие значения считаются не свежими; first_observed_at для этого поля не используется.
         is_active: { type: boolean }
+        status:
+          type: string
+          enum: [active, inactive, missing_from_last_complete_cycle]
+          description: Машиночитаемый статус доступности вакансии; active не означает активность работодателя.
+        deactivated_at:
+          type: [string, "null"]
+          format: date-time
         skills:
           type: array
           items: { type: string }

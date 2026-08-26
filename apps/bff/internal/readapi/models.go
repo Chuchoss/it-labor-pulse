@@ -253,6 +253,8 @@ type Vacancy struct {
 	FirstObservedAt    *time.Time `json:"first_observed_at"`
 	IsFresh            bool       `json:"is_fresh"`
 	IsActive           bool       `json:"is_active"`
+	Status             string     `json:"status"`
+	DeactivatedAt      *time.Time `json:"deactivated_at,omitempty"`
 	Skills             []string   `json:"skills"`
 }
 

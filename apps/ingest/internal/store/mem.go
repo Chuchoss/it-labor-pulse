@@ -267,6 +267,49 @@ func (m *Memory) CompleteDiscoveryCycle(_ context.Context, cycleID string) error
 	return nil
 }
 
+func (m *Memory) ReconcileDiscoveryStatuses(_ context.Context, cycleID string) (StatusReconciliation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cycle, ok := m.Cycles[cycleID]
+	if !ok || cycle.Scope != "daily_discovery" || cycle.Status != "complete" {
+		return StatusReconciliation{}, fmt.Errorf("discovery cycle is not complete")
+	}
+	seen := make(map[string]time.Time)
+	for key, observation := range m.Observations {
+		if len(key) <= len(cycleID) || key[:len(cycleID)] != cycleID || key[len(cycleID)] != '|' {
+			continue
+		}
+		if observation.ObservedAt.After(seen[observation.ExternalID]) {
+			seen[observation.ExternalID] = observation.ObservedAt
+		}
+	}
+	var result StatusReconciliation
+	for key, item := range m.Vacancies {
+		if item.Vacancy.Source != "hh" {
+			continue
+		}
+		observed, found := seen[item.Vacancy.ExternalID]
+		if found {
+			wasActive := item.Vacancy.IsActive
+			item.Vacancy.IsActive = true
+			item.Vacancy.CollectedAt = observed
+			m.Vacancies[key] = item
+			if wasActive {
+				result.StillActive++
+			} else {
+				result.Reactivated++
+			}
+			continue
+		}
+		if item.Vacancy.IsActive {
+			item.Vacancy.IsActive = false
+			m.Vacancies[key] = item
+			result.Deactivated++
+		}
+	}
+	return result, nil
+}
+
 func (m *Memory) FailDiscoveryCycle(_ context.Context, cycleID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -301,6 +344,18 @@ func (m *Memory) SavePage(_ context.Context, source, scopeHash, nextCursor strin
 	}
 	m.Checkpoints[source+"|"+scopeHash] = nextCursor
 	return upserted, unchanged, nil
+}
+
+func (m *Memory) MarkVacancyInactive(_ context.Context, source, externalID, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, item := range m.Vacancies {
+		if item.Vacancy.Source == source && item.Vacancy.ExternalID == externalID {
+			item.Vacancy.IsActive = false
+			m.Vacancies[key] = item
+		}
+	}
+	return nil
 }
 
 func (m *Memory) Close() error { return nil }

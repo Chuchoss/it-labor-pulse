@@ -200,7 +200,18 @@ func RunDailyDiscovery(
 	if err := st.CompleteDiscoveryCycle(ctx, cycleID); err != nil {
 		return result, err
 	}
+	reconciliation, err := st.ReconcileDiscoveryStatuses(ctx, cycleID)
+	if err != nil {
+		return result, fmt.Errorf("daily discovery reconcile statuses: %w", err)
+	}
 	result.Complete = true
+	log.Info("discovery_statuses_reconciled",
+		"cycle_id", cycleID,
+		"reactivated", reconciliation.Reactivated,
+		"deactivated", reconciliation.Deactivated,
+		"still_active", reconciliation.StillActive,
+		"source", hh.SourceCode,
+	)
 	log.Info("discovery_cycle_completed",
 		"cycle_id", cycleID,
 		"cycle_date", opts.CycleDate.Format(time.DateOnly),
@@ -255,17 +266,13 @@ func observationFromSearch(
 }
 
 func partitionKey(part SearchPartition) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf(
-		"%s|%s|%s|%s", part.RoleID, part.Area,
-		part.From.UTC().Format(time.RFC3339), part.To.UTC().Format(time.RFC3339),
-	)))
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s|%s|%s|%s", part.RoleID, part.Area,
+		part.From.UTC().Format(time.RFC3339), part.To.UTC().Format(time.RFC3339)))
 	return hex.EncodeToString(sum[:])
 }
 
 func discoveryScopeHash(area string, perPage int) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf(
-		"hh|daily-discovery-v2|%s|%d", area, perPage,
-	)))
+	sum := sha256.Sum256(fmt.Appendf(nil, "hh|daily-discovery-v2|%s|%d", area, perPage))
 	return hex.EncodeToString(sum[:])
 }
 

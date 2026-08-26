@@ -77,3 +77,5 @@ export function mergePolledVacancies(
     return { ...page, data, total: freshness.total }
   })
 }
+
+export const mergeFreshVacancies = mergePolledVacancies

@@ -112,7 +112,15 @@ type DiscoveryStore interface {
 	SetDiscoveryExpectedPages(context.Context, string, string, int) error
 	SaveDiscoveryPage(context.Context, string, DiscoveryPartition, []DiscoveryObservation) error
 	CompleteDiscoveryCycle(context.Context, string) error
+	ReconcileDiscoveryStatuses(context.Context, string) (StatusReconciliation, error)
 	FailDiscoveryCycle(context.Context, string) error
+}
+
+// StatusReconciliation contains aggregate transition counts only.
+type StatusReconciliation struct {
+	Reactivated int64
+	Deactivated int64
+	StillActive int64
 }
 
 // Store persists ingest runs, checkpoints and vacancies.
@@ -120,6 +128,7 @@ type Store interface {
 	CreateRun(ctx context.Context, run Run) error
 	FinishRun(ctx context.Context, id, status string, stats Stats, errMsg string) error
 	RecordError(ctx context.Context, runID, externalID, stage, message string) error
+	MarkVacancyInactive(ctx context.Context, source, externalID, reason string) error
 	GetCheckpoint(ctx context.Context, source, scopeHash string) (cursor string, ok bool, err error)
 	StartCycle(ctx context.Context, cycle Cycle) (string, error)
 	UpdateCycleProgress(ctx context.Context, id string, completedPartitions int) error
