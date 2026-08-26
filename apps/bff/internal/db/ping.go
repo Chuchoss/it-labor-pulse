@@ -2,11 +2,11 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Pinger checks database connectivity for health.
@@ -15,32 +15,51 @@ type Pinger interface {
 	Close() error
 }
 
-type sqlPinger struct {
-	db *sql.DB
+type Client struct {
+	pool *pgxpool.Pool
 }
 
 // Open opens a Postgres pool from DATABASE_URL without requiring connectivity.
 // Never log the DSN (may contain password). Health reports degraded if Ping fails.
-func Open(databaseURL string) (Pinger, error) {
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		return nil, fmt.Errorf("open postgres: %w", err)
+func Open(databaseURL string) (*Client, error) {
+	if strings.TrimSpace(databaseURL) == "" {
+		return nil, fmt.Errorf("open postgres: DATABASE_URL is required")
 	}
-	db.SetMaxOpenConns(2)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(time.Minute)
-	return &sqlPinger{db: db}, nil
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres: invalid database configuration")
+	}
+	cfg.MaxConns = 5
+	cfg.MinConns = 0
+	cfg.MaxConnIdleTime = time.Minute
+	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.HealthCheckPeriod = 30 * time.Second
+	cfg.ConnConfig.RuntimeParams["application_name"] = "lma-bff"
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = "5s"
+	if cfg.ConnConfig.ConnectTimeout == 0 {
+		cfg.ConnConfig.ConnectTimeout = 5 * time.Second
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres pool: %w", err)
+	}
+	return &Client{pool: pool}, nil
 }
 
-func (p *sqlPinger) Ping(ctx context.Context) error {
+func (p *Client) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if err := p.db.PingContext(ctx); err != nil {
+	if err := p.pool.Ping(ctx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
 	return nil
 }
 
-func (p *sqlPinger) Close() error {
-	return p.db.Close()
+func (p *Client) Close() error {
+	p.pool.Close()
+	return nil
+}
+
+func (p *Client) Pool() *pgxpool.Pool {
+	return p.pool
 }

@@ -112,12 +112,21 @@ make run-bff          # public :8080
 # http://localhost:3000
 # http://localhost:8080/api/v1/health
 # http://localhost:8080/api/v1/dashboard/summary?from=2026-07-01&to=2026-08-01
+# http://localhost:8080/api/v1/vacancies?page=1&page_size=20
+# http://localhost:8080/api/v1/roles?from=2026-07-01&to=2026-08-01
+# http://localhost:8080/api/v1/regions?from=2026-07-01&to=2026-08-01
+# http://localhost:8080/api/v1/skills/top?from=2026-07-01&to=2026-08-01
 
 curl -X POST http://localhost:8080/api/v1/admin/ingest/runs \
   -H "Content-Type: application/json" \
   -H "X-Admin-Token: $ADMIN_TOKEN" \
   -d '{"source":"hh","mode":"incremental","params":{"area":"1","text":"golang"}}'
 ```
+
+Для публичных read-маршрутов Phase 1 нужен `DATABASE_URL`; Redis остаётся
+опциональным и не блокирует чтение из PostgreSQL. Параметры периода имеют
+формат `YYYY-MM-DD`, `page` начинается с 1, `page_size` ограничен 100.
+Полный контракт и список фильтров: [`api/openapi.yaml`](../../api/openapi.yaml).
 
 Отдельный gateway — Target Phase 3+ ([ADR 010](./adr/010-api-gateway.md)).
 

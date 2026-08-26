@@ -25,14 +25,14 @@ func TestHealth(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	tests := []struct {
-		name        string
-		db          DBPinger
-		rdb         RedisPinger
-		wantStatus  string
-		wantDB      string
-		wantRedis   string
-		wantChecks  bool
-		wantDBKey   bool
+		name         string
+		db           DBPinger
+		rdb          RedisPinger
+		wantStatus   string
+		wantDB       string
+		wantRedis    string
+		wantChecks   bool
+		wantDBKey    bool
 		wantRedisKey bool
 	}{
 		{

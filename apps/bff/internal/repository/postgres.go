@@ -1,0 +1,572 @@
+package repository
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/readapi"
+)
+
+type DBTX interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+type Postgres struct {
+	db DBTX
+}
+
+func NewPostgres(db DBTX) *Postgres {
+	return &Postgres{db: db}
+}
+
+func (p *Postgres) Dashboard(ctx context.Context, filter readapi.AnalyticsFilter) (readapi.DashboardSummary, error) {
+	args := analyticsArgs(filter)
+	var result readapi.DashboardSummary
+	err := p.db.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE v.is_active AND v.published_at < ($2::date + interval '1 day')),
+			count(*) FILTER (WHERE v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')),
+			coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)
+				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000
+					AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')), 0)::float8,
+			count(v.salary_mid) FILTER (WHERE v.salary_currency = 'RUB'
+				AND v.salary_mid BETWEEN 10000 AND 2000000
+				AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')),
+			current_timestamp
+		FROM vacancies v
+		WHERE v.deleted_at IS NULL
+			AND ($3 = '' OR v.role_id = $3::uuid)
+			AND ($4 = '' OR v.region_id = $4::uuid)
+			AND ($5 = '' OR v.source = $5)
+	`, args...).Scan(
+		&result.VacanciesActive,
+		&result.VacanciesNew,
+		&result.MedianSalary,
+		&result.SalarySample,
+		&result.GeneratedAt,
+	)
+	if err != nil {
+		return readapi.DashboardSummary{}, fmt.Errorf("query dashboard summary: %w", err)
+	}
+
+	result.Period = periodResponse(filter.Period)
+	result.SalaryCurrency = "RUB"
+	result.Cache = "MISS"
+	result.TopRoles = []readapi.RoleCount{}
+	result.TopRegions = []readapi.RegionCount{}
+
+	roleRows, err := p.db.Query(ctx, `
+		SELECT r.id::text, r.title, count(*)
+		FROM vacancies v
+		JOIN roles r ON r.id = v.role_id
+		WHERE v.deleted_at IS NULL AND v.is_active
+			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
+			AND ($3 = '' OR v.role_id = $3::uuid)
+			AND ($4 = '' OR v.region_id = $4::uuid)
+			AND ($5 = '' OR v.source = $5)
+		GROUP BY r.id, r.title
+		ORDER BY count(*) DESC, r.title, r.id
+		LIMIT 5
+	`, args...)
+	if err != nil {
+		return readapi.DashboardSummary{}, fmt.Errorf("query dashboard top roles: %w", err)
+	}
+	for roleRows.Next() {
+		var item readapi.RoleCount
+		if err := roleRows.Scan(&item.RoleID, &item.Title, &item.Count); err != nil {
+			roleRows.Close()
+			return readapi.DashboardSummary{}, fmt.Errorf("scan dashboard top role: %w", err)
+		}
+		result.TopRoles = append(result.TopRoles, item)
+	}
+	if err := roleRows.Err(); err != nil {
+		return readapi.DashboardSummary{}, fmt.Errorf("iterate dashboard top roles: %w", err)
+	}
+
+	regionRows, err := p.db.Query(ctx, `
+		SELECT r.id::text, r.name, count(*)
+		FROM vacancies v
+		JOIN regions r ON r.id = v.region_id
+		WHERE v.deleted_at IS NULL AND v.is_active
+			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
+			AND ($3 = '' OR v.role_id = $3::uuid)
+			AND ($4 = '' OR v.region_id = $4::uuid)
+			AND ($5 = '' OR v.source = $5)
+		GROUP BY r.id, r.name
+		ORDER BY count(*) DESC, r.name, r.id
+		LIMIT 5
+	`, args...)
+	if err != nil {
+		return readapi.DashboardSummary{}, fmt.Errorf("query dashboard top regions: %w", err)
+	}
+	for regionRows.Next() {
+		var item readapi.RegionCount
+		if err := regionRows.Scan(&item.RegionID, &item.Title, &item.Count); err != nil {
+			regionRows.Close()
+			return readapi.DashboardSummary{}, fmt.Errorf("scan dashboard top region: %w", err)
+		}
+		result.TopRegions = append(result.TopRegions, item)
+	}
+	if err := regionRows.Err(); err != nil {
+		return readapi.DashboardSummary{}, fmt.Errorf("iterate dashboard top regions: %w", err)
+	}
+	return result, nil
+}
+
+func (p *Postgres) ListRoles(
+	ctx context.Context,
+	filter readapi.AnalyticsFilter,
+	page readapi.Page,
+	sortBy string,
+) (readapi.RolePage, error) {
+	order := "vacancies_count DESC"
+	if sortBy == "median_salary" {
+		order = "median_salary DESC"
+	}
+	args := []any{
+		filter.Period.From.Format(time.DateOnly),
+		filter.Period.To.Format(time.DateOnly),
+		filter.RegionID,
+		filter.Source,
+		page.Size,
+		(page.Number - 1) * page.Size,
+	}
+	rows, err := p.db.Query(ctx, `
+		WITH stats AS (
+			SELECT r.id, r.title,
+				count(*) AS vacancies_count,
+				coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)
+					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS median_salary,
+				coalesce(percentile_cont(0.25) WITHIN GROUP (ORDER BY v.salary_mid)
+					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p25_salary,
+				coalesce(percentile_cont(0.75) WITHIN GROUP (ORDER BY v.salary_mid)
+					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p75_salary
+			FROM roles r
+			JOIN vacancies v ON v.role_id = r.id
+			WHERE r.is_active AND v.deleted_at IS NULL
+				AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
+				AND ($3 = '' OR v.region_id = $3::uuid)
+				AND ($4 = '' OR v.source = $4)
+			GROUP BY r.id, r.title
+		)
+		SELECT id::text, title, vacancies_count, median_salary, p25_salary, p75_salary, count(*) OVER()
+		FROM stats
+		ORDER BY `+order+`, title, id
+		LIMIT $5 OFFSET $6
+	`, args...)
+	if err != nil {
+		return readapi.RolePage{}, fmt.Errorf("query roles: %w", err)
+	}
+	defer rows.Close()
+
+	result := readapi.RolePage{Data: []readapi.RoleStat{}, Page: page.Number, PageSize: page.Size}
+	for rows.Next() {
+		var item readapi.RoleStat
+		if err := rows.Scan(
+			&item.RoleID,
+			&item.Title,
+			&item.VacanciesCount,
+			&item.MedianSalary,
+			&item.P25Salary,
+			&item.P75Salary,
+			&result.Total,
+		); err != nil {
+			return readapi.RolePage{}, fmt.Errorf("scan role: %w", err)
+		}
+		item.Currency = "RUB"
+		result.Data = append(result.Data, item)
+	}
+	if err := rows.Err(); err != nil {
+		return readapi.RolePage{}, fmt.Errorf("iterate roles: %w", err)
+	}
+	return result, nil
+}
+
+func (p *Postgres) GetRole(
+	ctx context.Context,
+	id string,
+	filter readapi.AnalyticsFilter,
+) (readapi.RoleStat, error) {
+	args := []any{
+		filter.Period.From.Format(time.DateOnly),
+		filter.Period.To.Format(time.DateOnly),
+		id,
+		filter.RegionID,
+	}
+	var item readapi.RoleStat
+	err := p.db.QueryRow(ctx, `
+		SELECT r.id::text, r.title,
+			count(v.id),
+			coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)
+				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
+			coalesce(percentile_cont(0.25) WITHIN GROUP (ORDER BY v.salary_mid)
+				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
+			coalesce(percentile_cont(0.75) WITHIN GROUP (ORDER BY v.salary_mid)
+				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8
+		FROM roles r
+		LEFT JOIN vacancies v ON v.role_id = r.id
+			AND v.deleted_at IS NULL
+			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
+			AND ($4 = '' OR v.region_id = $4::uuid)
+		WHERE r.id = $3::uuid AND r.is_active
+		GROUP BY r.id, r.title
+	`, args...).Scan(
+		&item.RoleID,
+		&item.Title,
+		&item.VacanciesCount,
+		&item.MedianSalary,
+		&item.P25Salary,
+		&item.P75Salary,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return readapi.RoleStat{}, readapi.ErrNotFound
+	}
+	if err != nil {
+		return readapi.RoleStat{}, fmt.Errorf("query role: %w", err)
+	}
+	item.Currency = "RUB"
+	return item, nil
+}
+
+func (p *Postgres) ListRegions(
+	ctx context.Context,
+	filter readapi.AnalyticsFilter,
+	page readapi.Page,
+) (readapi.RegionPage, error) {
+	args := []any{
+		filter.Period.From.Format(time.DateOnly),
+		filter.Period.To.Format(time.DateOnly),
+		filter.RoleID,
+		page.Size,
+		(page.Number - 1) * page.Size,
+	}
+	rows, err := p.db.Query(ctx, `
+		WITH stats AS (
+			SELECT r.id, r.name,
+				count(*) AS vacancies_count,
+				coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)
+					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS median_salary,
+				coalesce(percentile_cont(0.25) WITHIN GROUP (ORDER BY v.salary_mid)
+					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p25_salary,
+				coalesce(percentile_cont(0.75) WITHIN GROUP (ORDER BY v.salary_mid)
+					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p75_salary
+			FROM regions r
+			JOIN vacancies v ON v.region_id = r.id
+			WHERE r.is_active AND v.deleted_at IS NULL
+				AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
+				AND ($3 = '' OR v.role_id = $3::uuid)
+			GROUP BY r.id, r.name
+		)
+		SELECT id::text, name, vacancies_count, median_salary, p25_salary, p75_salary, count(*) OVER()
+		FROM stats
+		ORDER BY vacancies_count DESC, name, id
+		LIMIT $4 OFFSET $5
+	`, args...)
+	if err != nil {
+		return readapi.RegionPage{}, fmt.Errorf("query regions: %w", err)
+	}
+	defer rows.Close()
+
+	result := readapi.RegionPage{Data: []readapi.RegionStat{}, Page: page.Number, PageSize: page.Size}
+	for rows.Next() {
+		var item readapi.RegionStat
+		if err := rows.Scan(
+			&item.RegionID,
+			&item.Title,
+			&item.VacanciesCount,
+			&item.MedianSalary,
+			&item.P25Salary,
+			&item.P75Salary,
+			&result.Total,
+		); err != nil {
+			return readapi.RegionPage{}, fmt.Errorf("scan region: %w", err)
+		}
+		item.Currency = "RUB"
+		result.Data = append(result.Data, item)
+	}
+	if err := rows.Err(); err != nil {
+		return readapi.RegionPage{}, fmt.Errorf("iterate regions: %w", err)
+	}
+	return result, nil
+}
+
+func (p *Postgres) GetRegion(
+	ctx context.Context,
+	id string,
+	filter readapi.AnalyticsFilter,
+) (readapi.RegionStat, error) {
+	args := []any{
+		filter.Period.From.Format(time.DateOnly),
+		filter.Period.To.Format(time.DateOnly),
+		filter.RoleID,
+		id,
+	}
+	var item readapi.RegionStat
+	err := p.db.QueryRow(ctx, `
+		SELECT r.id::text, r.name,
+			count(v.id),
+			coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)
+				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
+			coalesce(percentile_cont(0.25) WITHIN GROUP (ORDER BY v.salary_mid)
+				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
+			coalesce(percentile_cont(0.75) WITHIN GROUP (ORDER BY v.salary_mid)
+				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8
+		FROM regions r
+		LEFT JOIN vacancies v ON v.region_id = r.id
+			AND v.deleted_at IS NULL
+			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
+			AND ($3 = '' OR v.role_id = $3::uuid)
+		WHERE r.id = $4::uuid AND r.is_active
+		GROUP BY r.id, r.name
+	`, args...).Scan(
+		&item.RegionID,
+		&item.Title,
+		&item.VacanciesCount,
+		&item.MedianSalary,
+		&item.P25Salary,
+		&item.P75Salary,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return readapi.RegionStat{}, readapi.ErrNotFound
+	}
+	if err != nil {
+		return readapi.RegionStat{}, fmt.Errorf("query region: %w", err)
+	}
+	item.Currency = "RUB"
+	return item, nil
+}
+
+func (p *Postgres) SalaryTrends(
+	ctx context.Context,
+	filter readapi.AnalyticsFilter,
+	grain string,
+) (readapi.SalaryTrends, error) {
+	args := append(analyticsArgs(filter), grain)
+	rows, err := p.db.Query(ctx, `
+		SELECT to_char(date_trunc($6, v.published_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'),
+			percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)::float8,
+			percentile_cont(0.25) WITHIN GROUP (ORDER BY v.salary_mid)::float8,
+			percentile_cont(0.75) WITHIN GROUP (ORDER BY v.salary_mid)::float8,
+			count(*)
+		FROM vacancies v
+		WHERE v.deleted_at IS NULL
+			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
+			AND ($3 = '' OR v.role_id = $3::uuid)
+			AND ($4 = '' OR v.region_id = $4::uuid)
+			AND ($5 = '' OR v.source = $5)
+			AND v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000
+		GROUP BY date_trunc($6, v.published_at AT TIME ZONE 'UTC')
+		ORDER BY date_trunc($6, v.published_at AT TIME ZONE 'UTC')
+	`, args...)
+	if err != nil {
+		return readapi.SalaryTrends{}, fmt.Errorf("query salary trends: %w", err)
+	}
+	defer rows.Close()
+
+	result := readapi.SalaryTrends{Grain: grain, Currency: "RUB", Points: []readapi.SalaryPoint{}}
+	for rows.Next() {
+		var point readapi.SalaryPoint
+		if err := rows.Scan(&point.PeriodStart, &point.Median, &point.P25, &point.P75, &point.SampleSize); err != nil {
+			return readapi.SalaryTrends{}, fmt.Errorf("scan salary trend: %w", err)
+		}
+		result.Points = append(result.Points, point)
+	}
+	if err := rows.Err(); err != nil {
+		return readapi.SalaryTrends{}, fmt.Errorf("iterate salary trends: %w", err)
+	}
+	return result, nil
+}
+
+func (p *Postgres) DemandTrends(
+	ctx context.Context,
+	filter readapi.AnalyticsFilter,
+	grain string,
+) (readapi.DemandTrends, error) {
+	args := append(analyticsArgs(filter), grain)
+	rows, err := p.db.Query(ctx, `
+		WITH buckets AS (
+			SELECT generate_series(
+				date_trunc($6, $1::date),
+				date_trunc($6, $2::date),
+				CASE $6 WHEN 'day' THEN interval '1 day'
+					WHEN 'week' THEN interval '1 week'
+					ELSE interval '1 month' END
+			) AS bucket_start
+		)
+		SELECT to_char(b.bucket_start, 'YYYY-MM-DD'),
+			count(v.id) FILTER (WHERE v.is_active AND v.published_at < b.bucket_start +
+				CASE $6 WHEN 'day' THEN interval '1 day'
+					WHEN 'week' THEN interval '1 week'
+					ELSE interval '1 month' END),
+			count(v.id) FILTER (WHERE v.published_at >= b.bucket_start AND v.published_at < b.bucket_start +
+				CASE $6 WHEN 'day' THEN interval '1 day'
+					WHEN 'week' THEN interval '1 week'
+					ELSE interval '1 month' END)
+		FROM buckets b
+		LEFT JOIN vacancies v ON v.deleted_at IS NULL
+			AND v.published_at < ($2::date + interval '1 day')
+			AND ($3 = '' OR v.role_id = $3::uuid)
+			AND ($4 = '' OR v.region_id = $4::uuid)
+			AND ($5 = '' OR v.source = $5)
+		GROUP BY b.bucket_start
+		ORDER BY b.bucket_start
+	`, args...)
+	if err != nil {
+		return readapi.DemandTrends{}, fmt.Errorf("query demand trends: %w", err)
+	}
+	defer rows.Close()
+
+	result := readapi.DemandTrends{Grain: grain, Points: []readapi.DemandPoint{}}
+	for rows.Next() {
+		var point readapi.DemandPoint
+		if err := rows.Scan(&point.PeriodStart, &point.ActiveCount, &point.NewCount); err != nil {
+			return readapi.DemandTrends{}, fmt.Errorf("scan demand trend: %w", err)
+		}
+		result.Points = append(result.Points, point)
+	}
+	if err := rows.Err(); err != nil {
+		return readapi.DemandTrends{}, fmt.Errorf("iterate demand trends: %w", err)
+	}
+	return result, nil
+}
+
+func (p *Postgres) TopSkills(
+	ctx context.Context,
+	filter readapi.AnalyticsFilter,
+	limit int,
+) (readapi.TopSkills, error) {
+	args := append(analyticsArgs(filter), limit)
+	rows, err := p.db.Query(ctx, `
+		WITH base AS (
+			SELECT v.id
+			FROM vacancies v
+			WHERE v.deleted_at IS NULL
+				AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
+				AND ($3 = '' OR v.role_id = $3::uuid)
+				AND ($4 = '' OR v.region_id = $4::uuid)
+				AND ($5 = '' OR v.source = $5)
+		), total AS (
+			SELECT count(*)::float8 AS value FROM base
+		)
+		SELECT s.id::text, s.name, count(*), coalesce(count(*) / nullif(total.value, 0), 0)::float8
+		FROM base
+		JOIN vacancy_skills vs ON vs.vacancy_id = base.id
+		JOIN skills s ON s.id = vs.skill_id AND s.is_active
+		CROSS JOIN total
+		GROUP BY s.id, s.name, total.value
+		ORDER BY count(*) DESC, s.name, s.id
+		LIMIT $6
+	`, args...)
+	if err != nil {
+		return readapi.TopSkills{}, fmt.Errorf("query top skills: %w", err)
+	}
+	defer rows.Close()
+
+	result := readapi.TopSkills{Data: []readapi.SkillStat{}}
+	for rows.Next() {
+		var item readapi.SkillStat
+		if err := rows.Scan(&item.SkillID, &item.Name, &item.Count, &item.Share); err != nil {
+			return readapi.TopSkills{}, fmt.Errorf("scan top skill: %w", err)
+		}
+		result.Data = append(result.Data, item)
+	}
+	if err := rows.Err(); err != nil {
+		return readapi.TopSkills{}, fmt.Errorf("iterate top skills: %w", err)
+	}
+	return result, nil
+}
+
+func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilter) (readapi.VacancyPage, error) {
+	args := []any{filter.Query, filter.RoleID, filter.RegionID, filter.Source, filter.OnlyActive}
+	conditions := `
+		v.deleted_at IS NULL
+			AND ($1 = '' OR v.title ILIKE '%' || $1 || '%')
+			AND ($2 = '' OR v.role_id = $2::uuid)
+			AND ($3 = '' OR v.region_id = $3::uuid)
+			AND ($4 = '' OR v.source = $4)
+			AND (NOT $5 OR v.is_active)
+	`
+	var total int64
+	if err := p.db.QueryRow(ctx, `SELECT count(*) FROM vacancies v WHERE `+conditions, args...).Scan(&total); err != nil {
+		return readapi.VacancyPage{}, fmt.Errorf("count vacancies: %w", err)
+	}
+
+	args = append(args, filter.Page.Size, (filter.Page.Number-1)*filter.Page.Size)
+	rows, err := p.db.Query(ctx, `
+		SELECT v.id::text, v.source, v.external_id, v.title,
+			v.role_id::text, v.region_id::text,
+			CASE WHEN trim(v.salary_currency) = 'RUB' THEN v.salary_from::float8 END,
+			CASE WHEN trim(v.salary_currency) = 'RUB' THEN v.salary_to::float8 END,
+			CASE WHEN trim(v.salary_currency) = 'RUB' THEN 'RUB' END,
+			CASE WHEN trim(v.salary_currency) = 'RUB' THEN v.salary_gross END,
+			v.published_at, v.is_active,
+			coalesce(array_agg(s.name ORDER BY s.name) FILTER (WHERE s.id IS NOT NULL), ARRAY[]::text[])
+		FROM vacancies v
+		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
+		LEFT JOIN skills s ON s.id = vs.skill_id
+		WHERE `+conditions+`
+		GROUP BY v.id
+		ORDER BY v.published_at DESC NULLS LAST, v.id
+		LIMIT $6 OFFSET $7
+	`, args...)
+	if err != nil {
+		return readapi.VacancyPage{}, fmt.Errorf("query vacancies: %w", err)
+	}
+	defer rows.Close()
+
+	result := readapi.VacancyPage{
+		Data:     []readapi.Vacancy{},
+		Page:     filter.Page.Number,
+		PageSize: filter.Page.Size,
+		Total:    total,
+	}
+	for rows.Next() {
+		var item readapi.Vacancy
+		if err := rows.Scan(
+			&item.ID,
+			&item.Source,
+			&item.ExternalID,
+			&item.Title,
+			&item.RoleID,
+			&item.RegionID,
+			&item.SalaryFrom,
+			&item.SalaryTo,
+			&item.SalaryCurrency,
+			&item.SalaryGross,
+			&item.PublishedAt,
+			&item.IsActive,
+			&item.Skills,
+		); err != nil {
+			return readapi.VacancyPage{}, fmt.Errorf("scan vacancy: %w", err)
+		}
+		result.Data = append(result.Data, item)
+	}
+	if err := rows.Err(); err != nil {
+		return readapi.VacancyPage{}, fmt.Errorf("iterate vacancies: %w", err)
+	}
+	return result, nil
+}
+
+func analyticsArgs(filter readapi.AnalyticsFilter) []any {
+	return []any{
+		filter.Period.From.Format(time.DateOnly),
+		filter.Period.To.Format(time.DateOnly),
+		filter.RoleID,
+		filter.RegionID,
+		filter.Source,
+	}
+}
+
+func periodResponse(period readapi.Period) readapi.PeriodResponse {
+	return readapi.PeriodResponse{
+		From: period.From.Format(time.DateOnly),
+		To:   period.To.Format(time.DateOnly),
+	}
+}

@@ -10,10 +10,11 @@ import (
 
 // Options configures the BFF HTTP server.
 type Options struct {
-	Addr  string
-	Log   *slog.Logger
-	DB    DBPinger
-	Redis RedisPinger
+	Addr        string
+	Log         *slog.Logger
+	DB          DBPinger
+	Redis       RedisPinger
+	ReadService ReadService
 }
 
 // New builds an http.Server with Phase 0 routes and correlation middleware.
@@ -25,6 +26,7 @@ func New(opts Options) *http.Server {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", Health(log, opts.DB, opts.Redis))
+	NewReadHandler(opts.ReadService, log).Register(mux)
 
 	handler := httpx.Middleware(log)(mux)
 

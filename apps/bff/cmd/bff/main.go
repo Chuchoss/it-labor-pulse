@@ -15,7 +15,9 @@ import (
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/config"
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/db"
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/httpserver"
+	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/readapi"
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/redisx"
+	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/repository"
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/logging"
 )
 
@@ -37,6 +39,7 @@ func main() {
 	slog.SetDefault(log)
 
 	var dbPinger db.Pinger
+	var readService httpserver.ReadService
 	if cfg.DatabaseURL != "" {
 		p, err := db.Open(cfg.DatabaseURL)
 		if err != nil {
@@ -45,6 +48,7 @@ func main() {
 			os.Exit(1)
 		}
 		dbPinger = p
+		readService = readapi.NewService(repository.NewPostgres(p.Pool()))
 		defer func() { _ = dbPinger.Close() }()
 		log.Info("database_configured")
 	} else {
@@ -67,10 +71,11 @@ func main() {
 	}
 
 	srv := httpserver.New(httpserver.Options{
-		Addr:  cfg.HTTPAddr,
-		Log:   log,
-		DB:    dbPinger,
-		Redis: redisPinger,
+		Addr:        cfg.HTTPAddr,
+		Log:         log,
+		DB:          dbPinger,
+		Redis:       redisPinger,
+		ReadService: readService,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
