@@ -223,8 +223,9 @@ type queuedWorkerFake struct {
 
 type queuedAIWorkerFake struct {
 	*aiWorkerFake
-	run       AssistantRun
-	completed string
+	run            AssistantRun
+	completed      string
+	completedStats WorkerStats
 }
 
 func (f *queuedAIWorkerFake) ClaimAssistantRun(context.Context) (AssistantRun, bool, error) {
@@ -235,8 +236,9 @@ func (f *queuedAIWorkerFake) ClaimAssistantRun(context.Context) (AssistantRun, b
 	f.run = AssistantRun{}
 	return run, true, nil
 }
-func (f *queuedAIWorkerFake) CompleteAssistantRun(_ context.Context, _ string, state string, _ WorkerStats, _ string) error {
+func (f *queuedAIWorkerFake) CompleteAssistantRun(_ context.Context, _ string, state string, stats WorkerStats, _ string) error {
 	f.completed = state
+	f.completedStats = stats
 	return nil
 }
 func (f *queuedAIWorkerFake) UsersForAssistantRun(context.Context, AssistantRun) ([]WorkerUser, error) {
@@ -364,8 +366,34 @@ func TestManualSnapshotAIUsesDescriptionForDeterministicReject(t *testing.T) {
 		BatchSize: 1, AIProvider: provider, AIBudget: 20, Now: time.Now().UTC(),
 	})
 	if err != nil || fake.completed != "succeeded" || stats.AICalls != 1 ||
+		fake.completedStats.AIStatus != "completed" || fake.completedStats.AISucceeded != 1 ||
 		!strings.Contains(provider.calls[0].InputSnapshot, "Подробное описание") {
 		t.Fatalf("manual AI: stats=%+v completed=%s err=%v", stats, fake.completed, err)
+	}
+}
+
+func TestFinalizeAIStatsMakesZeroCallsExplicit(t *testing.T) {
+	tests := []struct {
+		name       string
+		stats      WorkerStats
+		wantStatus string
+		wantReason string
+	}{
+		{"server disabled", WorkerStats{AIStatus: "skipped", AISkipReason: "server_disabled"}, "skipped", "server_disabled"},
+		{"user opt out", WorkerStats{AIStatus: "skipped", AISkipReason: "user_opt_out"}, "skipped", "user_opt_out"},
+		{"old run", WorkerStats{AIStatus: "skipped", AISkipReason: "run_predates_ai"}, "skipped", "run_predates_ai"},
+		{"no eligible", WorkerStats{}, "skipped", "no_eligible"},
+		{"budget", WorkerStats{AIEligible: 2, AISkipped: 2, AISkipReason: "budget_exhausted"}, "skipped", "budget_exhausted"},
+		{"completed", WorkerStats{AIEligible: 2, AICalls: 2, AISucceeded: 2}, "completed", ""},
+		{"provider failed", WorkerStats{AIEligible: 1, AICalls: 1, AIFailures: 1}, "failed", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			finalizeAIStats(&tt.stats)
+			if tt.stats.AIStatus != tt.wantStatus || tt.stats.AISkipReason != tt.wantReason {
+				t.Fatalf("got status=%q reason=%q", tt.stats.AIStatus, tt.stats.AISkipReason)
+			}
+		})
 	}
 }
 

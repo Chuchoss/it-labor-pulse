@@ -173,13 +173,13 @@ func TestPostgresManualSnapshotScansEligibleVacanciesAndDeduplicatesOutbox(t *te
 		VALUES ($1, 'eligible')`, activeSource)
 	require.NoError(t, err)
 
-	runID, err := repo.QueueAnalysis(ctx, userID, "snapshot-run")
+	runID, err := repo.QueueAnalysis(ctx, userID, "snapshot-run", false)
 	require.NoError(t, err)
 	require.NotEmpty(t, runID)
-	replayedRunID, err := repo.QueueAnalysis(ctx, userID, "snapshot-run")
+	replayedRunID, err := repo.QueueAnalysis(ctx, userID, "snapshot-run", false)
 	require.NoError(t, err)
 	require.Equal(t, runID, replayedRunID)
-	_, err = repo.QueueAnalysis(ctx, userID, "another-run")
+	_, err = repo.QueueAnalysis(ctx, userID, "another-run", false)
 	require.Error(t, err)
 	_, err = pool.Exec(ctx, `INSERT INTO vacancies
 		(source, external_id, title, collected_at, created_at, is_active)

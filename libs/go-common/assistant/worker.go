@@ -92,8 +92,8 @@ type WorkerOptions struct {
 
 type WorkerStats struct {
 	Users, Processed, Eligible, Matched, Notified, Skipped, AICalls int
-	AIMatches, AIFailures, AISkipped                                int
-	RunID                                                           string
+	AIEligible, AISucceeded, AIMatches, AIFailures, AISkipped       int
+	RunID, AIStatus, AISkipReason                                   string
 }
 
 func (s WorkerStats) LogValue() slog.Value {
@@ -101,8 +101,10 @@ func (s WorkerStats) LogValue() slog.Value {
 		slog.Int("users", s.Users), slog.Int("processed", s.Processed), slog.Int("eligible", s.Eligible),
 		slog.Int("matched", s.Matched), slog.Int("notified", s.Notified),
 		slog.Int("skipped", s.Skipped), slog.Int("ai_calls", s.AICalls),
+		slog.Int("ai_eligible", s.AIEligible), slog.Int("ai_succeeded", s.AISucceeded),
 		slog.Int("ai_matches", s.AIMatches), slog.Int("ai_failures", s.AIFailures),
-		slog.Int("ai_skipped", s.AISkipped),
+		slog.Int("ai_skipped", s.AISkipped), slog.String("ai_status", s.AIStatus),
+		slog.String("ai_skip_reason", s.AISkipReason),
 	)
 }
 
@@ -141,6 +143,7 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 		if err != nil {
 			state, category = "failed", "worker_failed"
 		}
+		finalizeAIStats(&stats)
 		_ = runStore.CompleteAssistantRun(completionCtx, claimedRunID, state, stats, category)
 	}()
 	if runStore, ok := store.(AssistantRunStore); ok {
@@ -159,7 +162,9 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 			stats = WorkerStats{
 				Users: len(users), RunID: claimedRunID, Processed: run.Processed,
 				Eligible: run.Eligible, Matched: run.Matched, AICalls: run.AICalls, Skipped: run.Skipped,
+				AIEligible: run.AIEligible, AISucceeded: run.AISucceeded,
 				AIMatches: run.AIMatches, AIFailures: run.AIFailures, AISkipped: run.AISkipped,
+				AIStatus: run.AIStatus, AISkipReason: run.AISkipReason,
 			}
 			if len(users) == 0 {
 				return stats, nil
@@ -289,8 +294,15 @@ func processCandidates(
 			}
 
 			durable, ok := store.(AIStore)
-			if !settings.AIEnabled || opts.AIProvider == nil || !ok {
+			if !settings.AIEnabled {
 				stats.AISkipped++
+				setAISkipReason(stats, "user_opt_out")
+				continue
+			}
+			stats.AIEligible++
+			if opts.AIProvider == nil || !ok {
+				stats.AISkipped++
+				setAISkipReason(stats, "provider_unavailable")
 				continue
 			}
 			exists, err := durable.AIResultExists(ctx, user.ID, user.Preference.Version, candidate.ID, candidate.Revision)
@@ -299,6 +311,7 @@ func processCandidates(
 			}
 			if exists {
 				stats.AISkipped++
+				setAISkipReason(stats, "already_analyzed")
 				continue
 			}
 			if perUserCalls[user.ID] == 0 {
@@ -309,6 +322,7 @@ func processCandidates(
 			}
 			if aiCalls >= opts.AIBudget || perUserCalls[user.ID] >= settings.MaxAICallsPerHour {
 				stats.AISkipped++
+				setAISkipReason(stats, "budget_exhausted")
 				candidateDeferred = true
 				continue
 			}
@@ -341,6 +355,7 @@ func processCandidates(
 			if err := durable.SaveAIResult(ctx, match, output); err != nil {
 				return err
 			}
+			stats.AISucceeded++
 			if output.Decision == string(DecisionMatch) {
 				stats.AIMatches++
 			}
@@ -367,6 +382,32 @@ func processCandidates(
 		}
 	}
 	return nil
+}
+
+func setAISkipReason(stats *WorkerStats, reason string) {
+	if stats.AISkipReason == "" {
+		stats.AISkipReason = reason
+	}
+}
+
+func finalizeAIStats(stats *WorkerStats) {
+	switch {
+	case stats.AICalls > 0 && stats.AIFailures == stats.AICalls:
+		stats.AIStatus, stats.AISkipReason = "failed", ""
+	case stats.AICalls > 0 && (stats.AIFailures > 0 || stats.AISkipped > 0):
+		stats.AIStatus, stats.AISkipReason = "partial", ""
+	case stats.AICalls > 0:
+		stats.AIStatus, stats.AISkipReason = "completed", ""
+	case stats.AIStatus == "skipped" && stats.AISkipReason != "":
+		// Queue-time reason is authoritative for disabled/opt-out runs.
+	case stats.AIEligible == 0:
+		stats.AIStatus, stats.AISkipReason = "skipped", "no_eligible"
+	default:
+		stats.AIStatus = "skipped"
+		if stats.AISkipReason == "" {
+			stats.AISkipReason = "unknown"
+		}
+	}
 }
 
 func preferenceSnapshot(p PreferenceRecord) string {

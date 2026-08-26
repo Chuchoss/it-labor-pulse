@@ -1640,9 +1640,15 @@ components:
 
     AssistantStatus:
       type: object
-      required: [ai_configured, state, processed, total, eligible, matched, ai_calls, ai_matches, ai_failures, ai_skipped, skipped, pending_candidates]
+      required: [ai_configured, ai_status, state, processed, total, eligible, matched, ai_eligible, ai_calls, ai_succeeded, ai_matches, ai_failures, ai_skipped, skipped, pending_candidates]
       properties:
         ai_configured: { type: boolean }
+        ai_status:
+          type: string
+          enum: [not_run, pending, running, completed, partial, failed, skipped]
+        ai_skip_reason:
+          type: [string, "null"]
+          enum: [server_disabled, user_opt_out, run_predates_ai, no_eligible, budget_exhausted, already_analyzed, provider_unavailable, unknown, null]
         state: { type: string, enum: [never_run, queued, running, succeeded, failed, disabled] }
         started_at: { type: [string, "null"], format: date-time }
         finished_at: { type: [string, "null"], format: date-time }
@@ -1651,7 +1657,9 @@ components:
         total: { type: integer, minimum: 0 }
         eligible: { type: integer, minimum: 0 }
         matched: { type: integer, minimum: 0 }
+        ai_eligible: { type: integer, minimum: 0 }
         ai_calls: { type: integer, minimum: 0 }
+        ai_succeeded: { type: integer, minimum: 0 }
         ai_matches: { type: integer, minimum: 0 }
         ai_failures: { type: integer, minimum: 0 }
         ai_skipped: { type: integer, minimum: 0 }

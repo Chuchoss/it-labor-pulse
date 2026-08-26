@@ -35,6 +35,8 @@ type PreferenceRecord struct {
 
 type AnalysisStatus struct {
 	AIConfigured      bool       `json:"ai_configured"`
+	AIStatus          string     `json:"ai_status"`
+	AISkipReason      *string    `json:"ai_skip_reason,omitempty"`
 	State             string     `json:"state"`
 	StartedAt         *time.Time `json:"started_at,omitempty"`
 	FinishedAt        *time.Time `json:"finished_at,omitempty"`
@@ -44,6 +46,8 @@ type AnalysisStatus struct {
 	Eligible          int        `json:"eligible"`
 	Matched           int        `json:"matched"`
 	AICalls           int        `json:"ai_calls"`
+	AIEligible        int        `json:"ai_eligible"`
+	AISucceeded       int        `json:"ai_succeeded"`
 	AIMatches         int        `json:"ai_matches"`
 	AIFailures        int        `json:"ai_failures"`
 	AISkipped         int        `json:"ai_skipped"`
@@ -69,9 +73,13 @@ type AssistantRun struct {
 	Eligible        int
 	Matched         int
 	AICalls         int
+	AIEligible      int
+	AISucceeded     int
 	AIMatches       int
 	AIFailures      int
 	AISkipped       int
+	AIStatus        string
+	AISkipReason    string
 	Skipped         int
 	CursorCreatedAt *time.Time
 	CursorVacancyID string
@@ -222,16 +230,19 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 	var s AnalysisStatus
 	var cursorAt *time.Time
 	err := r.db.QueryRow(ctx, `SELECT state, started_at, finished_at, last_checked_at,
-		processed, snapshot_total, eligible, matched, ai_calls, ai_matches, ai_failures, ai_skipped,
+		processed, snapshot_total, eligible, matched, ai_calls, ai_eligible, ai_succeeded,
+		ai_matches, ai_failures, ai_skipped, ai_status, ai_skip_reason,
 		skipped, error_category, request_id,
 		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version
 		FROM assistant_runs WHERE user_id = $1::uuid ORDER BY created_at DESC LIMIT 1`, userID).Scan(
 		&s.State, &s.StartedAt, &s.FinishedAt, &s.LastCheckedAt, &s.Processed, &s.Total, &s.Eligible,
-		&s.Matched, &s.AICalls, &s.AIMatches, &s.AIFailures, &s.AISkipped,
+		&s.Matched, &s.AICalls, &s.AIEligible, &s.AISucceeded,
+		&s.AIMatches, &s.AIFailures, &s.AISkipped, &s.AIStatus, &s.AISkipReason,
 		&s.Skipped, &s.ErrorCategory, &s.RequestID, &s.CursorSource,
 		&cursorAt, &s.PendingCandidates, &s.Provider, &s.Model, &s.PromptVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		s.State = "never_run"
+		s.AIStatus = "not_run"
 		s.LastCheckedAt = time.Now().UTC()
 	} else if err != nil {
 		return AnalysisStatus{}, fmt.Errorf("get assistant status: %w", err)
@@ -245,7 +256,7 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 	return s, nil
 }
 
-func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestID string) (string, error) {
+func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestID string, aiConfigured bool) (string, error) {
 	var id string
 	err := r.db.QueryRow(ctx, `
 		WITH locked AS (
@@ -264,11 +275,19 @@ func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestI
 			SELECT clock_timestamp() AS cutoff, count(v.id)::integer AS total
 			FROM vacancies v JOIN sources s ON s.code = v.source AND s.is_active
 			WHERE v.is_active AND v.deleted_at IS NULL
+		), automation AS (
+			SELECT COALESCE((
+				SELECT ai_enabled FROM assistant_automation_settings WHERE user_id = $1::uuid
+			), false) AS ai_enabled
 		), inserted AS (
 			INSERT INTO assistant_runs
-				(user_id, state, request_id, preference_id, snapshot_cutoff, snapshot_total)
-			SELECT $1::uuid, 'queued', NULLIF($2, ''), preference.id, scope.cutoff, scope.total
-			FROM preference CROSS JOIN scope
+				(user_id, state, request_id, preference_id, snapshot_cutoff, snapshot_total,
+				 ai_status, ai_skip_reason)
+			SELECT $1::uuid, 'queued', NULLIF($2, ''), preference.id, scope.cutoff, scope.total,
+				CASE WHEN NOT $3 THEN 'skipped' WHEN NOT automation.ai_enabled THEN 'skipped' ELSE 'pending' END,
+				CASE WHEN NOT $3 THEN 'server_disabled'
+				     WHEN NOT automation.ai_enabled THEN 'user_opt_out' END
+			FROM preference CROSS JOIN scope CROSS JOIN automation
 			WHERE NOT EXISTS (SELECT 1 FROM existing_request)
 			  AND NOT EXISTS (SELECT 1 FROM active)
 			RETURNING id
@@ -276,7 +295,7 @@ func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestI
 		SELECT id::text FROM existing_request
 		UNION ALL SELECT id::text FROM inserted
 		LIMIT 1
-	`, userID, requestID).Scan(&id)
+	`, userID, requestID, aiConfigured).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("analysis already running")
 	}
@@ -299,11 +318,13 @@ func (r *PostgresRepository) ClaimAssistantRun(ctx context.Context) (AssistantRu
 			FOR UPDATE SKIP LOCKED LIMIT 1
 		)
 		RETURNING id::text, user_id::text, preference_id::text, snapshot_cutoff,
-			snapshot_total, processed, eligible, matched, ai_calls, ai_matches, ai_failures, ai_skipped, skipped,
+			snapshot_total, processed, eligible, matched, ai_calls, ai_eligible, ai_succeeded,
+			ai_matches, ai_failures, ai_skipped, skipped, ai_status, COALESCE(ai_skip_reason, ''),
 			snapshot_cursor_created_at, COALESCE(snapshot_cursor_vacancy_id::text, '')
 	`).Scan(&run.ID, &run.UserID, &run.PreferenceID, &run.SnapshotCutoff, &run.Total,
-		&run.Processed, &run.Eligible, &run.Matched, &run.AICalls,
-		&run.AIMatches, &run.AIFailures, &run.AISkipped, &run.Skipped,
+		&run.Processed, &run.Eligible, &run.Matched, &run.AICalls, &run.AIEligible,
+		&run.AISucceeded, &run.AIMatches, &run.AIFailures, &run.AISkipped, &run.Skipped,
+		&run.AIStatus, &run.AISkipReason,
 		&run.CursorCreatedAt, &run.CursorVacancyID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssistantRun{}, false, nil
@@ -323,10 +344,13 @@ func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, st
 		SET state = $2, finished_at = now(), last_checked_at = now(),
 			processed = $3, eligible = $4, matched = $5, ai_calls = $6,
 			ai_matches = $7, ai_failures = $8, ai_skipped = $9,
-			skipped = $10, error_category = NULLIF($11, ''), lease_until = NULL
+			skipped = $10, error_category = NULLIF($11, ''), lease_until = NULL,
+			ai_eligible = $12, ai_succeeded = $13, ai_status = $14,
+			ai_skip_reason = NULLIF($15, '')
 		WHERE id = $1::uuid
 	`, runID, state, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls,
-		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, errorCategory)
+		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, errorCategory,
+		stats.AIEligible, stats.AISucceeded, stats.AIStatus, stats.AISkipReason)
 	if err != nil {
 		return fmt.Errorf("complete assistant run: %w", err)
 	}
@@ -796,10 +820,13 @@ func (r *PostgresRepository) UpdateAssistantRunProgress(
 			ai_matches=$6, ai_failures=$7, ai_skipped=$8, skipped=$9,
 			snapshot_cursor_created_at=COALESCE($10, snapshot_cursor_created_at),
 			snapshot_cursor_vacancy_id=COALESCE($11::uuid, snapshot_cursor_vacancy_id),
-			last_checked_at=now(), lease_until=now() + interval '10 minutes'
+			last_checked_at=now(), lease_until=now() + interval '10 minutes',
+			ai_eligible=$12, ai_succeeded=$13, ai_status=$14,
+			ai_skip_reason=NULLIF($15, '')
 		WHERE id=$1::uuid AND state='running'
 	`, runID, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls,
-		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, cursorAt, cursorID)
+		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, cursorAt, cursorID,
+		stats.AIEligible, stats.AISucceeded, stats.AIStatus, stats.AISkipReason)
 	if err != nil {
 		return fmt.Errorf("update assistant run progress: %w", err)
 	}

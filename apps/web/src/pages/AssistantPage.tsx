@@ -43,6 +43,17 @@ const legacyRoleAliases: Record<string, string[]> = {
   'business analyst': ['150'], 'bi analyst': ['156'], 'data analyst': ['156'], 'product analyst': ['164'],
 }
 
+const aiSkipReasonText: Record<string, string> = {
+  server_disabled: 'AI-анализ не запускался: выключен на сервере.',
+  user_opt_out: 'AI-анализ не запускался: не включён пользователем.',
+  run_predates_ai: 'AI-анализ не запускался: запуск создан до включения AI.',
+  no_eligible: 'AI-анализ не запускался: нет вакансий для AI.',
+  budget_exhausted: 'AI-анализ не запускался: исчерпан лимит вызовов.',
+  already_analyzed: 'AI-анализ не запускался: вакансии уже были обработаны AI.',
+  provider_unavailable: 'AI-анализ не запускался: worker не получил разрешение на внешний провайдер.',
+  unknown: 'AI-анализ не выполнялся; причина недоступна для старого запуска.',
+}
+
 function normalizeLegacyAlias(value: string) {
   const key = value.trim().toLowerCase().replaceAll('_', ' ').replaceAll('-', ' ').replace(/\s+/g, ' ')
   return legacyRoleAliases[key]
@@ -233,12 +244,17 @@ export function AssistantPage() {
             {status.data?.total !== undefined ? ` из ${status.data.total}` : ''} · Подходят: {status.data?.matched ?? 0}
           </Typography>
           <Typography>
-            Отправлено в AI: {status.data?.ai_calls ?? 0} · AI-совпадения: {status.data?.ai_matches ?? 0}
+            {(status.data?.ai_calls ?? 0) === 0
+              ? 'AI-анализ: не выполнялся · Совпадения: —'
+              : `AI-вызовы: ${status.data?.ai_calls ?? 0} · Успешно: ${status.data?.ai_succeeded ?? 0} · Совпадения: ${status.data?.ai_matches ?? 0}`}
             {' · '}Ошибки: {status.data?.ai_failures ?? 0} · Пропущено AI: {status.data?.ai_skipped ?? 0}
           </Typography>
-          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключена; ручной детерминированный анализ ещё не запускался.' : status.data?.state === 'never_run' ? 'Анализ ещё не запускался.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала анализа.' : status.data?.state === 'running' ? 'Обработка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.' : status.data?.state === 'failed' ? 'Анализ завершился с безопасной ошибкой; повторите запуск.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Анализ всех вакансий из снимка завершён.'}</Typography>
+          {(status.data?.ai_calls ?? 0) === 0 && status.data?.ai_skip_reason && (
+            <Alert severity="info">{aiSkipReasonText[status.data.ai_skip_reason]}</Alert>
+          )}
+          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключён; проверка по критериям ещё не запускалась.' : status.data?.state === 'never_run' ? 'Проверка ещё не запускалась.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала проверки.' : status.data?.state === 'running' ? 'Проверка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.' : status.data?.state === 'failed' ? 'Проверка по критериям завершилась с безопасной ошибкой; повторите запуск.' : status.data?.ai_status === 'completed' ? 'Проверка по критериям и AI-анализ завершены.' : status.data?.ai_status === 'partial' || status.data?.ai_status === 'failed' ? 'Проверка по критериям завершена; AI-анализ завершён частично или с ошибкой.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Проверка по критериям завершена.'}</Typography>
           {status.data?.finished_at && <Typography variant="body2">Последний анализ: {new Date(status.data.finished_at).toLocaleString('ru-RU')}</Typography>}
-          <Button variant="contained" disabled={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'} onClick={() => setConfirmAction('run')}>Полный анализ текущих вакансий</Button>
+          <Button variant="contained" disabled={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'} onClick={() => setConfirmAction('run')}>Проверить текущие вакансии</Button>
           {run.data && <Alert severity="info">Поставлено в очередь. ID запуска: {run.data.run_id}</Alert>}
           {run.isError && <Alert severity="error">Не удалось запустить анализ: {run.error.message}</Alert>}
         </Stack>
@@ -387,7 +403,11 @@ export function AssistantPage() {
         <Typography>{confirmAction === 'archive'
           ? 'Архивировать текущую версию? Она останется в истории, совпадения не удаляются.'
           : confirmAction === 'run'
-            ? 'Запустить полный анализ всех текущих активных вакансий по описанию? Снимок фиксируется сейчас. AI вызывается только при вашем согласии, серверном разрешении и в пределах лимита.'
+            ? !status.data?.ai_configured
+              ? 'Запустить проверку всех текущих активных вакансий по критериям? AI не запустится: внешний провайдер выключен на сервере.'
+              : !automation.data?.ai_enabled
+                ? 'Запустить проверку всех текущих активных вакансий по критериям? AI не запустится: автоматический AI-анализ не включён пользователем.'
+                : 'Запустить проверку всех текущих активных вакансий и AI-анализ описаний? Возможны расходы; действуют лимиты.'
             : confirmAction === 'ai'
               ? `${automation.data?.ai_enabled ? 'Выключить' : 'Включить'} автоматический AI-анализ? Внешний провайдер может расходовать средства; исторические вакансии не будут обработаны.`
               : confirmAction === 'test'

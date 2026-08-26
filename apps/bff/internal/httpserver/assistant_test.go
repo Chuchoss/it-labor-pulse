@@ -43,7 +43,7 @@ func (f *assistantRepositoryFake) ArchivePreference(context.Context, string, str
 func (f *assistantRepositoryFake) AnalysisStatus(context.Context, string, bool) (assistant.AnalysisStatus, error) {
 	return assistant.AnalysisStatus{State: "never_run"}, nil
 }
-func (f *assistantRepositoryFake) QueueAnalysis(context.Context, string, string) (string, error) {
+func (f *assistantRepositoryFake) QueueAnalysis(context.Context, string, string, bool) (string, error) {
 	return "run-1", nil
 }
 func (f *assistantRepositoryFake) ListMatches(context.Context, string, int) ([]assistant.MatchRecord, error) {

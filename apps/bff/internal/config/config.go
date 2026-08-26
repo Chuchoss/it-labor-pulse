@@ -36,7 +36,9 @@ func Load() Config {
 		AssistantDevAuthEnabled:  envBool("ASSISTANT_DEV_AUTH_ENABLED", false),
 		AssistantDevSubject:      envOr("ASSISTANT_DEV_SUBJECT", "local-dev-user"),
 		AssistantTelegramEnabled: envBool("ASSISTANT_TELEGRAM_ENABLED", false) && strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")) != "",
-		AssistantAIEnabled:       envBool("ASSISTANT_AI_ENABLED", false),
+		AssistantAIEnabled: envBool("ASSISTANT_AI_ENABLED", false) &&
+			envBool("ASSISTANT_AI_LIVE_TEST", false) &&
+			strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")) != "",
 	}
 }
 

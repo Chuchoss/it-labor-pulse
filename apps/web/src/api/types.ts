@@ -211,6 +211,9 @@ export interface AssistantPreferences {
 
 export interface AssistantStatus {
   ai_configured: boolean
+  ai_status: 'not_run' | 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'skipped'
+  ai_skip_reason?: 'server_disabled' | 'user_opt_out' | 'run_predates_ai' | 'no_eligible'
+    | 'budget_exhausted' | 'already_analyzed' | 'provider_unavailable' | 'unknown'
   state: 'never_run' | 'queued' | 'running' | 'succeeded' | 'failed' | 'disabled'
   started_at?: string
   finished_at?: string
@@ -220,6 +223,8 @@ export interface AssistantStatus {
   eligible: number
   matched: number
   ai_calls: number
+  ai_eligible: number
+  ai_succeeded: number
   ai_matches: number
   ai_failures: number
   ai_skipped: number

@@ -31,7 +31,7 @@ type AssistantRepository interface {
 	SavePreferences(context.Context, string, string, assistant.PreferenceRecord) (assistant.PreferenceRecord, error)
 	ArchivePreference(context.Context, string, string) error
 	AnalysisStatus(context.Context, string, bool) (assistant.AnalysisStatus, error)
-	QueueAnalysis(context.Context, string, string) (string, error)
+	QueueAnalysis(context.Context, string, string, bool) (string, error)
 	ListMatches(context.Context, string, int) ([]assistant.MatchRecord, error)
 	TelegramStatus(context.Context, string, bool) (assistant.TelegramStatus, error)
 	AutomationSettings(context.Context, string) (assistant.AutomationSettings, error)
@@ -188,7 +188,9 @@ func (h *assistantHandler) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.opts.Repository == nil {
-		writeJSON(w, 200, assistant.AnalysisStatus{State: "disabled", MethodVersion: "deterministic-v1"})
+		writeJSON(w, 200, assistant.AnalysisStatus{
+			State: "disabled", AIStatus: "not_run", MethodVersion: "deterministic-v1",
+		})
 		return
 	}
 	value, err := h.opts.Repository.AnalysisStatus(r.Context(), userID, h.opts.AIConfigured)
@@ -216,7 +218,9 @@ func (h *assistantHandler) analyze(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, 503, "DEPENDENCY_UNAVAILABLE", "Analysis store is not configured", nil)
 		return
 	}
-	runID, err := h.opts.Repository.QueueAnalysis(r.Context(), userID, r.Header.Get("Idempotency-Key"))
+	runID, err := h.opts.Repository.QueueAnalysis(
+		r.Context(), userID, r.Header.Get("Idempotency-Key"), h.opts.AIConfigured,
+	)
 	if err != nil {
 		h.error(w, r, 409, "CONFLICT", "Анализ уже выполняется", nil)
 		return

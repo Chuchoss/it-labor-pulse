@@ -48,7 +48,10 @@ Worker обрабатывает снимок пакетами до 25 строк
 вакансии остаются для следующего ручного запуска и outbox. Внешний DeepSeek
 требует отдельного server-side opt-in (`ASSISTANT_AI_ENABLED` и explicit
 live-test gate); при выключенном AI полный deterministic scan завершается без
-внешних вызовов.
+внешних вызовов. `succeeded` относится к локальной проверке снимка и не
+утверждает, что AI вызывался: отдельные `ai_status` и `ai_skip_reason`
+показывают provider lifecycle. При `ai_calls=0` UI выводит «не выполнялся» и
+не показывает нулевые AI-совпадения как результат провайдера.
 
 HH ingest получает search list, затем официальную detail-карточку
 `GET /vacancies/{id}`. HTML-описание превращается в plain text: script/style и
@@ -150,7 +153,11 @@ go run ./apps/assistant/cmd/worker -once
    `DEEPSEEK_API_KEY`; не вставляйте значение в issue, UI или логи.
 3. Проверьте лимит расходов и установите `DEEPSEEK_MODEL`; включайте AI только
    после проверки fake-тестов.
-4. Включите flags и перезапустите server-side worker. Для Telegram сначала
+4. Для реального DeepSeek одновременно установите
+   `ASSISTANT_AI_ENABLED=true`, `ASSISTANT_AI_LIVE_TEST=true`, включите
+   автоматический AI-анализ в UI и перезапустите worker командой
+   `go run ./apps/assistant/cmd/worker -allow-external`. Без любого из этих
+   opt-in внешний вызов не выполняется. Для Telegram сначала
    запустите linker, запросите nonce, откройте bot deep-link и отправьте
    `/start <nonce>`; затем отдельно включите opt-in и Telegram automation в UI.
    Автоматически ничего не включается.

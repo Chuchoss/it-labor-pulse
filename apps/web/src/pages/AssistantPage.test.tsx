@@ -234,12 +234,36 @@ describe('AssistantPage', () => {
     renderPage(<AssistantPage />)
     expect(await screen.findByText(/25 из 151/)).toBeInTheDocument()
     expect(screen.getByText(/Новые вакансии будут автоматически анализироваться AI по полному описанию/)).toBeInTheDocument()
-    expect(screen.getByText(/Отправлено в AI: 0 · AI-совпадения: 0 · Ошибки: 0 · Пропущено AI: 25/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Полный анализ текущих вакансий' }))
-    expect(screen.getByText(/анализ всех текущих активных вакансий/i)).toBeInTheDocument()
+    expect(screen.getByText(/AI-анализ: не выполнялся · Совпадения: — · Ошибки: 0 · Пропущено AI: 25/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Проверить текущие вакансии' }))
+    expect(screen.getByText(/AI не запустится: внешний провайдер выключен на сервере/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Подтвердить' }))
 
     await waitFor(() => expect(started).toBe(true))
     expect(await screen.findByText(/ID запуска: run-full/)).toBeInTheDocument()
+  })
+
+  it('labels a historical deterministic-only run without false AI matches', async () => {
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        id: 'preference-6', version: 6, note: '', hard_criteria: {}, soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        ai_configured: false, state: 'succeeded', ai_status: 'skipped',
+        ai_skip_reason: 'run_predates_ai', processed: 1973, total: 1973,
+        eligible: 1973, matched: 0, ai_eligible: 0, ai_calls: 0, ai_succeeded: 0,
+        ai_matches: 0, ai_failures: 0, ai_skipped: 0, skipped: 1973,
+        pending_candidates: false, finished_at: '2026-08-26T23:16:12Z',
+      })),
+    )
+
+    renderPage(<AssistantPage />)
+
+    expect(await screen.findByText(/1973 из 1973/)).toBeInTheDocument()
+    expect(screen.getByText('AI-анализ: не выполнялся · Совпадения: — · Ошибки: 0 · Пропущено AI: 0')).toBeInTheDocument()
+    expect(screen.getByText('AI-анализ не запускался: запуск создан до включения AI.')).toBeInTheDocument()
+    expect(screen.getByText('Проверка по критериям завершена.')).toBeInTheDocument()
+    expect(screen.queryByText(/AI-совпадения: 0/)).not.toBeInTheDocument()
   })
 })
