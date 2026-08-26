@@ -110,6 +110,17 @@ npm --prefix apps/web run build
 Тесты используют `httptest` и fake-клиенты: внешние DeepSeek/Telegram запросы
 не выполняются.
 
+Worker запускается в ограниченном режиме одной пачкой:
+
+```powershell
+go run ./apps/assistant/cmd/worker -once
+```
+
+Без настроенного persistent assistant store команда завершается с агрегатами
+`users=0`, не создаёт локальную identity и не вызывает внешние API. В рабочем
+контуре worker должен быть подключён к PostgreSQL repository, запускаться одним
+экземпляром (advisory lock) и обрабатывать только свежий cursor window.
+
 ## Включение по явному opt-in
 
 1. Создайте бота через официального `@BotFather`, сохраните token в локальном
