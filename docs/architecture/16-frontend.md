@@ -101,6 +101,20 @@ ID и загружаются только до `total`; смена фильтр�
 после измеренного DOM/performance bottleneck. Нет тяжёлой аналитики на этом
 экране — только drill-down.
 
+**Phase 1 live update:** отдельный лёгкий HTTP polling запрашивает первую
+страницу (`page_size=100`) в каноническом порядке `published_at DESC, id ASC`
+с теми же фильтрами. Начальный ответ задаёт baseline; следующие ответы
+добавляют только ранее не встречавшиеся ID, обновляют `total` и не
+перезапрашивают все infinite pages. Новые строки на 8 секунд получают зелёную
+подсветку и `aria-live`-объявление; анимация отключается при
+`prefers-reduced-motion`. Ошибка polling не скрывает текущий список.
+
+Интервал задаётся публичной переменной `VITE_VACANCIES_POLL_INTERVAL_MS`
+(default `30000`, минимум `10000`, `0` отключает polling). Скрытая/offline
+вкладка не опрашивается; после focus/reconnect выполняется повторная проверка.
+Polling только обнаруживает данные после записи ingest в PostgreSQL и **не**
+запускает HH ingest: его расписание — отдельная задача.
+
 ### 7. «Тенденции» `/perspectives` (Phase 5 Target)
 
 | Блок | Endpoint |
@@ -145,6 +159,7 @@ Nav: пункт «Тенденции» не добавлять в MVP shell до
 ## Техзаметки
 
 - Base URL: `VITE_API_BASE_URL` → **BFF** (default `/api/v1`; local Vite proxy → `http://localhost:8080`, см. `.env.example`).
+- Vacancy polling: `VITE_VACANCIES_POLL_INTERVAL_MS` (default 30 секунд; `0` отключает).
 - `request_id` из error body — в UI error state.
 - OpenAPI → опциональная генерация типов (`openapi-typescript`) в Phase 1.
 - Auth MVP отсутствует; admin token только если появится admin UI.

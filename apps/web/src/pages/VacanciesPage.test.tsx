@@ -5,7 +5,12 @@ import { renderPage } from '../test/render'
 import { server } from '../test/server'
 import { getRegionLabel } from '../utils/regions'
 import { VacanciesPage } from './VacanciesPage'
-import { dedupeVacancies, getNextVacancyPageParam } from './vacancyPagination'
+import {
+  dedupeVacancies,
+  getNextVacancyPageParam,
+  mergeFreshVacancies,
+  parseVacancyPollInterval,
+} from './vacancyPagination'
 
 let intersectionCallback: IntersectionObserverCallback | undefined
 
@@ -116,9 +121,13 @@ describe('VacanciesPage', () => {
     expect((await screen.findAllByText('Go Platform Engineer')).length).toBeGreaterThan(0)
     expect(screen.queryByText('Duplicate')).not.toBeInTheDocument()
     expect(screen.getByText('Загружено 2 из 3')).toBeInTheDocument()
-    expect(screen.getByText('Все доступные вакансии загружены')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Загрузить ещё' })).toBeInTheDocument()
     expect(requestedUrls.some((url) => url.includes('page=2'))).toBe(true)
-    expect(requestedUrls.every((url) => url.includes('page_size=20'))).toBe(true)
+    expect(
+      requestedUrls
+        .filter((url) => !url.includes('page_size=100'))
+        .every((url) => url.includes('page_size=20')),
+    ).toBe(true)
     expect(requestedUrls.every((url) => url.includes('only_active=true'))).toBe(true)
   })
 
@@ -129,7 +138,7 @@ describe('VacanciesPage', () => {
       http.get('*/api/v1/vacancies', ({ request }) => {
         const url = new URL(request.url)
         const query = url.searchParams.get('q') || ''
-        requestedQueries.push(query)
+        if (url.searchParams.get('page_size') !== '100') requestedQueries.push(query)
         return HttpResponse.json({
           data: [
             {
@@ -294,6 +303,157 @@ describe('VacanciesPage', () => {
     expect(screen.getAllByText('Регион не указан').length).toBeGreaterThan(0)
     expect(screen.queryByText('unmapped-region')).not.toBeInTheDocument()
   })
+
+  it('uses a baseline, merges one new filtered vacancy, ignores duplicates and removes highlighting', async () => {
+    let freshnessCalls = 0
+    let releaseNewVacancy = false
+    const freshnessUrls: string[] = []
+    server.use(
+      http.get('*/api/v1/vacancies', ({ request }) => {
+        const url = new URL(request.url)
+        const isFreshness = url.searchParams.get('page_size') === '100'
+        const initial = {
+          id: 'baseline-id',
+          title: 'Synthetic baseline vacancy',
+          published_at: '2026-08-25T10:00:00Z',
+          is_active: true,
+        }
+        if (isFreshness) {
+          freshnessCalls += 1
+          freshnessUrls.push(request.url)
+        }
+        const withNew = isFreshness && releaseNewVacancy && freshnessCalls >= 2
+        return HttpResponse.json({
+          data: withNew
+            ? [
+                {
+                  id: 'new-id',
+                  title: 'Synthetic new vacancy',
+                  published_at: '2026-08-26T10:00:00Z',
+                  is_active: true,
+                },
+                initial,
+              ]
+            : [initial],
+          page: 1,
+          page_size: isFreshness ? 100 : 20,
+          total: withNew ? 2 : 1,
+        })
+      }),
+    )
+
+    renderPage(
+      <VacanciesPage pollIntervalMs={30} highlightDurationMs={300} />,
+      '/vacancies?q=Synthetic&only_active=false',
+    )
+    expect((await screen.findAllByText('Synthetic baseline vacancy')).length).toBe(2)
+    await waitFor(() => expect(freshnessCalls).toBeGreaterThanOrEqual(1))
+    expect(document.querySelectorAll('[data-new-vacancy="true"]')).toHaveLength(0)
+
+    releaseNewVacancy = true
+    expect(await screen.findByText('Добавлено 1 новых вакансий')).toBeInTheDocument()
+    expect(screen.getAllByText('Synthetic new vacancy')).toHaveLength(2)
+    expect(document.querySelectorAll('[data-new-vacancy="true"]')).toHaveLength(2)
+    expect(screen.getByText('Загружено 2 из 2')).toBeInTheDocument()
+    expect(freshnessUrls.every((url) => url.includes('q=Synthetic'))).toBe(true)
+    expect(freshnessUrls.every((url) => url.includes('only_active=false'))).toBe(true)
+
+    await waitFor(
+      () => expect(document.querySelectorAll('[data-new-vacancy="true"]')).toHaveLength(0),
+      { timeout: 1000 },
+    )
+    expect(screen.getAllByText('Synthetic new vacancy')).toHaveLength(2)
+  })
+
+  it('respects reduced motion for a newly discovered vacancy', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(prefers-reduced-motion: reduce)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+    let freshnessCalls = 0
+    server.use(
+      http.get('*/api/v1/vacancies', ({ request }) => {
+        const isFreshness = new URL(request.url).searchParams.get('page_size') === '100'
+        if (isFreshness) freshnessCalls += 1
+        const data =
+          isFreshness && freshnessCalls >= 2
+            ? [
+                { id: 'reduced-new', title: 'Reduced motion vacancy', is_active: true },
+                { id: 'reduced-base', title: 'Reduced baseline', is_active: true },
+              ]
+            : [{ id: 'reduced-base', title: 'Reduced baseline', is_active: true }]
+        return HttpResponse.json({
+          data,
+          page: 1,
+          page_size: isFreshness ? 100 : 20,
+          total: data.length,
+        })
+      }),
+    )
+
+    renderPage(<VacanciesPage pollIntervalMs={30} highlightDurationMs={200} />)
+    expect((await screen.findAllByText('Reduced baseline')).length).toBe(2)
+    expect(await screen.findByText('Добавлено 1 новых вакансий')).toBeInTheDocument()
+    const highlighted = document.querySelectorAll('[data-new-vacancy="true"]')
+    expect(highlighted).toHaveLength(2)
+    highlighted.forEach((element) =>
+      expect(element).toHaveAttribute('data-reduced-motion', 'true'),
+    )
+  })
+
+  it('can disable polling completely', async () => {
+    let freshnessCalls = 0
+    server.use(
+      http.get('*/api/v1/vacancies', ({ request }) => {
+        if (new URL(request.url).searchParams.get('page_size') === '100') freshnessCalls += 1
+        return HttpResponse.json({
+          data: [{ id: 'disabled', title: 'Polling disabled', is_active: true }],
+          page: 1,
+          page_size: 20,
+          total: 1,
+        })
+      }),
+    )
+
+    renderPage(<VacanciesPage pollIntervalMs={0} />)
+    expect((await screen.findAllByText('Polling disabled')).length).toBe(2)
+    await new Promise((resolve) => window.setTimeout(resolve, 80))
+    expect(freshnessCalls).toBe(0)
+  })
+
+  it('keeps the current list when repeated freshness requests fail', async () => {
+    let freshnessCalls = 0
+    server.use(
+      http.get('*/api/v1/vacancies', ({ request }) => {
+        const isFreshness = new URL(request.url).searchParams.get('page_size') === '100'
+        if (isFreshness && ++freshnessCalls > 1) {
+          return new HttpResponse(null, { status: 503 })
+        }
+        return HttpResponse.json({
+          data: [{ id: 'preserved', title: 'Preserved vacancy', is_active: true }],
+          page: 1,
+          page_size: isFreshness ? 100 : 20,
+          total: 1,
+        })
+      }),
+    )
+
+    renderPage(<VacanciesPage pollIntervalMs={30} />)
+    expect((await screen.findAllByText('Preserved vacancy')).length).toBe(2)
+    expect(
+      await screen.findByText('Автообновление временно недоступно; список сохранён.', {}, {
+        timeout: 2500,
+      }),
+    ).toBeInTheDocument()
+    expect(screen.getAllByText('Preserved vacancy')).toHaveLength(2)
+    expect(screen.queryByText(/Не удалось связаться с API/)).not.toBeInTheDocument()
+  })
 })
 
 describe('vacancy page helpers', () => {
@@ -308,15 +468,49 @@ describe('vacancy page helpers', () => {
     ).toEqual(['1', '2'])
   })
 
-  it('stops on empty, duplicate-only, and final pages', () => {
+  it('stops on empty and final pages while skipping shifted duplicates', () => {
     const first = { data: [vacancy('1')], page: 1, page_size: 1, total: 3 }
     expect(getNextVacancyPageParam(first, [first])).toBe(2)
     const duplicate = { data: [vacancy('1')], page: 2, page_size: 1, total: 3 }
-    expect(getNextVacancyPageParam(duplicate, [first, duplicate])).toBeUndefined()
+    expect(getNextVacancyPageParam(duplicate, [first, duplicate])).toBe(3)
     const empty = { data: [], page: 2, page_size: 1, total: 3 }
     expect(getNextVacancyPageParam(empty, [first, empty])).toBeUndefined()
     const final = { data: [vacancy('2')], page: 2, page_size: 1, total: 2 }
     expect(getNextVacancyPageParam(final, [first, final])).toBeUndefined()
+  })
+
+  it('merges fresh rows in stable newest order and updates total', () => {
+    const old = {
+      data: [
+        { ...vacancy('old'), published_at: '2026-08-25T00:00:00Z' },
+        { ...vacancy('older'), published_at: '2026-08-24T00:00:00Z' },
+      ],
+      page: 1,
+      page_size: 2,
+      total: 2,
+    }
+    const freshness = {
+      data: [
+        { ...vacancy('new'), published_at: '2026-08-26T00:00:00Z' },
+        { ...vacancy('old'), title: 'updated without new highlight', published_at: '2026-08-25T00:00:00Z' },
+      ],
+      page: 1,
+      page_size: 100,
+      total: 3,
+    }
+
+    const merged = mergeFreshVacancies([old], freshness, new Set(['new']))
+    expect(merged[0].data.map((item) => item.id)).toEqual(['new', 'old', 'older'])
+    expect(merged[0].data[1].title).toBe('updated without new highlight')
+    expect(merged[0].total).toBe(3)
+    expect(getNextVacancyPageParam(merged[0], merged)).toBeUndefined()
+  })
+
+  it('parses polling defaults, minimum and disabled mode', () => {
+    expect(parseVacancyPollInterval(undefined)).toBe(30_000)
+    expect(parseVacancyPollInterval('1000')).toBe(10_000)
+    expect(parseVacancyPollInterval('0')).toBe(0)
+    expect(parseVacancyPollInterval('invalid')).toBe(30_000)
   })
 })
 

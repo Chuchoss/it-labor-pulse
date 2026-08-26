@@ -206,6 +206,7 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `REDIS_PASSWORD` | нет | пусто | Local обычно без пароля; cloud — в URL или отдельно |
 | `BFF_HTTP_ADDR` | нет | `:8080` | Публичный BFF (MVP edge) |
 | `VITE_API_BASE_URL` | нет | `/api/v1` | Публичный base path SPA; только несекретное значение |
+| `VITE_VACANCIES_POLL_INTERVAL_MS` | нет | `30000` | Интервал проверки новых вакансий; минимум `10000`, `0` отключает polling (например, в тестах) |
 | `QUERY_HTTP_ADDR` / `QUERY_GRPC_ADDR` | нет | `:8083` / `:9091` | Query (HTTP debug) |
 | `INGEST_HTTP_ADDR` / `INGEST_GRPC_ADDR` | нет | `:8082` / `:9092` | Ingest admin |
 | `KAFKA_BROKERS` | Phase 2 | `localhost:9092` | Redpanda/Kafka |
@@ -225,6 +226,12 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `INGEST_IT_MAX_REQUESTS` | нет | `500` | Hard budget probe + search/detail запросов одного запуска |
 
 Секреты только в `.env` (gitignored), не в Compose YAML и не в документации как реальные значения.
+
+Polling экрана `/vacancies` запрашивает через BFF только первую страницу
+новейших вакансий с текущими фильтрами. Он показывает строки после записи
+очередным ingest-run в PostgreSQL, но сам не запускает HH ingest. Периодический
+запуск ingest настраивается отдельно; при скрытой вкладке или offline браузер
+приостанавливает polling и повторяет проверку после focus/reconnect.
 
 `INGEST_MAX_PAGES=0` / `all` означает не «все вакансии HH», а все страницы,
 которые официальный API сообщает для комбинации `INGEST_DEFAULT_AREA` +

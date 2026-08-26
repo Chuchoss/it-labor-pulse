@@ -22,6 +22,7 @@ import {
   Typography,
   FormControlLabel,
   Button,
+  useMediaQuery,
 } from '@mui/material'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -31,7 +32,13 @@ import type { Vacancy } from '../api/types'
 import { EmptyState, ErrorState } from '../components/DataState'
 import { formatDate, formatSalaryRange } from '../utils/format'
 import { getRegionLabel } from '../utils/regions'
-import { dedupeVacancies, getNextVacancyPageParam } from './vacancyPagination'
+import {
+  dedupeVacancies,
+  getNextVacancyPageParam,
+  mergeFreshVacancies,
+  parseVacancyPollInterval,
+  vacancyKey,
+} from './vacancyPagination'
 
 function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
   return (
@@ -55,13 +62,27 @@ function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
 }
 
 const FIRST_PAGE = 1
+const FRESHNESS_PAGE_SIZE = 100
+const NEW_HIGHLIGHT_DURATION_MS = 8_000
+const EMPTY_VACANCY_IDS = new Set<string>()
+
+const configuredPollIntervalMs = parseVacancyPollInterval(
+  import.meta.env.VITE_VACANCIES_POLL_INTERVAL_MS,
+)
 
 function csvParam(value: string | null) {
   return value?.split(',').map((item) => item.trim()).filter(Boolean) ?? []
 }
 
-export function VacanciesPage() {
+export function VacanciesPage({
+  pollIntervalMs = configuredPollIntervalMs,
+  highlightDurationMs = NEW_HIGHLIGHT_DURATION_MS,
+}: {
+  pollIntervalMs?: number
+  highlightDurationMs?: number
+}) {
   const queryClient = useQueryClient()
+  const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const [searchParams, setSearchParams] = useSearchParams()
   const query = searchParams.get('q') || ''
   const source = searchParams.get('source') || ''
@@ -78,7 +99,18 @@ export function VacanciesPage() {
   const [draftQuery, setDraftQuery] = useState(query)
   const [draftSalaryMin, setDraftSalaryMin] = useState(salaryMin)
   const [draftSalaryMax, setDraftSalaryMax] = useState(salaryMax)
+  const [newVacancyState, setNewVacancyState] = useState<{
+    filter: string
+    ids: Set<string>
+  } | null>(null)
+  const [announcementState, setAnnouncementState] = useState<{
+    filter: string
+    message: string
+  } | null>(null)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
+  const freshnessBaselineRef = useRef<{ filter: string; ids: Set<string> } | null>(null)
+  const highlightTimersRef = useRef(new Map<string, number>())
+  const visibleVacancyIDsRef = useRef(new Set<string>())
 
   const vacancyQueryKey = useMemo(
     () =>
@@ -110,6 +142,132 @@ export function VacanciesPage() {
   const rows = useMemo(() => dedupeVacancies(pages), [pages])
   const total = pages[0]?.total ?? 0
   const loadNextPage = vacancies.fetchNextPage
+  const filterSignature = useMemo(() => JSON.stringify(vacancyQueryKey[1]), [vacancyQueryKey])
+  const newVacancyIDs =
+    newVacancyState?.filter === filterSignature ? newVacancyState.ids : EMPTY_VACANCY_IDS
+  const newVacancyAnnouncement =
+    announcementState?.filter === filterSignature ? announcementState.message : ''
+
+  useEffect(() => {
+    visibleVacancyIDsRef.current = new Set(rows.map(vacancyKey))
+  }, [rows])
+
+  useEffect(() => {
+    freshnessBaselineRef.current = null
+    highlightTimersRef.current.forEach((timer) => window.clearTimeout(timer))
+    highlightTimersRef.current.clear()
+  }, [filterSignature])
+
+  useEffect(
+    () => () => {
+      highlightTimersRef.current.forEach((timer) => window.clearTimeout(timer))
+      highlightTimersRef.current.clear()
+    },
+    [],
+  )
+
+  const freshness = useQuery({
+    queryKey: ['vacancies-freshness', vacancyQueryKey[1]],
+    enabled: vacancies.isSuccess && pollIntervalMs > 0,
+    queryFn: ({ signal }) =>
+      api.vacancies(
+        {
+          q: query || undefined,
+          role_id: roleIDs.join(',') || undefined,
+          region_id: regionIDs.join(',') || undefined,
+          skill_id: skillIDs.join(',') || undefined,
+          salary_min: salaryMin ? Number(salaryMin) : undefined,
+          salary_max: salaryMax ? Number(salaryMax) : undefined,
+          source: source || undefined,
+          only_active: onlyActive,
+          page: FIRST_PAGE,
+          page_size: FRESHNESS_PAGE_SIZE,
+        },
+        signal,
+      ),
+    refetchInterval: pollIntervalMs > 0 ? pollIntervalMs : false,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    retry: 1,
+    staleTime: 0,
+  })
+
+  useEffect(() => {
+    if (!freshness.data) return
+
+    const polledIDs = freshness.data.data.map(vacancyKey)
+    const baseline = freshnessBaselineRef.current
+    if (!baseline || baseline.filter !== filterSignature) {
+      freshnessBaselineRef.current = {
+        filter: filterSignature,
+        ids: new Set([...polledIDs, ...visibleVacancyIDsRef.current]),
+      }
+      return
+    }
+
+    visibleVacancyIDsRef.current.forEach((id) => baseline.ids.add(id))
+    const discoveredIDs = polledIDs.filter((id) => !baseline.ids.has(id))
+    polledIDs.forEach((id) => baseline.ids.add(id))
+    const discovered = new Set(discoveredIDs)
+    queryClient.setQueryData(vacancyQueryKey, (current: typeof vacancies.data) => {
+      if (!current) return current
+      return {
+        ...current,
+        pages: mergeFreshVacancies(current.pages, freshness.data, discovered),
+      }
+    })
+    if (discoveredIDs.length === 0) return
+
+    setNewVacancyState((current) => ({
+      filter: filterSignature,
+      ids: new Set([
+        ...(current?.filter === filterSignature ? current.ids : EMPTY_VACANCY_IDS),
+        ...discovered,
+      ]),
+    }))
+    setAnnouncementState({
+      filter: filterSignature,
+      message: `Добавлено ${discovered.size} новых вакансий`,
+    })
+    discovered.forEach((id) => {
+      const previousTimer = highlightTimersRef.current.get(id)
+      if (previousTimer !== undefined) window.clearTimeout(previousTimer)
+      const timer = window.setTimeout(() => {
+        setNewVacancyState((current) => {
+          if (!current || current.filter !== filterSignature) return current
+          const next = new Set(current.ids)
+          next.delete(id)
+          return { ...current, ids: next }
+        })
+        highlightTimersRef.current.delete(id)
+      }, highlightDurationMs)
+      highlightTimersRef.current.set(id, timer)
+    })
+  }, [
+    filterSignature,
+    freshness.data,
+    freshness.dataUpdatedAt,
+    highlightDurationMs,
+    queryClient,
+    vacancyQueryKey,
+  ])
+
+  const newVacancyStyle = useCallback(
+    (vacancy: Vacancy) => {
+      if (!newVacancyIDs.has(vacancyKey(vacancy))) return undefined
+      return {
+        backgroundColor: 'rgba(46, 125, 50, 0.18)',
+        boxShadow: 'inset 3px 0 0 rgba(46, 125, 50, 0.8)',
+        animation: prefersReducedMotion ? 'none' : 'vacancy-new-fade 8s ease-out forwards',
+        '@keyframes vacancy-new-fade': {
+          from: { backgroundColor: 'rgba(46, 125, 50, 0.18)' },
+          to: { backgroundColor: 'rgba(46, 125, 50, 0)' },
+        },
+      }
+    },
+    [newVacancyIDs, prefersReducedMotion],
+  )
 
   useEffect(() => {
     const sentinel = sentinelRef.current
@@ -395,6 +553,16 @@ export function VacanciesPage() {
             <Typography color="text.secondary" aria-live="polite">
               Загружено {rows.length} из {total}
             </Typography>
+            {newVacancyAnnouncement && (
+              <Typography color="success.main" role="status" aria-live="polite" sx={{ mt: 0.5 }}>
+                {newVacancyAnnouncement}
+              </Typography>
+            )}
+            {freshness.isError && freshness.failureCount >= 2 && (
+              <Typography variant="caption" color="text.secondary" role="status">
+                Автообновление временно недоступно; список сохранён.
+              </Typography>
+            )}
           </Box>
           <TableContainer sx={{ display: { xs: 'none', md: 'block' } }}>
             <Table>
@@ -408,54 +576,69 @@ export function VacanciesPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {rows.map((vacancy) => (
-                  <TableRow key={vacancy.id || `${vacancy.source}-${vacancy.external_id}`} hover>
-                    <TableCell sx={{ minWidth: 320 }}>
-                      <VacancyDetails vacancy={vacancy} />
-                    </TableCell>
-                    <TableCell>{vacancy.source?.toUpperCase() || '—'}</TableCell>
-                    <TableCell>{getRegionLabel(vacancy.region_id, regionNames)}</TableCell>
-                    <TableCell>{formatDate(vacancy.published_at)}</TableCell>
-                    <TableCell>
-                      <Chip
-                        size="small"
-                        color={vacancy.is_active ? 'success' : 'default'}
-                        label={vacancy.is_active ? 'Активна' : 'Закрыта'}
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {rows.map((vacancy) => {
+                  const isNew = newVacancyIDs.has(vacancyKey(vacancy))
+                  return (
+                    <TableRow
+                      key={vacancyKey(vacancy)}
+                      hover
+                      data-new-vacancy={isNew || undefined}
+                      data-reduced-motion={isNew ? prefersReducedMotion : undefined}
+                      sx={newVacancyStyle(vacancy)}
+                    >
+                      <TableCell sx={{ minWidth: 320 }}>
+                        <VacancyDetails vacancy={vacancy} />
+                      </TableCell>
+                      <TableCell>{vacancy.source?.toUpperCase() || '—'}</TableCell>
+                      <TableCell>{getRegionLabel(vacancy.region_id, regionNames)}</TableCell>
+                      <TableCell>{formatDate(vacancy.published_at)}</TableCell>
+                      <TableCell>
+                        <Chip
+                          size="small"
+                          color={vacancy.is_active ? 'success' : 'default'}
+                          label={vacancy.is_active ? 'Активна' : 'Закрыта'}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           </TableContainer>
 
           <Stack sx={{ display: { xs: 'flex', md: 'none' }, p: 2 }} spacing={1.5}>
-            {rows.map((vacancy) => (
-              <Card
-                key={vacancy.id || `${vacancy.source}-${vacancy.external_id}`}
-                variant="outlined"
-              >
-                <CardContent>
-                  <VacancyDetails vacancy={vacancy} />
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
-                    {getRegionLabel(vacancy.region_id, regionNames)}
-                  </Typography>
-                  <Stack
-                    direction="row"
-                    sx={{ justifyContent: 'space-between', mt: 2 }}
-                  >
-                    <Typography variant="caption" color="text.secondary">
-                      {vacancy.source?.toUpperCase() || '—'} · {formatDate(vacancy.published_at)}
+            {rows.map((vacancy) => {
+              const isNew = newVacancyIDs.has(vacancyKey(vacancy))
+              return (
+                <Card
+                  key={vacancyKey(vacancy)}
+                  variant="outlined"
+                  data-new-vacancy={isNew || undefined}
+                  data-reduced-motion={isNew ? prefersReducedMotion : undefined}
+                  sx={newVacancyStyle(vacancy)}
+                >
+                  <CardContent>
+                    <VacancyDetails vacancy={vacancy} />
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+                      {getRegionLabel(vacancy.region_id, regionNames)}
                     </Typography>
-                    <Chip
-                      size="small"
-                      color={vacancy.is_active ? 'success' : 'default'}
-                      label={vacancy.is_active ? 'Активна' : 'Закрыта'}
-                    />
-                  </Stack>
-                </CardContent>
-              </Card>
-            ))}
+                    <Stack
+                      direction="row"
+                      sx={{ justifyContent: 'space-between', mt: 2 }}
+                    >
+                      <Typography variant="caption" color="text.secondary">
+                        {vacancy.source?.toUpperCase() || '—'} · {formatDate(vacancy.published_at)}
+                      </Typography>
+                      <Chip
+                        size="small"
+                        color={vacancy.is_active ? 'success' : 'default'}
+                        label={vacancy.is_active ? 'Активна' : 'Закрыта'}
+                      />
+                    </Stack>
+                  </CardContent>
+                </Card>
+              )
+            })}
           </Stack>
 
           <Stack sx={{ alignItems: 'center', p: 2 }} spacing={1}>
