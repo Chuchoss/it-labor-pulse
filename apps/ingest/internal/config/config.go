@@ -98,6 +98,9 @@ func (c Config) ValidateScheduler() error {
 	if c.MaxPages < 1 {
 		return fmt.Errorf("scheduler requires positive INGEST_MAX_PAGES")
 	}
+	if c.ITMaxReqs < c.PerPage+1 {
+		return fmt.Errorf("INGEST_IT_MAX_REQUESTS must allow at least one search page and its details")
+	}
 	minInterval := 10 * time.Minute
 	if c.Scheduler.TestMode {
 		minInterval = time.Millisecond

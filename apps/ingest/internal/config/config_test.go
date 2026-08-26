@@ -63,7 +63,7 @@ func TestValidateSchedulerRejectsUnsafeInterval(t *testing.T) {
 		DatabaseURL: "postgres://example.invalid/db",
 		HHUserAgent: "LMATest/0.1 (+test@example.com)",
 		RunTimeout:  time.Minute, Scope: "it", MaxPages: 5, PerPage: 100,
-		ITMaxDepth: 1, ITMaxParts: 1, ITMaxReqs: 2,
+		ITMaxDepth: 1, ITMaxParts: 1, ITMaxReqs: 101,
 		Scheduler: config.SchedulerConfig{
 			Interval: time.Minute, BackoffInitial: time.Minute,
 			BackoffMax: time.Minute, JitterPercent: 20,
@@ -73,4 +73,6 @@ func TestValidateSchedulerRejectsUnsafeInterval(t *testing.T) {
 	require.ErrorContains(t, cfg.ValidateScheduler(), "at least")
 	cfg.Scheduler.TestMode = true
 	require.NoError(t, cfg.ValidateScheduler())
+	cfg.ITMaxReqs = 100
+	require.ErrorContains(t, cfg.ValidateScheduler(), "at least one search page")
 }
