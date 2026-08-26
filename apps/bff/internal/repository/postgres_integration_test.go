@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,6 +173,31 @@ func TestPostgresReadQueries(t *testing.T) {
 			 2, 2, 1, 150000, true, $3::uuid, $4::uuid, 'vacancy_demand_v2', $1)
 	`, published, source, cycleID, analyticsRunID, regionID)
 	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO vacancies (
+			source, external_id, title, role_id, published_at, collected_at,
+			first_observed_at, is_active
+		) VALUES
+			('hh', $1, 'Fresh boundary', $2::uuid, current_timestamp - interval '5 hours',
+			 current_timestamp, current_timestamp - interval '48 hours', true),
+			('hh', $3, 'Stale by one second', $2::uuid, current_timestamp - interval '5 hours' - interval '1 second',
+			 current_timestamp, current_timestamp, true),
+			('hh', $4, 'Future publication', $2::uuid, current_timestamp + interval '1 second',
+			 current_timestamp, current_timestamp, true),
+			('hh', $5, 'Missing publication', $2::uuid, NULL,
+			 current_timestamp, current_timestamp, true)
+	`, fmt.Sprintf("freshness-boundary-%d", suffix), roleID,
+		fmt.Sprintf("freshness-stale-%d", suffix),
+		fmt.Sprintf("freshness-future-%d", suffix),
+		fmt.Sprintf("freshness-null-%d", suffix))
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO vacancy_role_scopes (vacancy_id, role_id, scope)
+		SELECT id, $1::uuid, 'vacancy_listing'
+		FROM vacancies
+		WHERE external_id LIKE 'freshness-%'
+	`, roleID)
+	require.NoError(t, err)
 
 	repository := NewPostgres(tx)
 	page, err := repository.ListVacancies(ctx, readapi.VacancyFilter{
@@ -194,12 +220,29 @@ func TestPostgresReadQueries(t *testing.T) {
 		page.Data[0].Skills,
 	)
 
+	freshnessPage, err := repository.ListVacancies(ctx, readapi.VacancyFilter{
+		RoleIDs: []string{roleID},
+		Page:    readapi.Page{Number: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	freshness := make(map[string]bool)
+	for _, item := range freshnessPage.Data {
+		if strings.HasPrefix(item.Title, "Fresh") || strings.HasPrefix(item.Title, "Stale") ||
+			strings.HasPrefix(item.Title, "Future") || strings.HasPrefix(item.Title, "Missing") {
+			freshness[item.Title] = item.IsFresh
+		}
+	}
+	require.True(t, freshness["Fresh boundary"])
+	require.False(t, freshness["Stale by one second"])
+	require.False(t, freshness["Future publication"])
+	require.False(t, freshness["Missing publication"])
+
 	allRoleRows, err := repository.ListVacancies(ctx, readapi.VacancyFilter{
 		RoleIDs: []string{roleID},
 		Page:    readapi.Page{Number: 1, Size: 10},
 	})
 	require.NoError(t, err)
-	require.EqualValues(t, 2, allRoleRows.Total)
+	require.EqualValues(t, 6, allRoleRows.Total)
 	salaryRows, err := repository.ListVacancies(ctx, readapi.VacancyFilter{
 		RoleIDs:   []string{roleID},
 		SalaryMin: floatPointer(100000),
@@ -239,7 +282,7 @@ func TestPostgresReadQueries(t *testing.T) {
 	role, err := repository.GetRole(ctx, roleID, filter)
 	require.NoError(t, err)
 	require.Equal(t, roleID, role.RoleID)
-	require.EqualValues(t, 2, role.VacanciesCount)
+	require.EqualValues(t, 5, role.VacanciesCount)
 
 	dimensionFilter := filter
 	dimensionFilter.Source = ""
@@ -260,7 +303,8 @@ func TestPostgresReadQueries(t *testing.T) {
 	salaries, err := repository.SalaryTrends(ctx, dimensionFilter, "month")
 	require.NoError(t, err)
 	require.Len(t, salaries.Points, 1)
-	require.Equal(t, 150000.0, salaries.Points[0].Median)
+	require.NotNil(t, salaries.Points[0].Median)
+	require.Equal(t, 150000.0, *salaries.Points[0].Median)
 
 	demandFilter := dimensionFilter
 	demandFilter.Source = source
