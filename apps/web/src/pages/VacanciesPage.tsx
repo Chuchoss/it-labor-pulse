@@ -41,7 +41,7 @@ import { useCurrency } from '../components/CurrencyContext'
 import {
   dedupeVacancies,
   getNextVacancyPageParam,
-  mergeFreshVacancies,
+  mergePolledVacancies,
   parseVacancyPollInterval,
   vacancyKey,
 } from './vacancyPagination'
@@ -57,7 +57,19 @@ function vacancyLinkLabel(vacancy: Vacancy) {
 function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
   return (
     <Stack spacing={1}>
-      <Typography sx={{ fontWeight: 700 }}>{vacancy.title || 'Без названия'}</Typography>
+      <Stack direction="row" useFlexGap sx={{ alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+        <Typography sx={{ fontWeight: 700 }}>{vacancy.title || 'Без названия'}</Typography>
+        {vacancy.is_fresh === true && (
+          <Tooltip title="Опубликована на HH за последние 24 часа">
+            <Chip
+              label="Новая"
+              color="info"
+              size="small"
+              aria-label="Опубликована на HH за последние 24 часа"
+            />
+          </Tooltip>
+        )}
+      </Stack>
       <Typography variant="body2" color="text.secondary">
         {formatSalaryRange(
           vacancy.salary_from,
@@ -248,7 +260,7 @@ export function VacanciesPage({
       if (!current) return current
       return {
         ...current,
-        pages: mergeFreshVacancies(current.pages, freshness.data, discovered),
+        pages: mergePolledVacancies(current.pages, freshness.data, discovered),
       }
     })
     if (discoveredIDs.length === 0) return

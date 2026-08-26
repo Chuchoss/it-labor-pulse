@@ -45,7 +45,7 @@ function compareNewest(left: Vacancy, right: Vacancy): number {
   return vacancyKey(left).localeCompare(vacancyKey(right))
 }
 
-export function mergeFreshVacancies(
+export function mergePolledVacancies(
   pages: VacancyPage[],
   freshness: VacancyPage,
   newIDs: ReadonlySet<string>,

@@ -1123,6 +1123,13 @@ components:
         salary_rate_date: { type: [string, "null"], format: date }
         salary_rate_provider: { type: string, enum: [cbr] }
         published_at: { type: [string, "null"], format: date-time }
+        first_observed_at:
+          type: [string, "null"]
+          format: date-time
+          description: UTC-время первого наблюдения вакансии ingest-пайплайном; не меняется при повторном сборе.
+        is_fresh:
+          type: boolean
+          description: true, если published_at находится в UTC-окне [server_now-24h, server_now]. NULL и будущие значения считаются не свежими; first_observed_at для этого поля не используется.
         is_active: { type: boolean }
         skills:
           type: array

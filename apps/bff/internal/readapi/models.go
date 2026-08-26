@@ -250,6 +250,8 @@ type Vacancy struct {
 	SalaryRateDate     *string    `json:"salary_rate_date"`
 	SalaryRateProvider string     `json:"salary_rate_provider,omitempty"`
 	PublishedAt        *time.Time `json:"published_at"`
+	FirstObservedAt    *time.Time `json:"first_observed_at"`
+	IsFresh            bool       `json:"is_fresh"`
 	IsActive           bool       `json:"is_active"`
 	Skills             []string   `json:"skills"`
 }

@@ -291,6 +291,11 @@ OpenAPI: `x-lifecycle: target`.
   out-of-scope строки не возвращаются даже с `only_active=false`.
 - Сортировка стабильна: `published_at DESC NULLS LAST, id`; смена фильтра
   начинает пагинацию с первой страницы.
+- `first_observed_at` — UTC-время первого наблюдения вакансии ingest-пайплайном,
+  а не `published_at`; оно сохраняется при повторном сборе.
+- `is_fresh=true` только для `published_at` (время публикации на HH) в
+  rolling UTC-окне `[server_now-24h, server_now]`. `NULL` и будущие значения
+  считаются не свежими; `first_observed_at` для этого поля не используется.
 
 ```json
 {
@@ -307,6 +312,8 @@ OpenAPI: `x-lifecycle: target`.
       "salary_currency": "RUB",
       "salary_gross": true,
       "published_at": "2026-08-10T10:00:00Z",
+      "first_observed_at": "2026-08-10T10:05:00Z",
+      "is_fresh": false,
       "is_active": true,
       "skills": ["Go", "Kafka", "PostgreSQL"]
     }

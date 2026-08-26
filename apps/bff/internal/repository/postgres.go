@@ -1023,7 +1023,11 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 			CASE WHEN v.salary_mid IS NOT NULL THEN $11::text END,
 			CASE WHEN v.salary_mid IS NOT NULL THEN false END,
 			v.salary_from_rub_net::float8, v.salary_to_rub_net::float8,
-			v.published_at, v.is_active,
+			v.published_at, v.first_observed_at,
+			(v.published_at IS NOT NULL
+				AND v.published_at <= current_timestamp
+				AND v.published_at >= current_timestamp - interval '24 hours'),
+			v.is_active,
 			coalesce(array_agg(s.name ORDER BY s.name) FILTER (WHERE s.id IS NOT NULL), ARRAY[]::text[])
 		FROM vacancies v
 		JOIN sources src ON src.code = v.source
@@ -1063,10 +1067,20 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 			&item.SalaryFromRUBNet,
 			&item.SalaryToRUBNet,
 			&item.PublishedAt,
+			&item.FirstObservedAt,
+			&item.IsFresh,
 			&item.IsActive,
 			&item.Skills,
 		); err != nil {
 			return readapi.VacancyPage{}, fmt.Errorf("scan vacancy: %w", err)
+		}
+		if item.PublishedAt != nil {
+			publishedAt := item.PublishedAt.UTC()
+			item.PublishedAt = &publishedAt
+		}
+		if item.FirstObservedAt != nil {
+			firstObservedAt := item.FirstObservedAt.UTC()
+			item.FirstObservedAt = &firstObservedAt
 		}
 		item.SalaryFrom = convertMoneyPointer(item.SalaryFromRUBNet, rate)
 		item.SalaryTo = convertMoneyPointer(item.SalaryToRUBNet, rate)

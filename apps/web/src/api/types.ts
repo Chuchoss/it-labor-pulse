@@ -135,6 +135,8 @@ export interface Vacancy {
   salary_rate_date?: string | null
   salary_rate_provider?: string
   published_at?: string | null
+  first_observed_at?: string | null
+  is_fresh?: boolean
   is_active?: boolean
   skills?: string[]
 }

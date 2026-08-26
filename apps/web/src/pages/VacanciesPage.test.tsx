@@ -8,7 +8,7 @@ import { VacanciesPage } from './VacanciesPage'
 import {
   dedupeVacancies,
   getNextVacancyPageParam,
-  mergeFreshVacancies,
+  mergePolledVacancies,
   parseVacancyPollInterval,
 } from './vacancyPagination'
 
@@ -175,6 +175,31 @@ describe('VacanciesPage', () => {
     expect(screen.queryByRole('link', { name: /Vacancy without source URL/ })).not.toBeInTheDocument()
     expect(titles[0].closest('tr')?.querySelector('a')).toBeNull()
     expect(titles[1].closest('.MuiCard-root')?.querySelector('a')).toBeNull()
+  })
+
+  it('renders the server freshness badge only for fresh vacancies', async () => {
+    server.use(
+      http.get('*/api/v1/vacancies', () =>
+        HttpResponse.json({
+          data: [
+            { id: 'fresh', title: 'Fresh vacancy', is_fresh: true, is_active: true },
+            { id: 'stale', title: 'Stale vacancy', is_fresh: false, is_active: true },
+            { id: 'missing', title: 'Missing freshness', is_active: true },
+          ],
+          page: 1,
+          page_size: 20,
+          total: 3,
+        }),
+      ),
+    )
+
+    renderPage(<VacanciesPage pollIntervalMs={0} />)
+
+    expect((await screen.findAllByText('Fresh vacancy')).length).toBe(2)
+    expect(screen.getAllByLabelText('Опубликована на HH за последние 24 часа')).toHaveLength(2)
+    expect(screen.getAllByText('Новая')).toHaveLength(2)
+    expect(screen.getAllByText('Stale vacancy')).toHaveLength(2)
+    expect(screen.getAllByText('Missing freshness')).toHaveLength(2)
   })
 
   it('resets accumulated pages when a filter changes', async () => {
@@ -545,7 +570,7 @@ describe('vacancy page helpers', () => {
       total: 3,
     }
 
-    const merged = mergeFreshVacancies([old], freshness, new Set(['new']))
+    const merged = mergePolledVacancies([old], freshness, new Set(['new']))
     expect(merged[0].data.map((item) => item.id)).toEqual(['new', 'old', 'older'])
     expect(merged[0].data[1].title).toBe('updated without new highlight')
     expect(merged[0].total).toBe(3)

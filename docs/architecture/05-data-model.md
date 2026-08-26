@@ -52,6 +52,7 @@ erDiagram
     boolean is_active
     timestamptz deleted_at
     timestamptz collected_at
+    timestamptz first_observed_at
     bytea content_hash
   }
 ```
@@ -178,6 +179,7 @@ Bash и 1C имеют явные отдельные категории и в н�
 | `description_text` | `TEXT` NULL | усечённый текст; без отдельного хранения PII-контактов |
 | `published_at` | `TIMESTAMPTZ` NULL | |
 | `collected_at` | `TIMESTAMPTZ` NOT NULL | |
+| `first_observed_at` | `TIMESTAMPTZ` NOT NULL | UTC-время первого наблюдения; не изменяется при повторном ingest |
 | `is_active` | `BOOLEAN` NOT NULL DEFAULT true | soft availability |
 | `deleted_at` | `TIMESTAMPTZ` NULL | soft-delete |
 | `content_hash` | `BYTEA`/`CHAR(64)` | для skip unchanged |

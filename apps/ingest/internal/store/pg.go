@@ -899,13 +899,13 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			source, external_id, source_url, title, employer_id, role_id, region_id,
 			salary_from, salary_to, salary_currency, salary_gross, salary_mid,
 			salary_from_rub_net, salary_to_rub_net, salary_rate_date, salary_rate_provider,
-			description_text, published_at, collected_at, is_active, deleted_at,
+			description_text, published_at, collected_at, first_observed_at, is_active, deleted_at,
 			content_hash, raw_payload, updated_at
 		) VALUES (
 			$1, $2, NULLIF($3, ''), $4, $5::uuid, $6::uuid, $7::uuid,
 			$8, $9, NULLIF($10, ''), $11, $12,
 			$13, $14, $15, NULLIF($16, ''),
-			NULLIF($17, ''), $18, $19, $20, NULL,
+			NULLIF($17, ''), $18, $19, $19, $20, NULL,
 			$21, $22::jsonb, now()
 		)
 		ON CONFLICT (source, external_id) DO UPDATE SET
