@@ -41,7 +41,10 @@ describe('VacanciesPage', () => {
     fireEvent.change(screen.getByLabelText('Поиск по названию'), {
       target: { value: 'Data engineer' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+    const submitButton = screen.getByRole('button', { name: 'Найти' })
+    expect(submitButton).toHaveStyle({ flexShrink: '0', whiteSpace: 'nowrap' })
+    expect(submitButton.querySelector('[data-testid="SearchRoundedIcon"]')).toBeInTheDocument()
+    fireEvent.click(submitButton)
     expect((await screen.findAllByText('Data engineer')).length).toBeGreaterThan(0)
 
     fireEvent.click(screen.getByTitle('Go to next page'))

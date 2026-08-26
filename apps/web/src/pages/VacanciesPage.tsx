@@ -103,7 +103,12 @@ export function VacanciesPage() {
           <Stack
             component="form"
             direction={{ xs: 'column', md: 'row' }}
-            sx={{ gap: 1.5, alignItems: { md: 'center' } }}
+            useFlexGap
+            sx={{
+              gap: 1.5,
+              alignItems: { md: 'center' },
+              flexWrap: { md: 'wrap' },
+            }}
             onSubmit={(event) => {
               event.preventDefault()
               updateParams({ q: draftQuery.trim() || undefined, page: '1' })
@@ -116,8 +121,12 @@ export function VacanciesPage() {
               onChange={(event) => setDraftQuery(event.target.value)}
               size="small"
               fullWidth
+              sx={{ minWidth: 0, flex: { md: '1 1 auto' }, width: { md: 'auto' } }}
             />
-            <FormControl size="small" sx={{ minWidth: 150 }}>
+            <FormControl
+              size="small"
+              sx={{ minWidth: 150, width: { xs: '100%', md: 'auto' }, flexShrink: 0 }}
+            >
               <InputLabel id="source-label">Источник</InputLabel>
               <Select
                 labelId="source-label"
@@ -132,7 +141,7 @@ export function VacanciesPage() {
               </Select>
             </FormControl>
             <FormControlLabel
-              sx={{ whiteSpace: 'nowrap' }}
+              sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
               control={
                 <Switch
                   checked={onlyActive}
@@ -143,7 +152,17 @@ export function VacanciesPage() {
               }
               label="Только активные"
             />
-            <Button type="submit" variant="contained" startIcon={<SearchRoundedIcon />}>
+            <Button
+              type="submit"
+              variant="contained"
+              startIcon={<SearchRoundedIcon />}
+              sx={{
+                width: { xs: '100%', md: 'auto' },
+                minWidth: { md: 'max-content' },
+                flexShrink: 0,
+                whiteSpace: 'nowrap',
+              }}
+            >
               Найти
             </Button>
           </Stack>
