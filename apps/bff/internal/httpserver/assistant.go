@@ -48,14 +48,15 @@ type telegramChatRepository interface {
 }
 
 type assistantPreferencesPayload struct {
-	ID           string             `json:"id,omitempty"`
-	Version      int                `json:"version"`
-	Note         string             `json:"note"`
-	HardCriteria map[string]any     `json:"hard_criteria"`
-	SoftCriteria map[string]any     `json:"soft_criteria"`
-	Weights      map[string]float64 `json:"weights"`
-	ActiveFrom   *time.Time         `json:"active_from,omitempty"`
-	ArchivedAt   *time.Time         `json:"archived_at,omitempty"`
+	ID                 string             `json:"id,omitempty"`
+	Version            int                `json:"version"`
+	Note               string             `json:"note"`
+	HardCriteria       map[string]any     `json:"hard_criteria"`
+	SoftCriteria       map[string]any     `json:"soft_criteria"`
+	Weights            map[string]float64 `json:"weights"`
+	ActiveFrom         *time.Time         `json:"active_from,omitempty"`
+	ArchivedAt         *time.Time         `json:"archived_at,omitempty"`
+	LegacyRoleUpgraded bool               `json:"legacy_role_upgraded,omitempty"`
 }
 
 type assistantHandler struct {
@@ -256,10 +257,15 @@ func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, 400, "VALIDATION_ERROR", "Invalid JSON", nil)
 		return
 	}
+	normalized, _, err := assistant.NormalizePreferenceRoles(assistant.PreferenceRecord{
+		Note: value.Note, HardCriteria: value.HardCriteria, SoftCriteria: value.SoftCriteria, Weights: value.Weights,
+	})
+	if err != nil {
+		h.error(w, r, http.StatusBadRequest, "VALIDATION_ERROR", err.Error(), nil)
+		return
+	}
 	if h.opts.Repository != nil {
-		value, err := h.opts.Repository.SavePreferences(r.Context(), userID, r.Header.Get("Idempotency-Key"), assistant.PreferenceRecord{
-			Note: value.Note, HardCriteria: value.HardCriteria, SoftCriteria: value.SoftCriteria, Weights: value.Weights,
-		})
+		value, err := h.opts.Repository.SavePreferences(r.Context(), userID, r.Header.Get("Idempotency-Key"), normalized)
 		if err != nil {
 			if errors.Is(err, assistant.ErrInvalidPreferences) {
 				h.error(w, r, http.StatusBadRequest, "VALIDATION_ERROR", err.Error(), nil)
@@ -271,6 +277,10 @@ func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, preferencePayload(value))
 		return
 	}
+	value.HardCriteria = normalized.HardCriteria
+	value.SoftCriteria = normalized.SoftCriteria
+	value.Weights = normalized.Weights
+	value.LegacyRoleUpgraded = normalized.LegacyRoleUpgraded
 	value.Version++
 	h.currentPreferences = value
 	writeJSON(w, http.StatusOK, value)
@@ -497,5 +507,6 @@ func preferencePayload(value assistant.PreferenceRecord) assistantPreferencesPay
 	return assistantPreferencesPayload{
 		ID: value.ID, Version: value.Version, Note: value.Note, HardCriteria: value.HardCriteria,
 		SoftCriteria: value.SoftCriteria, Weights: value.Weights, ActiveFrom: &value.ActiveFrom, ArchivedAt: value.ArchivedAt,
+		LegacyRoleUpgraded: value.LegacyRoleUpgraded,
 	}
 }

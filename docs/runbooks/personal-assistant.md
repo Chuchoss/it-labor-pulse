@@ -18,6 +18,27 @@ evidence совпадений остаются доступны для ауди�
 `remote_only`, `min_salary_rub`; неизвестные поля возвращают `400`.
 Свободная заметка и неподдержанные soft-критерии не участвуют в matcher.
 
+### Совместимость legacy role
+
+Каноническое значение `approved_roles` — official HH professional role ID.
+Нормализация ограничена фиксированным списком (регистр, `_` и `-` не важны):
+
+- `backend`, `backend developer`, `frontend`, `frontend developer`,
+  `fullstack`, `full stack`, `fullstack developer`, `developer`, `programmer`,
+  `software developer` → `96` («Программист, разработчик»);
+- `team lead`, `teamlead`, `lead developer` → `104`
+  («Руководитель группы разработки»);
+- `qa`, `qa engineer`, `tester`, `quality assurance` → `124`
+  («Тестировщик»);
+- `system analyst`, `systems analyst` → `148`; `business analyst` → `150`;
+  `bi analyst`, `data analyst` → `156`; `product analyst` → `164`.
+
+Другие значения не угадываются и возвращают `400`. Чтение известного legacy
+значения нормализует только модель ответа/worker; исходная версия в PostgreSQL
+остаётся неизменной. Следующее сохранение создаёт новую версию без `role`, с
+`approved_roles`. Free-text заметка может содержать «backend», но не участвует
+в structured role gate.
+
 `GET /api/v1/assistant/status` читает последний run из PostgreSQL. Состояния
 `never_run`, `queued`, `running`, `succeeded`, `failed`, `disabled` и счётчики
 детерминированного matcher/AI не являются in-memory состоянием. Кнопка запуска

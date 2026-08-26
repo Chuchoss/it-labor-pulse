@@ -206,6 +206,7 @@ export interface AssistantPreferences {
   weights: Record<string, number>
   active_from?: string
   archived_at?: string | null
+  legacy_role_upgraded?: boolean
 }
 
 export interface AssistantStatus {

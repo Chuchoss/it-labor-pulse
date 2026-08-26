@@ -9,16 +9,22 @@ import { renderPage } from '../test/render'
 describe('AssistantPage', () => {
   it('loads saved criteria and displays the new version after saving', async () => {
     let savedNote = 'saved synthetic profile'
+    let version = 1
+    let savedHardCriteria: Record<string, unknown> = { role: 'backend' }
+    let requestBody: Record<string, unknown> | undefined
     server.use(
       http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
-        version: 1, note: savedNote, hard_criteria: { role: 'backend' }, soft_criteria: {}, weights: {},
+        version, note: savedNote, hard_criteria: savedHardCriteria, soft_criteria: {}, weights: {},
         active_from: '2026-08-26T12:00:00Z',
       })),
       http.patch('*/api/v1/assistant/preferences', async ({ request }) => {
-        const body = await request.json() as { note: string }
+        const body = await request.json() as { note: string; hard_criteria: Record<string, unknown> }
+        requestBody = body
         savedNote = body.note
+        savedHardCriteria = body.hard_criteria
+        version = 2
         return HttpResponse.json({
-          version: 2, note: savedNote, hard_criteria: { role: 'backend' }, soft_criteria: {}, weights: {},
+          version, note: savedNote, hard_criteria: savedHardCriteria, soft_criteria: {}, weights: {},
           active_from: '2026-08-26T12:01:00Z',
         })
       }),
@@ -37,13 +43,19 @@ describe('AssistantPage', () => {
     const user = userEvent.setup()
     renderPage(<AssistantPage />)
     const input = await screen.findByDisplayValue('saved synthetic profile')
+    expect(await screen.findByText('Разработчик')).toBeInTheDocument()
+    expect(screen.getByText(/Устаревший критерий роли сопоставлен/)).toBeInTheDocument()
     await user.clear(input)
     await user.type(input, 'updated synthetic profile')
     await user.click(screen.getByRole('button', { name: 'Сохранить критерии' }))
 
     expect(await screen.findByText(/Критерии сохранены/)).toBeInTheDocument()
-    expect(screen.getByText(/Версия 2/)).toBeInTheDocument()
-  })
+    expect(screen.getAllByText(/Версия 2/)).toHaveLength(2)
+    if (!requestBody) throw new Error('save request was not captured')
+    expect((requestBody.hard_criteria as Record<string, unknown>).role).toBeUndefined()
+    expect((requestBody.hard_criteria as Record<string, unknown>).approved_roles).toEqual(['96'])
+    expect(savedHardCriteria).toEqual({ approved_roles: ['96'] })
+  }, 10_000)
 
   it('shows an error and does not claim success on non-2xx save', async () => {
     server.use(

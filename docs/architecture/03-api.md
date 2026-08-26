@@ -445,6 +445,17 @@ HTTP **200** всегда в Phase 0 (удобный liveness). Тело:
 
 Без `REDIS_URL` / `DATABASE_URL` соответствующий check не включается; процесс стартует (Phase 0 optional deps).
 
+#### `/api/v1/assistant/preferences` (Phase 4)
+
+`GET` возвращает текущую immutable-версию, а `PUT` / `PATCH` / `POST`
+добавляют новую. Структурированный фильтр ролей — только `hard_criteria.approved_roles`
+с official HH professional role IDs `96`, `104`, `148`, `150`, `156`, `164`,
+`124`. Legacy `hard_criteria.role` принимается только для явно описанных
+aliases из [runbook assistant](../runbooks/personal-assistant.md): известное
+значение read-normalize-ится и при следующем сохранении записывается только как
+`approved_roles`; неизвестное возвращает `400 VALIDATION_ERROR`. Старая строка
+в `vacancy_preferences` не обновляется.
+
 ---
 
 ## OpenAPI sketch (фрагмент)

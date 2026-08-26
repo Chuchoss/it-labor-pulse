@@ -1591,10 +1591,33 @@ components:
         note: { type: string, maxLength: 2000 }
         hard_criteria:
           type: object
-          additionalProperties: true
+          additionalProperties: false
+          properties:
+            approved_roles:
+              type: array
+              uniqueItems: true
+              items:
+                type: string
+                enum: ["96", "104", "148", "150", "156", "164", "124"]
+              description: Утверждённые official HH professional role IDs.
+            role:
+              type: string
+              deprecated: true
+              description: Legacy alias; только известные значения нормализуются в approved_roles, неизвестные возвращают 400.
+            regions:
+              type: array
+              items: { type: string }
+            required_skills:
+              type: array
+              items: { type: string }
+            excluded_skills:
+              type: array
+              items: { type: string }
+            remote_only: { type: boolean }
+            min_salary_rub: { type: number, minimum: 0 }
         soft_criteria:
           type: object
-          additionalProperties: true
+          additionalProperties: false
         weights:
           type: object
           additionalProperties:
@@ -1611,6 +1634,9 @@ components:
             version: { type: integer, minimum: 1 }
             active_from: { type: string, format: date-time }
             archived_at: { type: [string, "null"], format: date-time }
+            legacy_role_upgraded:
+              type: boolean
+              description: Ответ построен из legacy role; сохранение создаст новую нормализованную immutable-версию.
 
     AssistantStatus:
       type: object

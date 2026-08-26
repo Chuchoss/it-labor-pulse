@@ -1,7 +1,50 @@
-import { Alert, Button, Card, CardContent, Chip, Divider, Stack, Switch, TextField, Typography } from '@mui/material'
-import { useEffect, useState } from 'react'
+import { Alert, Autocomplete, Button, Card, CardContent, Chip, Divider, Stack, Switch, TextField, Typography } from '@mui/material'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, api } from '../api/client'
+
+const approvedRoleOptions = [
+  { id: '96', label: 'Разработчик', group: 'Разработка' },
+  { id: '104', label: 'Руководитель группы разработки', group: 'Разработка' },
+  { id: '148', label: 'Системный аналитик', group: 'Аналитика' },
+  { id: '150', label: 'Бизнес-аналитик', group: 'Аналитика' },
+  { id: '156', label: 'BI-аналитик / аналитик данных', group: 'Аналитика' },
+  { id: '164', label: 'Продуктовый аналитик', group: 'Аналитика' },
+  { id: '124', label: 'Тестировщик', group: 'Контроль качества' },
+] as const
+
+const legacyRoleAliases: Record<string, string[]> = {
+  backend: ['96'], 'backend developer': ['96'], frontend: ['96'], 'frontend developer': ['96'],
+  fullstack: ['96'], 'full stack': ['96'], 'fullstack developer': ['96'], developer: ['96'],
+  programmer: ['96'], 'software developer': ['96'], 'team lead': ['104'], teamlead: ['104'],
+  'lead developer': ['104'], qa: ['124'], 'qa engineer': ['124'], tester: ['124'],
+  'quality assurance': ['124'], 'system analyst': ['148'], 'systems analyst': ['148'],
+  'business analyst': ['150'], 'bi analyst': ['156'], 'data analyst': ['156'], 'product analyst': ['164'],
+}
+
+function normalizeLegacyAlias(value: string) {
+  const key = value.trim().toLowerCase().replaceAll('_', ' ').replaceAll('-', ' ').replace(/\s+/g, ' ')
+  return legacyRoleAliases[key]
+}
+
+function criteriaWithoutRoles(value: Record<string, unknown>) {
+  const result = { ...value }
+  delete result.role
+  delete result.approved_roles
+  return result
+}
+
+function loadedRoleState(hard: Record<string, unknown>, upgraded = false) {
+  const approved = Array.isArray(hard.approved_roles)
+    ? hard.approved_roles.filter((value): value is string => typeof value === 'string')
+    : []
+  const legacy = typeof hard.role === 'string' ? normalizeLegacyAlias(hard.role) : undefined
+  const knownIDs = new Set<string>(approvedRoleOptions.map((role) => role.id))
+  return {
+    ids: [...new Set([...approved, ...(legacy ?? [])])].filter((id) => knownIDs.has(id)),
+    legacy: hard.role !== undefined ? (legacy ? 'mapped' : 'unknown') : (upgraded ? 'mapped' : null),
+  } as const
+}
 
 export function AssistantPage() {
   const client = useQueryClient()
@@ -13,29 +56,34 @@ export function AssistantPage() {
   const automation = useQuery({ queryKey: ['assistant-automation'], queryFn: api.assistantAutomation })
   const [note, setNote] = useState<string>()
   const [hardCriteriaText, setHardCriteriaText] = useState<string>()
+  const [approvedRoleIDs, setApprovedRoleIDs] = useState<string[]>()
+  const [legacyRoleResolved, setLegacyRoleResolved] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'archive' | 'run' | 'ai' | 'telegram' | 'test' | null>(null)
   const noteValue = note ?? preferences.data?.note ?? ''
   const hardCriteriaValue = preferences.data?.hard_criteria ?? {}
   const softCriteriaValue = preferences.data?.soft_criteria ?? {}
   const weightsValue = preferences.data?.weights ?? {}
-  useEffect(() => {
-    if (preferences.data && hardCriteriaText === undefined) {
-      setHardCriteriaText(JSON.stringify(preferences.data.hard_criteria ?? {}, null, 2))
-    }
-  }, [preferences.data, hardCriteriaText])
+  const loadedRoles = loadedRoleState(hardCriteriaValue, preferences.data?.legacy_role_upgraded)
+  const approvedRoleIDsValue = approvedRoleIDs ?? loadedRoles.ids
+  const legacyRoleState = legacyRoleResolved ? 'mapped' : loadedRoles.legacy
   const save = useMutation({
-    mutationFn: () => api.saveAssistantPreferences({
-      note: noteValue,
-      hard_criteria: JSON.parse(hardCriteriaText || '{}') as Record<string, unknown>,
-      soft_criteria: softCriteriaValue,
-      weights: weightsValue,
-    }),
-    onSuccess: async (saved) => {
+    mutationFn: () => {
+      if (legacyRoleState === 'unknown') throw new Error('Неизвестная устаревшая роль: выберите утверждённую роль')
+      const hard = criteriaWithoutRoles(JSON.parse(hardCriteriaText || '{}') as Record<string, unknown>)
+      return api.saveAssistantPreferences({
+        note: noteValue,
+        hard_criteria: { ...hard, approved_roles: approvedRoleIDsValue },
+        soft_criteria: softCriteriaValue,
+        weights: weightsValue,
+      })
+    },
+    onSuccess: async () => {
       setConfirmed(true)
-      setHardCriteriaText(JSON.stringify(saved.hard_criteria ?? {}, null, 2))
+      setLegacyRoleResolved(false)
       await client.refetchQueries({ queryKey: ['assistant-preferences'] })
-      await client.invalidateQueries({ queryKey: ['assistant-preference-list'] })
+      await client.refetchQueries({ queryKey: ['assistant-preference-list'] })
+      await client.invalidateQueries({ queryKey: ['assistant-status'] })
       await client.invalidateQueries({ queryKey: ['assistant-matches'] })
     },
     onMutate: () => setConfirmed(false),
@@ -119,15 +167,30 @@ export function AssistantPage() {
           <TextField multiline minRows={3} value={noteValue} onChange={(event) => setNote(event.target.value)}
             placeholder="Например: Go backend, удалённо, от 180 000 ₽"
             slotProps={{ htmlInput: { maxLength: 2000 } }} />
+          <Typography variant="subtitle2">Утверждённые роли</Typography>
+          <Autocomplete multiple options={approvedRoleOptions} groupBy={(option) => option.group}
+            getOptionLabel={(option) => option.label}
+            value={approvedRoleOptions.filter((option) => approvedRoleIDsValue.includes(option.id))}
+            onChange={(_, values) => {
+              setApprovedRoleIDs(values.map((value) => value.id))
+              if (legacyRoleState === 'unknown' && values.length > 0) setLegacyRoleResolved(true)
+            }}
+            renderInput={(params) => <TextField {...params} label="Роли для matcher" placeholder="Выберите одну или несколько" />} />
+          {legacyRoleState === 'mapped' && <Alert severity="info">
+            Устаревший критерий роли сопоставлен с утверждённой ролью. При сохранении будет создана новая нормализованная версия.
+          </Alert>}
+          {legacyRoleState === 'unknown' && <Alert severity="warning">
+            Устаревшее значение роли неизвестно. Выберите утверждённую роль; неизвестные aliases автоматически не расширяются.
+          </Alert>}
           <Typography variant="subtitle2">Жёсткие критерии</Typography>
-          <TextField multiline minRows={3} value={hardCriteriaText ?? JSON.stringify(hardCriteriaValue, null, 2)}
+          <TextField multiline minRows={3} value={hardCriteriaText ?? JSON.stringify(criteriaWithoutRoles(hardCriteriaValue), null, 2)}
             onChange={(event) => setHardCriteriaText(event.target.value)}
-            helperText="JSON: approved_roles, regions, required_skills, excluded_skills, remote_only, min_salary_rub. Поле role не поддерживается." />
+            helperText="JSON только для regions, required_skills, excluded_skills, remote_only, min_salary_rub. Роли задаются селектором выше." />
           <Typography variant="body2">{Object.entries(hardCriteriaValue).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(' · ') || 'Не заданы'}</Typography>
           <Typography variant="subtitle2">Мягкие критерии и веса</Typography>
           <Typography variant="body2">{Object.entries(softCriteriaValue).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(' · ') || 'Не заданы'} · {Object.entries(weightsValue).map(([key, value]) => `${key}: ${value}`).join(' · ') || 'Веса не заданы'}</Typography>
           <Typography variant="body2" color="text.secondary">Детерминированный matcher использует только структурированные hard-критерии. Свободный текст сам по себе не участвует в matcher, пока AI-парсинг не включён и не подтверждён. Сохранение создаёт новую версию; старые версии остаются в истории.</Typography>
-          <Button variant="contained" disabled={!noteValue.trim() || save.isPending} onClick={() => void save.mutate()}>
+          <Button variant="contained" disabled={!noteValue.trim() || save.isPending || legacyRoleState === 'unknown'} onClick={() => void save.mutate()}>
             Сохранить критерии
           </Button>
           {save.isError && <Alert severity="error">Не удалось сохранить критерии: {saveError}</Alert>}

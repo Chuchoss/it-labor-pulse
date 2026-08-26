@@ -188,6 +188,12 @@ Nav: пункт «Тенденции» не добавлять в MVP shell до
 - `request_id` из error body — в UI error state.
 - OpenAPI → опциональная генерация типов (`openapi-typescript`) в Phase 1.
 - Auth MVP отсутствует; admin token только если появится admin UI.
+- Экран `/assistant` (Phase 4) задаёт роли явным multi-select по утверждённым
+  HH professional role IDs. Свободная заметка остаётся отдельной: слово
+  «backend» в ней не меняет deterministic matcher. При загрузке legacy
+  `hard_criteria.role` UI показывает сопоставленное значение и спокойное
+  уведомление; запрос сохранения содержит только `approved_roles`, после чего
+  refetch-ится новая immutable-версия.
 
 ### Валюта и ссылки источника
 

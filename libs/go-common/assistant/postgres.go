@@ -22,14 +22,15 @@ type DBTX interface {
 }
 
 type PreferenceRecord struct {
-	ID           string
-	Version      int
-	Note         string
-	HardCriteria map[string]any
-	SoftCriteria map[string]any
-	Weights      map[string]float64
-	ActiveFrom   time.Time
-	ArchivedAt   *time.Time
+	ID                 string
+	Version            int
+	Note               string
+	HardCriteria       map[string]any
+	SoftCriteria       map[string]any
+	Weights            map[string]float64
+	ActiveFrom         time.Time
+	ArchivedAt         *time.Time
+	LegacyRoleUpgraded bool
 }
 
 type AnalysisStatus struct {
@@ -153,7 +154,11 @@ func (r *PostgresRepository) CurrentPreferences(ctx context.Context, userID stri
 	if err := json.Unmarshal(weights, &p.Weights); err != nil {
 		return PreferenceRecord{}, fmt.Errorf("decode weights: %w", err)
 	}
-	return p, nil
+	normalized, _, err := NormalizePreferenceRoles(p)
+	if err != nil {
+		return PreferenceRecord{}, err
+	}
+	return normalized, nil
 }
 
 func (r *PostgresRepository) ListPreferences(ctx context.Context, userID string) ([]PreferenceRecord, error) {
@@ -295,6 +300,9 @@ func validatePreferences(p PreferenceRecord) ([]byte, []byte, []byte, error) {
 			return nil, nil, nil, fmt.Errorf("%w: hard_criteria.%s is unsupported; use approved_roles", ErrInvalidPreferences, key)
 		}
 	}
+	if err := validateApprovedRoles(p.HardCriteria["approved_roles"]); err != nil {
+		return nil, nil, nil, err
+	}
 	for key := range p.Weights {
 		switch key {
 		case "role", "salary", "region", "skills":
@@ -324,6 +332,10 @@ func validatePreferences(p PreferenceRecord) ([]byte, []byte, []byte, error) {
 // caller may retry safely using requestID; an empty requestID means no replay
 // key was supplied.
 func (r *PostgresRepository) SavePreferences(ctx context.Context, userID, requestID string, p PreferenceRecord) (PreferenceRecord, error) {
+	p, _, err := NormalizePreferenceRoles(p)
+	if err != nil {
+		return PreferenceRecord{}, err
+	}
 	hard, soft, weights, err := validatePreferences(p)
 	if err != nil {
 		return PreferenceRecord{}, err
@@ -618,6 +630,11 @@ func (r *PostgresRepository) Users(ctx context.Context) ([]WorkerUser, error) {
 		if err := json.Unmarshal(weights, &user.Preference.Weights); err != nil {
 			return nil, err
 		}
+		normalized, _, err := NormalizePreferenceRoles(user.Preference)
+		if err != nil {
+			return nil, err
+		}
+		user.Preference = normalized
 		users = append(users, user)
 	}
 	return users, rows.Err()
@@ -662,15 +679,16 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, cuto
 			RETURNING source, external_id
 		)
 		SELECT v.id::text, v.source, v.external_id, v.title, v.source_url,
-			v.salary_mid, v.role_id::text, v.region_id::text, v.published_at,
+			v.salary_mid, COALESCE(ra.pattern, v.role_id::text), v.region_id::text, v.published_at,
 			v.collected_at, COALESCE(array_agg(s.slug) FILTER (WHERE s.slug IS NOT NULL), '{}')
 		FROM vacancies v
 		JOIN claimed w ON w.source = v.source AND w.external_id = v.external_id
+		LEFT JOIN role_aliases ra ON ra.role_id = v.role_id AND ra.source = 'hh'
 		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
 		LEFT JOIN skills s ON s.id = vs.skill_id
 		WHERE v.source = $1 AND v.is_active AND v.deleted_at IS NULL
 			AND COALESCE(v.published_at, v.collected_at) >= $2
-		GROUP BY v.id
+		GROUP BY v.id, ra.pattern
 		ORDER BY v.collected_at, v.external_id
 		LIMIT $3
 	`, source, cutoff, limit)
