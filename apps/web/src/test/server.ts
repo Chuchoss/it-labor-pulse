@@ -73,6 +73,50 @@ export const handlers = [
       total: 1,
     }),
   ),
+  http.get('*/api/v1/rankings/programming-languages', ({ request }) => {
+    const metric = new URL(request.url).searchParams.get('metric') || 'count'
+    return HttpResponse.json({
+      data: [
+        {
+          id: 'language-go',
+          name: 'Go',
+          rank: 1,
+          vacancy_count: 10,
+          share: 0.45,
+          median_salary_rub: metric === 'salary' ? 250000 : null,
+          salary_sample_size: 6,
+        },
+      ],
+      metric,
+      denominator: 22,
+      min_salary_sample_size: 5,
+      page: 1,
+      page_size: 10,
+      total: 1,
+    })
+  }),
+  http.get('*/api/v1/rankings/managerial-roles', ({ request }) => {
+    const metric = new URL(request.url).searchParams.get('metric') || 'count'
+    return HttpResponse.json({
+      data: [
+        {
+          id: 'role-project-manager',
+          name: 'Руководитель проектов',
+          rank: 1,
+          vacancy_count: 8,
+          share: 0.4,
+          median_salary_rub: metric === 'salary' ? 220000 : null,
+          salary_sample_size: 5,
+        },
+      ],
+      metric,
+      denominator: 20,
+      min_salary_sample_size: 5,
+      page: 1,
+      page_size: 10,
+      total: 1,
+    })
+  }),
   http.get('*/api/v1/regions', () =>
     HttpResponse.json({
       data: [],

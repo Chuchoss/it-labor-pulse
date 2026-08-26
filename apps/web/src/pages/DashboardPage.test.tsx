@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { delay, http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { renderPage } from '../test/render'
@@ -190,5 +190,24 @@ describe('DashboardPage', () => {
 
     expect(await screen.findByText('Навык 12')).toBeInTheDocument()
     expect(screen.getByText('Показано 12 из 12')).toBeInTheDocument()
+  })
+
+  it('switches each new ranking independently between count and salary', async () => {
+    renderPage(<DashboardPage />)
+
+    const languageCard = (await screen.findByText('Языки программирования')).closest(
+      '.MuiCard-root',
+    ) as HTMLElement
+    expect(await within(languageCard).findByText('10 · 45%')).toBeInTheDocument()
+    expect(screen.getByText('8 · 40%')).toBeInTheDocument()
+
+    const languageGroup = within(languageCard).getByRole('group', {
+      name: 'Метрика рейтинга: Языки программирования',
+    })
+    fireEvent.click(languageGroup.querySelector('[value="salary"]') as HTMLElement)
+
+    expect(await within(languageCard).findByText('250 000 ₽ · n=6')).toBeInTheDocument()
+    expect(screen.getByText('8 · 40%')).toBeInTheDocument()
+    expect(within(languageCard).queryByText('10 · 45%')).not.toBeInTheDocument()
   })
 })

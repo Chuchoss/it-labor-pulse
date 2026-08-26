@@ -35,6 +35,8 @@ tags:
     description: Временные ряды (salary/demand MVP; perspectives Target)
   - name: skills
     description: Востребованные навыки
+  - name: rankings
+    description: Текущие рейтинги рынка по количеству и зарплате
   - name: vacancies
     description: OLTP drill-down вакансий
   - name: admin
@@ -335,6 +337,55 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
+  /api/v1/rankings/programming-languages:
+    get:
+      tags: [rankings]
+      operationId: getProgrammingLanguageRanking
+      summary: Рейтинг языков программирования
+      description: Текущий срез активных вакансий listing scope; SQL, HTML/CSS, Bash и 1C исключены политикой taxonomy.
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/RoleIdOptional"
+        - $ref: "#/components/parameters/RegionIdOptional"
+        - $ref: "#/components/parameters/SourceOptional"
+        - $ref: "#/components/parameters/RankingMetric"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Страница рейтинга языков
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RankingPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/rankings/managerial-roles:
+    get:
+      tags: [rankings]
+      operationId: getManagerialRoleRanking
+      summary: Рейтинг управленческих и аналитических IT-ролей
+      description: Отдельный management analytics scope по официальным professional_role ID HH; не расширяет `/vacancies`.
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/RegionIdOptional"
+        - $ref: "#/components/parameters/SourceOptional"
+        - $ref: "#/components/parameters/RankingMetric"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Страница рейтинга ролей
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RankingPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
   /api/v1/vacancies:
     get:
       tags: [vacancies]
@@ -587,6 +638,14 @@ components:
         default: 20
         minimum: 1
         maximum: 100
+    RankingMetric:
+      name: metric
+      in: query
+      description: Count ранжирует по числу вакансий; salary — по медиане RUB/net только при выборке не менее 5.
+      schema:
+        type: string
+        enum: [count, salary]
+        default: count
     Grain:
       name: grain
       in: query
@@ -940,6 +999,50 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SkillStat"
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
+
+    RankingItem:
+      type: object
+      required:
+        - id
+        - name
+        - rank
+        - vacancy_count
+        - share
+        - median_salary_rub
+        - salary_sample_size
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        rank: { type: integer, minimum: 1 }
+        vacancy_count: { type: integer, minimum: 0 }
+        share:
+          type: number
+          minimum: 0
+          maximum: 1
+        median_salary_rub: { type: [number, "null"] }
+        salary_sample_size: { type: integer, minimum: 0 }
+
+    RankingPage:
+      type: object
+      required:
+        - data
+        - metric
+        - denominator
+        - min_salary_sample_size
+        - page
+        - page_size
+        - total
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RankingItem"
+        metric: { type: string, enum: [count, salary] }
+        denominator: { type: integer, minimum: 0 }
+        min_salary_sample_size: { type: integer, minimum: 1 }
         page: { type: integer, minimum: 1 }
         page_size: { type: integer, minimum: 1, maximum: 100 }
         total: { type: integer, minimum: 0 }

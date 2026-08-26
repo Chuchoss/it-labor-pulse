@@ -155,6 +155,33 @@ type TopSkills struct {
 	Total    int64       `json:"total"`
 }
 
+type RankingMetric string
+
+const (
+	RankingByCount  RankingMetric = "count"
+	RankingBySalary RankingMetric = "salary"
+)
+
+type RankingItem struct {
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Rank             int64    `json:"rank"`
+	VacancyCount     int64    `json:"vacancy_count"`
+	Share            float64  `json:"share"`
+	MedianSalaryRUB  *float64 `json:"median_salary_rub"`
+	SalarySampleSize int64    `json:"salary_sample_size"`
+}
+
+type RankingPage struct {
+	Data                []RankingItem `json:"data"`
+	Metric              RankingMetric `json:"metric"`
+	Denominator         int64         `json:"denominator"`
+	MinSalarySampleSize int           `json:"min_salary_sample_size"`
+	Page                int           `json:"page"`
+	PageSize            int           `json:"page_size"`
+	Total               int64         `json:"total"`
+}
+
 type VacancyFilter struct {
 	Query      string
 	RoleIDs    []string
@@ -200,5 +227,7 @@ type Repository interface {
 	DemandTrends(context.Context, AnalyticsFilter, string) (DemandTrends, error)
 	TrendsCoverage(context.Context) (TrendsCoverage, error)
 	TopSkills(context.Context, AnalyticsFilter, Page) (TopSkills, error)
+	ProgrammingLanguages(context.Context, AnalyticsFilter, Page, RankingMetric) (RankingPage, error)
+	ManagementRoles(context.Context, AnalyticsFilter, Page, RankingMetric) (RankingPage, error)
 	ListVacancies(context.Context, VacancyFilter) (VacancyPage, error)
 }

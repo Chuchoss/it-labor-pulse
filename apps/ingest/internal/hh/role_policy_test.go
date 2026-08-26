@@ -19,6 +19,13 @@ func TestAllowedRolePolicyMatchesOfficialCatalogFixture(t *testing.T) {
 	roles, err := FilterAllowedRoles(catalog.Categories[0].Roles)
 	require.NoError(t, err)
 	require.Equal(t, []string{"96", "104", "148", "150", "156", "164", "124"}, roleIDs(roles))
+	collected, err := FilterCollectedRoles(catalog.Categories[0].Roles)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		[]string{"96", "104", "148", "150", "156", "164", "124", "10", "36", "73", "107", "125", "157"},
+		roleIDs(collected),
+	)
 
 	groups := map[string]string{}
 	for _, role := range AllowedRoles() {
@@ -56,7 +63,27 @@ func TestAllowedProfessionalRoleIsConservativeAndDeterministic(t *testing.T) {
 	}
 }
 
+func TestManagementScopeUsesOnlyApprovedOfficialRoles(t *testing.T) {
+	roles := CollectedProfessionalRoles([]string{"70", "3", "107", "73", "157", "107"})
+	require.Equal(t, []string{"73", "107", "157"}, allowedRoleIDs(roles))
+
+	listing, ok := AllowedProfessionalRole([]string{"73", "107"})
+	require.False(t, ok)
+	require.Empty(t, listing.ID)
+
+	overlap := CollectedProfessionalRoles([]string{"104", "148"})
+	require.Equal(t, []string{"104", "148"}, allowedRoleIDs(overlap))
+}
+
 func roleIDs(roles []ProfessionalRole) []string {
+	result := make([]string, 0, len(roles))
+	for _, role := range roles {
+		result = append(result, role.ID)
+	}
+	return result
+}
+
+func allowedRoleIDs(roles []AllowedRole) []string {
 	result := make([]string, 0, len(roles))
 	for _, role := range roles {
 		result = append(result, role.ID)

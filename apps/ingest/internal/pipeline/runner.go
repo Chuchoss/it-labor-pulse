@@ -200,14 +200,18 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 				_ = r.Store.RecordError(ctx, runID, item.ID, "adapt", err.Error())
 				continue
 			}
-			allowedRole, inScope := hh.AllowedProfessionalRole(draft.ProfessionalRoleIDs)
-			if !inScope {
+			scopeRoles := hh.CollectedProfessionalRoles(draft.ProfessionalRoleIDs)
+			if len(scopeRoles) == 0 {
 				stats.Excluded++
 				continue
 			}
 			// Keep normalization deterministic for multi-role vacancies and do
 			// not allow a secondary out-of-scope alias to become canonical.
-			draft.ProfessionalRoleIDs = []string{allowedRole.ID}
+			primaryRole, listingScope := hh.AllowedProfessionalRole(draft.ProfessionalRoleIDs)
+			if !listingScope {
+				primaryRole = scopeRoles[0]
+			}
+			draft.ProfessionalRoleIDs = []string{primaryRole.ID}
 			res, err := normalize.Normalize(draft, opts)
 			if err != nil {
 				stats.Errors++
@@ -216,9 +220,10 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 				continue
 			}
 			writes = append(writes, store.VacancyWrite{
-				Vacancy:    res.Vacancy,
-				RegionName: draft.RegionName,
-				RawPayload: draft.RawPayload,
+				Vacancy:      res.Vacancy,
+				RegionName:   draft.RegionName,
+				RawPayload:   draft.RawPayload,
+				ScopeRoleIDs: roleExternalIDs(scopeRoles),
 			})
 		}
 
@@ -302,6 +307,14 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 		return out, fatal
 	}
 	return out, nil
+}
+
+func roleExternalIDs(roles []hh.AllowedRole) []string {
+	result := make([]string, 0, len(roles))
+	for _, role := range roles {
+		result = append(result, role.ID)
+	}
+	return result
 }
 
 func formatScopeTime(value time.Time) string {

@@ -3,6 +3,8 @@ import type {
   DashboardSummary,
   DemandTrends,
   RegionPage,
+  RankingMetric,
+  RankingPage,
   RegionStat,
   RolePage,
   RoleStat,
@@ -167,6 +169,30 @@ export const api = {
     pageSize: number,
     signal?: AbortSignal,
   ) => get<TopSkills>('/skills/top', { ...params, page, page_size: pageSize }, signal),
+  programmingLanguages: (
+    params: AnalyticsParams,
+    metric: RankingMetric,
+    page: number,
+    pageSize: number,
+    signal?: AbortSignal,
+  ) =>
+    get<RankingPage>(
+      '/rankings/programming-languages',
+      { ...params, metric, page, page_size: pageSize },
+      signal,
+    ),
+  managerialRoles: (
+    params: AnalyticsParams,
+    metric: RankingMetric,
+    page: number,
+    pageSize: number,
+    signal?: AbortSignal,
+  ) =>
+    get<RankingPage>(
+      '/rankings/managerial-roles',
+      { ...params, metric, page, page_size: pageSize },
+      signal,
+    ),
   regions: getAllRegions,
   roles: getAllRoles,
   vacancySkills: getAllSkills,

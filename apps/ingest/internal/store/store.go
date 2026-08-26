@@ -33,9 +33,10 @@ type Run struct {
 
 // VacancyWrite is a normalized vacancy ready for UPSERT.
 type VacancyWrite struct {
-	Vacancy    normalize.CanonicalVacancy
-	RegionName string
-	RawPayload json.RawMessage
+	Vacancy      normalize.CanonicalVacancy
+	RegionName   string
+	RawPayload   json.RawMessage
+	ScopeRoleIDs []string
 }
 
 // SourceRole is one canonical role derived from an official source taxonomy.
@@ -43,6 +44,7 @@ type SourceRole struct {
 	ExternalID string
 	Title      string
 	Family     string
+	Scopes     []string
 }
 
 // Stats accumulates run counters.

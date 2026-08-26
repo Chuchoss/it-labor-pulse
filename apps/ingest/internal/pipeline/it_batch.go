@@ -151,11 +151,11 @@ func RunITBatch(
 		}
 	}
 
-	allowedRoles := hh.AllowedRoles()
+	allowedRoles := hh.CollectedRoles()
 	sourceRoles := make([]store.SourceRole, 0, len(allowedRoles))
 	for _, role := range allowedRoles {
 		sourceRoles = append(sourceRoles, store.SourceRole{
-			ExternalID: role.ID, Title: role.ExpectedName, Family: role.Group,
+			ExternalID: role.ID, Title: role.ExpectedName, Family: role.Group, Scopes: role.Scopes,
 		})
 	}
 	roleIDs, err := st.SyncRoles(ctx, hh.SourceCode, sourceRoles)

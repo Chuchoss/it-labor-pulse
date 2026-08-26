@@ -36,6 +36,12 @@ func main() {
 	maxPages := flag.Int("max-pages", -1, "max pages; 0 means all available (default INGEST_MAX_PAGES)")
 	perPage := flag.Int("per-page", 0, "HH page size, 1..100 (default INGEST_PER_PAGE)")
 	flag.Parse()
+	textProvided := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "text" {
+			textProvided = true
+		}
+	})
 
 	cfg := config.Load()
 	if *scope != "" {
@@ -114,13 +120,13 @@ func main() {
 	if *area != "" {
 		p.Area = *area
 	}
-	if *text != "" {
+	if textProvided {
 		p.Text = *text
 	}
 	if *professionalRole != "" {
-		policyRole, ok := hh.AllowedProfessionalRole([]string{*professionalRole})
+		policyRole, ok := hh.CollectedRole(*professionalRole)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "config: professional-role is outside the Phase 1 allowlist")
+			fmt.Fprintln(os.Stderr, "config: professional-role is outside the approved collection scopes")
 			os.Exit(1)
 		}
 		p.ProfessionalRole = policyRole.ID
@@ -134,10 +140,13 @@ func main() {
 
 	runnerOpts := normalize.DefaultOptions()
 	if p.ProfessionalRole != "" {
-		policyRole, _ := hh.AllowedProfessionalRole([]string{p.ProfessionalRole})
-		roleIDs, syncErr := st.SyncRoles(ctx, hh.SourceCode, []store.SourceRole{{
-			ExternalID: policyRole.ID, Title: policyRole.ExpectedName, Family: policyRole.Group,
-		}})
+		sourceRoles := make([]store.SourceRole, 0, len(hh.CollectedRoles()))
+		for _, role := range hh.CollectedRoles() {
+			sourceRoles = append(sourceRoles, store.SourceRole{
+				ExternalID: role.ID, Title: role.ExpectedName, Family: role.Group, Scopes: role.Scopes,
+			})
+		}
+		roleIDs, syncErr := st.SyncRoles(ctx, hh.SourceCode, sourceRoles)
 		if syncErr != nil {
 			log.Error("role_sync_failed", "err", syncErr.Error())
 			os.Exit(1)
@@ -202,12 +211,12 @@ func runIT(
 
 	sourceRoles := make([]store.SourceRole, 0, len(plan.Roles))
 	for _, role := range plan.Roles {
-		policyRole, ok := hh.AllowedProfessionalRole([]string{role.ID})
+		policyRole, ok := hh.CollectedRole(role.ID)
 		if !ok {
 			return fmt.Errorf("it role %s missing from validated policy", role.ID)
 		}
 		sourceRoles = append(sourceRoles, store.SourceRole{
-			ExternalID: role.ID, Title: role.Name, Family: policyRole.Group,
+			ExternalID: role.ID, Title: role.Name, Family: policyRole.Group, Scopes: policyRole.Scopes,
 		})
 	}
 	roleIDs, err := st.SyncRoles(ctx, hh.SourceCode, sourceRoles)

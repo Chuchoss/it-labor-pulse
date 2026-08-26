@@ -248,6 +248,30 @@ OpenAPI: `x-lifecycle: target`.
 }
 ```
 
+#### `GET /api/v1/rankings/programming-languages`
+
+Строгий рейтинг канонических языков из active `vacancy_listing` rows.
+**Query:** `from`, `to`, `role_id?`, `region_id?`, `source?`,
+`metric=count|salary`, `page`, `page_size`.
+
+#### `GET /api/v1/rankings/managerial-roles`
+
+Отдельный текущий срез `management_analytics`; он не меняет `/vacancies`.
+**Query:** `from`, `to`, `region_id?`, `source?`, `metric=count|salary`,
+`page`, `page_size`.
+
+Общая семантика:
+
+- `count`: distinct active vacancies; `share = vacancy_count / denominator`;
+  denominator языков — вакансии listing scope хотя бы с одним каноническим
+  языком, denominator ролей — вакансии management scope;
+- `salary`: медиана offered `salary_mid` в RUB/net после outlier rules;
+  строки с `salary_sample_size < 5` не ранжируются;
+- ties: metric DESC, затем sample/count DESC где применимо, `name`, `id`;
+- `rank` глобален для всей выдачи, `total` — число ранжируемых элементов;
+- это запрос текущего OLTP-состояния, не historical snapshot и не Phase 5
+  Perspectives score.
+
 #### `GET /api/v1/vacancies`
 
 Поиск/список (OLTP). Для UI drill-down, не для тяжёлой аналитики.

@@ -70,6 +70,28 @@ func (s *Service) TopSkills(ctx context.Context, filter AnalyticsFilter, page Pa
 	})
 }
 
+func (s *Service) ProgrammingLanguages(
+	ctx context.Context,
+	filter AnalyticsFilter,
+	page Page,
+	metric RankingMetric,
+) (RankingPage, error) {
+	return withTimeout(ctx, s.timeout, func(ctx context.Context) (RankingPage, error) {
+		return s.repository.ProgrammingLanguages(ctx, filter, page, metric)
+	})
+}
+
+func (s *Service) ManagementRoles(
+	ctx context.Context,
+	filter AnalyticsFilter,
+	page Page,
+	metric RankingMetric,
+) (RankingPage, error) {
+	return withTimeout(ctx, s.timeout, func(ctx context.Context) (RankingPage, error) {
+		return s.repository.ManagementRoles(ctx, filter, page, metric)
+	})
+}
+
 func (s *Service) ListVacancies(ctx context.Context, filter VacancyFilter) (VacancyPage, error) {
 	return withTimeout(ctx, s.timeout, func(ctx context.Context) (VacancyPage, error) {
 		return s.repository.ListVacancies(ctx, filter)

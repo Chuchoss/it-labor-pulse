@@ -95,6 +95,24 @@ func (s stubReadService) TopSkills(
 	return readapi.TopSkills{Data: []readapi.SkillStat{}, Page: page.Number, PageSize: page.Size}, nil
 }
 
+func (s stubReadService) ProgrammingLanguages(
+	context.Context,
+	readapi.AnalyticsFilter,
+	readapi.Page,
+	readapi.RankingMetric,
+) (readapi.RankingPage, error) {
+	return readapi.RankingPage{Data: []readapi.RankingItem{}}, nil
+}
+
+func (s stubReadService) ManagementRoles(
+	context.Context,
+	readapi.AnalyticsFilter,
+	readapi.Page,
+	readapi.RankingMetric,
+) (readapi.RankingPage, error) {
+	return readapi.RankingPage{Data: []readapi.RankingItem{}}, nil
+}
+
 func (s stubReadService) ListVacancies(
 	ctx context.Context,
 	filter readapi.VacancyFilter,
@@ -166,6 +184,7 @@ func TestReadHandlerValidation(t *testing.T) {
 		{name: "invalid_role_group", path: "/api/v1/trends/demand?from=2026-08-01&to=2026-08-26&role_group=ai"},
 		{name: "invalid_limit", path: "/api/v1/skills/top?from=2026-08-01&to=2026-08-26&limit=0"},
 		{name: "invalid_skills_page_size", path: "/api/v1/skills/top?from=2026-08-01&to=2026-08-26&page_size=101"},
+		{name: "invalid_ranking_metric", path: "/api/v1/rankings/programming-languages?from=2026-08-01&to=2026-08-26&metric=average"},
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -325,6 +344,8 @@ func TestReadRoutesMatchOpenAPIPhaseOneSurface(t *testing.T) {
 		"/api/v1/trends/demand" + period,
 		"/api/v1/trends/coverage",
 		"/api/v1/skills/top" + period,
+		"/api/v1/rankings/programming-languages" + period,
+		"/api/v1/rankings/managerial-roles" + period,
 		"/api/v1/vacancies",
 	}
 	server := New(Options{Addr: ":0", ReadService: stubReadService{}})
@@ -349,6 +370,8 @@ func expectedField(path string) string {
 		return "only_active"
 	case stringsContains(path, "source"):
 		return "source"
+	case stringsContains(path, "metric="):
+		return "metric"
 	case stringsContains(path, "role_id"):
 		return "role_id"
 	case stringsContains(path, "skill_id"):
@@ -380,6 +403,8 @@ func expectedReason(path string) string {
 		return "must be true or false"
 	case stringsContains(path, "source"):
 		return "is not supported"
+	case stringsContains(path, "metric="):
+		return "must be count or salary"
 	case stringsContains(path, "role_id"):
 		return "must be a UUID"
 	case stringsContains(path, "skill_id"):

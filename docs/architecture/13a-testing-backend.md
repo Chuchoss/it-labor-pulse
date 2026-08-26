@@ -15,6 +15,17 @@
 - Performance: `EXPLAIN (ANALYZE, BUFFERS)` representative snapshot, coverage и
   series queries; индекс добавлять только по наблюдаемому plan.
 
+## Dashboard rankings Phase 1
+
+- Migration: v6 → v7 и `down 1`/`up 1`; повтор не создаёт duplicate aliases.
+- Unit: language aliases/casing дедуплицируются; SQL/HTML/CSS/Bash/1C не входят
+  в strict language ranking; management policy имеет явные negatives `70`
+  (sales) и `3` (content).
+- Integration: distinct vacancy counts, разные denominators, deterministic
+  pagination/rank, salary median и exclusion при sample `<5`.
+- Handler/OpenAPI: `metric=count|salary`, period, region/source, page bounds и
+  canonical validation errors.
+
 ---
 
 ## Содержание

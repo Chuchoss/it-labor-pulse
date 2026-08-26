@@ -138,6 +138,20 @@ Slug ролей — канон в PG (`go-developer`), в API часто удо�
 2. Неизвестный скилл: создать `skills` + alias **или** (строже) отложить в `unmapped_skills` — **решение MVP:** upsert skill by slug (автосоздание) с `is_active=true`, чтобы top-skills работал.
 3. Дедуп скиллов в одной вакансии по `skill_id`.
 
+### Taxonomy языков (v7)
+
+- canonical aliases: `Go/Golang`, `JS/JavaScript/ECMAScript`,
+  `TS/TypeScript`, `C Sharp/C#/CSharp`, `C++/CPP` и остальные seed aliases
+  из migration v7;
+- ranking «Языки программирования» включает только
+  `skills.skill_kind=programming_language`;
+- SQL/PL-SQL/T-SQL — `query_language`; HTML/CSS — `markup`; Bash/Shell —
+  `shell`; 1C — `platform_language`. Они остаются навыками, но не смешиваются
+  со строгим рейтингом языков;
+- framework/database/tool не становятся языком по совпадению строки;
+- alias lookup выполняется до upsert, поэтому одна vacancy × canonical
+  language даёт одну строку `vacancy_skills`.
+
 ---
 
 ## Region
@@ -175,7 +189,8 @@ Upsert `employers` by `(source, external_id)`; имя — из raw (fake в фи
 | Событие | Поля |
 |---------|------|
 | Вакансия пришла в ingest | `is_active=true`, `deleted_at=null`, обновить `collected_at` |
-| HH-вакансия вне утверждённого role scope | не upsert/reactivate; при reconciliation `is_active=false` |
+| HH-вакансия вне обоих утверждённых scopes | не upsert/reactivate |
+| Management-only role подтверждена bounded ingest | `is_active=true`, только `management_analytics`; не входит в `/vacancies` |
 | Нет в источнике N дней / full sync miss | `is_active=false` |
 | Ops hide | `deleted_at=now()` |
 

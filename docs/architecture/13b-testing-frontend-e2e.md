@@ -66,6 +66,11 @@ cd apps/web && npm test
 | Roles table | pagination envelope render |
 | Vacancy salary disclaimer | текст offered/net (copy) |
 | Vacancy infinite scroll | next-page params, sentinel/fallback, dedup, stop, filter reset, retry |
+| Dashboard rankings | независимые toggles count/salary, формат ₽ и sample, без `%` в salary, show-more/end/retry, reset по period |
+
+Responsive smoke: три ranking cards на desktop и один столбец на narrow viewport;
+controls доступны по role/name, контент не требует hover. Анимация полос не
+обязательна; если добавлена, учитывает `prefers-reduced-motion`.
 
 States из [16](./16-frontend.md): Loading / Empty / Error / Partial — хотя бы по одному тесту на critical screen container.
 

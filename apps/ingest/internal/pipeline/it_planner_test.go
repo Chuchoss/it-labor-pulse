@@ -17,8 +17,8 @@ type planningSource struct {
 }
 
 func allowedCatalog() []hh.ProfessionalRole {
-	result := make([]hh.ProfessionalRole, 0, len(hh.AllowedRoles()))
-	for _, role := range hh.AllowedRoles() {
+	result := make([]hh.ProfessionalRole, 0, len(hh.CollectedRoles()))
+	for _, role := range hh.CollectedRoles() {
 		result = append(result, hh.ProfessionalRole{ID: role.ID, Name: role.ExpectedName})
 	}
 	return result
@@ -46,12 +46,12 @@ func TestPlanITSelectsOfficialRolesAndSplitsWithoutDateGaps(t *testing.T) {
 		},
 	}
 	plan, err := pipeline.PlanIT(context.Background(), src, pipeline.ITPlanOptions{
-		Area: "113", Earliest: from, Now: to, MaxDepth: 4, MaxPartitions: 20, MaxRequests: 30,
+		Area: "113", Earliest: from, Now: to, MaxDepth: 4, MaxPartitions: 30, MaxRequests: 50,
 	})
 	require.NoError(t, err)
-	require.Len(t, plan.Roles, 7)
-	require.Len(t, plan.Partitions, 14)
-	require.Equal(t, "104", plan.Partitions[0].RoleID)
+	require.Len(t, plan.Roles, 13)
+	require.Len(t, plan.Partitions, 26)
+	require.Equal(t, "10", plan.Partitions[0].RoleID)
 	for i := 0; i < len(plan.Partitions); i += 2 {
 		left, right := plan.Partitions[i], plan.Partitions[i+1]
 		require.Equal(t, left.To.Add(time.Second), right.From)
@@ -65,10 +65,10 @@ func TestPlanITKeepsPartitionAtCap(t *testing.T) {
 		roles: allowedCatalog(),
 		found: func(hh.SearchQuery) int { return hh.MaxSearchResults },
 	}
-	plan, err := pipeline.PlanIT(context.Background(), src, pipeline.ITPlanOptions{MaxRequests: 10})
+	plan, err := pipeline.PlanIT(context.Background(), src, pipeline.ITPlanOptions{MaxRequests: 20})
 	require.NoError(t, err)
-	require.Len(t, plan.Partitions, 7)
-	require.Equal(t, 7*hh.MaxSearchResults, plan.EstimatedResults)
+	require.Len(t, plan.Partitions, 13)
+	require.Equal(t, 13*hh.MaxSearchResults, plan.EstimatedResults)
 }
 
 func TestPlanITFailsAtSafetyCeilings(t *testing.T) {

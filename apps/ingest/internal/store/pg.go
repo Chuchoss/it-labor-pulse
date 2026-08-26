@@ -351,6 +351,15 @@ func (s *PG) SyncRoles(ctx context.Context, source string, roles []SourceRole) (
 			`, id, role.ExternalID, source); err != nil {
 				return atDBStage("upsert role alias", err)
 			}
+			for _, scope := range role.Scopes {
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO role_scopes (role_id, scope)
+					VALUES ($1::uuid, $2)
+					ON CONFLICT DO NOTHING
+				`, id, scope); err != nil {
+					return atDBStage("upsert role scope", err)
+				}
+			}
 			result[role.ExternalID] = id
 		}
 		return tx.Commit(ctx)
@@ -516,6 +525,9 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 		if err != nil {
 			return false, atDBStage("touch vacancy", err)
 		}
+		if err := syncVacancyRoleScopes(ctx, tx, vacancyID, v.Source, item.ScopeRoleIDs); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 
@@ -564,6 +576,9 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 	if err != nil {
 		return false, atDBStage("upsert vacancy", err)
 	}
+	if err := syncVacancyRoleScopes(ctx, tx, vacancyID, v.Source, item.ScopeRoleIDs); err != nil {
+		return false, err
+	}
 
 	_, err = tx.Exec(ctx, `DELETE FROM vacancy_skills WHERE vacancy_id = $1::uuid`, vacancyID)
 	if err != nil {
@@ -580,6 +595,30 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 		}
 	}
 	return true, nil
+}
+
+func syncVacancyRoleScopes(
+	ctx context.Context,
+	tx DBTX,
+	vacancyID, source string,
+	externalRoleIDs []string,
+) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM vacancy_role_scopes WHERE vacancy_id = $1::uuid`, vacancyID); err != nil {
+		return atDBStage("clear vacancy role scopes", err)
+	}
+	for _, externalID := range externalRoleIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO vacancy_role_scopes (vacancy_id, role_id, scope)
+			SELECT $1::uuid, ra.role_id, rs.scope
+			FROM role_aliases ra
+			JOIN role_scopes rs ON rs.role_id = ra.role_id
+			WHERE ra.source = $2 AND ra.pattern = $3
+			ON CONFLICT DO NOTHING
+		`, vacancyID, source, externalID); err != nil {
+			return atDBStage("link vacancy role scope", err)
+		}
+	}
+	return nil
 }
 
 func salaryMidForStore(v normalize.CanonicalVacancy) *float64 {
@@ -664,12 +703,25 @@ func upsertSkills(ctx context.Context, tx DBTX, skills []normalize.SkillRef) ([]
 		}
 		var id string
 		err := tx.QueryRow(ctx, `
+			SELECT s.id::text
+			FROM skill_aliases sa
+			JOIN skills s ON s.id = sa.skill_id
+			WHERE sa.pattern = $1 AND sa.source IS NULL AND s.is_active
+			ORDER BY sa.id
+			LIMIT 1
+		`, slug).Scan(&id)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return nil, atDBStage("lookup skill alias", err)
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = tx.QueryRow(ctx, `
 			INSERT INTO skills (slug, name, is_active)
 			VALUES ($1, $2, true)
 			ON CONFLICT (slug) DO UPDATE
 			SET name = COALESCE(NULLIF(skills.name, ''), EXCLUDED.name), is_active = true
 			RETURNING id::text
-		`, slug, truncate(name, 200)).Scan(&id)
+			`, slug, truncate(name, 200)).Scan(&id)
+		}
 		if err != nil {
 			return nil, atDBStage("upsert skill", err)
 		}

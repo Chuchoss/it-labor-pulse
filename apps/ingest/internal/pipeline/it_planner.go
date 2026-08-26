@@ -82,7 +82,7 @@ func PlanIT(ctx context.Context, src RoleCatalogSource, opts ITPlanOptions) (ITP
 	if err != nil {
 		return ITPlan{}, err
 	}
-	roles, err := hh.FilterAllowedRoles(catalogRoles)
+	roles, err := hh.FilterCollectedRoles(catalogRoles)
 	if err != nil {
 		return ITPlan{}, err
 	}

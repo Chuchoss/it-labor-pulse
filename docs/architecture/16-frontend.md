@@ -50,11 +50,21 @@ Perspectives ([ADR 007](./adr/007-multi-source-trend-signals.md)).
 | Top roles (mini) | из `summary.top_roles` или `GET /api/v1/roles?page_size=5` |
 | Top regions (mini) | из `summary.top_regions` |
 | Top skills | `GET /api/v1/skills/top?page_size=10` |
+| Языки программирования | `GET /api/v1/rankings/programming-languages?page_size=10` |
+| Управленческие IT-роли | `GET /api/v1/rankings/managerial-roles?page_size=10` |
 
 Top skills сначала показывает 10 строк и по кнопке «Показать ещё» добавляет
 следующие страницы до `total`. Смена периода/фильтров начинает с первой
 страницы; ошибка следующей страницы не скрывает уже показанные строки.
 Масштаб полос фиксируется по первой (максимальной) строке.
+
+Три ranking cards располагаются в три колонки на широком экране и
+складываются в один столбец на узком. У двух новых карточек независимые
+переключатели «По количеству» / «По зарплате». Count показывает число и долю,
+salary — медиану ₽ net и sample size без процента. Salary ranking исключает
+группы с sample `<5` и объясняет правило в tooltip. Каждая карточка отдельно
+обрабатывает loading/error/empty, retry и «Показать ещё»; смена общего периода
+сбрасывает её на первую страницу.
 
 ### 2. Roles `/roles`
 

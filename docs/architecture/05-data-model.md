@@ -112,6 +112,14 @@ erDiagram
 попадают в публичный vacancy list; официальный внешний ID остаётся в
 `role_aliases`. Это не title-классификация.
 
+С migration v7 scope больше не выводится неявно только из `family`:
+`role_scopes(role_id, scope)` и
+`vacancy_role_scopes(vacancy_id, role_id, scope)` поддерживают
+`vacancy_listing` и `management_analytics`. Одна официальная роль может
+принадлежать обоим scopes. `/vacancies` проверяет только persisted
+`vacancy_listing`; management-only rows остаются доступны аналитике, но не
+listing. Решение: [ADR 012](./adr/012-dashboard-ranking-scopes.md).
+
 ### `role_aliases`
 
 | Column | Type | Notes |
@@ -130,10 +138,15 @@ erDiagram
 | `slug` | `TEXT` NOT NULL UNIQUE | |
 | `name` | `TEXT` NOT NULL | |
 | `is_active` | `BOOLEAN` NOT NULL DEFAULT true | |
+| `skill_kind` | `TEXT` NOT NULL | `programming_language`, `query_language`, `markup`, `shell`, `platform_language`, `framework`, `database`, `tool`, `other` |
 
 ### `skill_aliases`
 
 Аналогично `role_aliases` для нормализации «k8s» → Kubernetes.
+Для языков alias (`Go`/`Golang`, JS/JavaScript, TS/TypeScript, C Sharp/C#)
+указывает на один canonical skill; PK `vacancy_skills` исключает двойной счёт.
+Строгий language ranking берёт только `programming_language`. SQL, HTML/CSS,
+Bash и 1C имеют явные отдельные категории и в него не входят.
 
 ### `employers`
 
@@ -376,9 +389,10 @@ Vacancy demand Phase 1 живёт в `vacancy_demand_daily|weekly` (PG; CH с Ph
 | Справочники `is_active` | Отключение роли/скилла без удаления истории |
 
 Аналитические запросы по «текущему рынку» фильтруют `vacancies.is_active = true AND deleted_at IS NULL`.
-Reconciliation role policy также ставит HH-вакансии вне продуктового scope или
-без разрешённого официального mapping в `is_active=false`, сохраняя историю,
-employer и skills.
+Reconciliation не активирует устаревшие строки автоматически. Новый bounded
+официальный ingest может подтвердить актуальность management-only vacancy и
+оставить её `is_active=true`, при этом отсутствие `vacancy_listing` scope
+гарантирует исключение из публичного списка.
 
 ---
 

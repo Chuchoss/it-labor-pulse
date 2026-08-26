@@ -76,6 +76,28 @@ export interface TopSkills {
   total: number
 }
 
+export type RankingMetric = 'count' | 'salary'
+
+export interface RankingItem {
+  id: string
+  name: string
+  rank: number
+  vacancy_count: number
+  share: number
+  median_salary_rub: number | null
+  salary_sample_size: number
+}
+
+export interface RankingPage {
+  data: RankingItem[]
+  metric: RankingMetric
+  denominator: number
+  min_salary_sample_size: number
+  page: number
+  page_size: number
+  total: number
+}
+
 export interface Vacancy {
   id?: string
   source?: string

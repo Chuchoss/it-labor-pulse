@@ -51,6 +51,37 @@ func TestSkillDedupAndSlug(t *testing.T) {
 	require.True(t, res.Vacancy.Skills[1].IsNew)
 }
 
+func TestProgrammingLanguageAliasesDoNotCollapseAmbiguousCategories(t *testing.T) {
+	t.Parallel()
+	opts := normalize.DefaultOptions()
+	opts.Skills = normalize.SlugSkillMatcher{Aliases: map[string]string{
+		"javascript": "javascript", "js": "javascript",
+		"typescript": "typescript", "ts": "typescript",
+		"c#": "c-sharp", "c-sharp": "c-sharp", "csharp": "c-sharp",
+		"sql": "sql", "html": "html", "css": "css", "bash": "bash", "1c": "1c",
+	}}
+	result, err := normalize.Normalize(normalize.Draft{
+		Source: "hh", ExternalID: "taxonomy", Title: "Synthetic",
+		CollectedAt: time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC),
+		SkillsRaw: []string{
+			"JavaScript", "JS", "TypeScript", "TS", "C#", "C Sharp", "CSharp",
+			"SQL", "HTML", "CSS", "Bash", "1C",
+		},
+	}, opts)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"javascript", "typescript", "c-sharp", "sql", "html", "css", "bash", "1c",
+	}, skillIDs(result.Vacancy.Skills))
+}
+
+func skillIDs(skills []normalize.SkillRef) []string {
+	result := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		result = append(result, skill.SkillID)
+	}
+	return result
+}
+
 func TestNormalize_roleUnmappedMetric(t *testing.T) {
 	t.Parallel()
 	res, err := normalize.Normalize(normalize.Draft{

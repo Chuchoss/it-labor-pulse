@@ -667,6 +667,161 @@ func (p *Postgres) TopSkills(
 	return result, nil
 }
 
+const minimumRankingSalarySample = 5
+
+func (p *Postgres) ProgrammingLanguages(
+	ctx context.Context,
+	filter readapi.AnalyticsFilter,
+	page readapi.Page,
+	metric readapi.RankingMetric,
+) (readapi.RankingPage, error) {
+	dimension := `
+		SELECT DISTINCT v.id AS vacancy_id, v.salary_mid, s.id, s.name
+		FROM vacancies v
+		JOIN vacancy_skills vs ON vs.vacancy_id = v.id
+		JOIN skills s ON s.id = vs.skill_id
+			AND s.is_active AND s.skill_kind = 'programming_language'
+		WHERE v.deleted_at IS NULL AND v.is_active
+			AND EXISTS (
+				SELECT 1 FROM vacancy_role_scopes scope
+				WHERE scope.vacancy_id = v.id AND scope.scope = 'vacancy_listing'
+			)
+			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
+			AND ($3 = '' OR v.role_id = $3::uuid)
+			AND ($4 = '' OR v.region_id = $4::uuid)
+			AND ($5 = '' OR v.source = $5)
+	`
+	return p.ranking(ctx, filter, page, metric, dimension, "programming languages")
+}
+
+func (p *Postgres) ManagementRoles(
+	ctx context.Context,
+	filter readapi.AnalyticsFilter,
+	page readapi.Page,
+	metric readapi.RankingMetric,
+) (readapi.RankingPage, error) {
+	dimension := `
+		SELECT DISTINCT v.id AS vacancy_id, v.salary_mid, r.id, r.title AS name
+		FROM vacancies v
+		JOIN vacancy_role_scopes scope ON scope.vacancy_id = v.id
+			AND scope.scope = 'management_analytics'
+		JOIN roles r ON r.id = scope.role_id AND r.is_active
+		WHERE v.deleted_at IS NULL AND v.is_active
+			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
+			AND ($3 = '' OR v.role_id = $3::uuid)
+			AND ($4 = '' OR v.region_id = $4::uuid)
+			AND ($5 = '' OR v.source = $5)
+	`
+	return p.ranking(ctx, filter, page, metric, dimension, "management roles")
+}
+
+func (p *Postgres) ranking(
+	ctx context.Context,
+	filter readapi.AnalyticsFilter,
+	page readapi.Page,
+	metric readapi.RankingMetric,
+	dimensionSQL string,
+	label string,
+) (readapi.RankingPage, error) {
+	order := "vacancy_count DESC, name, id"
+	if metric == readapi.RankingBySalary {
+		order = "median_salary_rub DESC, salary_sample_size DESC, vacancy_count DESC, name, id"
+	}
+	args := append(
+		analyticsArgs(filter),
+		minimumRankingSalarySample,
+		page.Size,
+		(page.Number-1)*page.Size,
+		minimumRankingSalarySample,
+	)
+	rows, err := p.db.Query(ctx, `
+		WITH dimension AS (`+dimensionSQL+`),
+		denominator AS (
+			SELECT count(DISTINCT vacancy_id)::bigint AS value FROM dimension
+		), stats AS (
+			SELECT id, name,
+				count(DISTINCT vacancy_id)::bigint AS vacancy_count,
+				count(DISTINCT vacancy_id) FILTER (
+					WHERE salary_mid BETWEEN 10000 AND 2000000
+				)::bigint AS salary_sample_size,
+				percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_mid)
+					FILTER (WHERE salary_mid BETWEEN 10000 AND 2000000)::float8 AS median_salary_rub
+			FROM dimension
+			GROUP BY id, name
+		), eligible AS (
+			SELECT stats.*,
+				coalesce(vacancy_count::float8 / nullif(denominator.value, 0), 0)::float8 AS share
+			FROM stats CROSS JOIN denominator
+			WHERE $6::integer = 0 OR salary_sample_size >= $6
+		), ranked AS (
+			SELECT *,
+				row_number() OVER (ORDER BY `+order+`)::bigint AS rank,
+				count(*) OVER()::bigint AS total
+			FROM eligible
+		), page_data AS (
+			SELECT * FROM ranked
+			ORDER BY `+order+`
+			LIMIT $7 OFFSET $8
+		)
+		SELECT page_data.id::text, page_data.name, page_data.rank,
+			page_data.vacancy_count, page_data.share,
+			CASE WHEN page_data.salary_sample_size >= $9 THEN page_data.median_salary_rub END,
+			page_data.salary_sample_size,
+			coalesce(page_data.total, (SELECT count(*) FROM eligible)),
+			denominator.value
+		FROM denominator
+		LEFT JOIN page_data ON true
+		ORDER BY page_data.rank NULLS LAST
+	`, argsForRanking(args, metric)...)
+	if err != nil {
+		return readapi.RankingPage{}, fmt.Errorf("query %s ranking: %w", label, err)
+	}
+	defer rows.Close()
+
+	result := readapi.RankingPage{
+		Data: []readapi.RankingItem{}, Metric: metric,
+		MinSalarySampleSize: minimumRankingSalarySample,
+		Page:                page.Number, PageSize: page.Size,
+	}
+	for rows.Next() {
+		var id, name pgtype.Text
+		var rank, count, sample pgtype.Int8
+		var share, salary pgtype.Float8
+		if err := rows.Scan(
+			&id, &name, &rank, &count, &share, &salary, &sample,
+			&result.Total, &result.Denominator,
+		); err != nil {
+			return readapi.RankingPage{}, fmt.Errorf("scan %s ranking: %w", label, err)
+		}
+		if !id.Valid {
+			continue
+		}
+		item := readapi.RankingItem{
+			ID: id.String, Name: name.String, Rank: rank.Int64,
+			VacancyCount: count.Int64, Share: share.Float64,
+			SalarySampleSize: sample.Int64,
+		}
+		if salary.Valid {
+			value := salary.Float64
+			item.MedianSalaryRUB = &value
+		}
+		result.Data = append(result.Data, item)
+	}
+	if err := rows.Err(); err != nil {
+		return readapi.RankingPage{}, fmt.Errorf("iterate %s ranking: %w", label, err)
+	}
+	return result, nil
+}
+
+func argsForRanking(args []any, metric readapi.RankingMetric) []any {
+	minimum := 0
+	if metric == readapi.RankingBySalary {
+		minimum = minimumRankingSalarySample
+	}
+	args[5] = minimum
+	return args
+}
+
 func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilter) (readapi.VacancyPage, error) {
 	args := []any{
 		filter.Query, nonNilStrings(filter.RoleIDs), nonNilStrings(filter.RegionIDs), filter.Source, filter.OnlyActive,
@@ -675,10 +830,9 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 	conditions := `
 		v.deleted_at IS NULL
 			AND EXISTS (
-				SELECT 1 FROM roles scope_role
-				WHERE scope_role.id = v.role_id
-				  AND scope_role.is_active
-				  AND scope_role.family IN ('software_development', 'analytics', 'quality_assurance')
+				SELECT 1 FROM vacancy_role_scopes listing_scope
+				WHERE listing_scope.vacancy_id = v.id
+				  AND listing_scope.scope = 'vacancy_listing'
 			)
 			AND ($1 = '' OR v.title ILIKE '%' || $1 || '%')
 			AND (cardinality($2::uuid[]) = 0 OR v.role_id = ANY($2::uuid[]))

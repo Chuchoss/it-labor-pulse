@@ -27,6 +27,8 @@ type ReadService interface {
 	DemandTrends(context.Context, readapi.AnalyticsFilter, string) (readapi.DemandTrends, error)
 	TrendsCoverage(context.Context) (readapi.TrendsCoverage, error)
 	TopSkills(context.Context, readapi.AnalyticsFilter, readapi.Page) (readapi.TopSkills, error)
+	ProgrammingLanguages(context.Context, readapi.AnalyticsFilter, readapi.Page, readapi.RankingMetric) (readapi.RankingPage, error)
+	ManagementRoles(context.Context, readapi.AnalyticsFilter, readapi.Page, readapi.RankingMetric) (readapi.RankingPage, error)
 	ListVacancies(context.Context, readapi.VacancyFilter) (readapi.VacancyPage, error)
 }
 
@@ -52,6 +54,8 @@ func (h *ReadHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/trends/demand", h.demandTrends)
 	mux.HandleFunc("GET /api/v1/trends/coverage", h.trendsCoverage)
 	mux.HandleFunc("GET /api/v1/skills/top", h.topSkills)
+	mux.HandleFunc("GET /api/v1/rankings/programming-languages", h.programmingLanguages)
+	mux.HandleFunc("GET /api/v1/rankings/managerial-roles", h.managementRoles)
 	mux.HandleFunc("GET /api/v1/vacancies", h.listVacancies)
 }
 
@@ -213,6 +217,42 @@ func (h *ReadHandler) topSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.service.TopSkills(r.Context(), filter, page)
+	h.respond(w, r, result, err)
+}
+
+func (h *ReadHandler) programmingLanguages(w http.ResponseWriter, r *http.Request) {
+	h.ranking(w, r, true)
+}
+
+func (h *ReadHandler) managementRoles(w http.ResponseWriter, r *http.Request) {
+	h.ranking(w, r, false)
+}
+
+func (h *ReadHandler) ranking(w http.ResponseWriter, r *http.Request, languages bool) {
+	filter, err := parseAnalyticsFilter(r.URL.Query(), languages, true)
+	if err != nil {
+		h.validationError(w, r, err)
+		return
+	}
+	page, err := parsePage(r.URL.Query())
+	if err != nil {
+		h.validationError(w, r, err)
+		return
+	}
+	metric := readapi.RankingMetric(queryDefault(r.URL.Query(), "metric", string(readapi.RankingByCount)))
+	if metric != readapi.RankingByCount && metric != readapi.RankingBySalary {
+		h.validationError(w, r, fieldError{"metric", "must be count or salary"})
+		return
+	}
+	if h.requireService(w, r) {
+		return
+	}
+	var result readapi.RankingPage
+	if languages {
+		result, err = h.service.ProgrammingLanguages(r.Context(), filter, page, metric)
+	} else {
+		result, err = h.service.ManagementRoles(r.Context(), filter, page, metric)
+	}
 	h.respond(w, r, result, err)
 }
 
