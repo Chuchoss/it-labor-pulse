@@ -53,6 +53,13 @@ classDiagram
 - `pages` задаёт число доступных страниц, `found` — полное число совпадений.
 - Официальная глубина одной поисковой выдачи — максимум **2000 результатов**:
   `found` может быть больше, но получить их одним запросом нельзя.
+
+Search item не содержит полного `description` и `key_skills`, поэтому каждый
+выбранный item обогащается через официальный `GET /vacancies/{id}`. Клиент
+использует идентифицирующий `User-Agent`, timeout/cancellation, ограниченный
+request budget и exponential backoff для 429/5xx. Detail HTML очищается до
+bounded plain text до записи в `vacancies.description_text`; scraping не
+используется. Attribution HH сохраняется через `source_url` и UI.
 - `INGEST_SCOPE=query` сохраняет целевой dev-режим `area` + `text`.
 - Явный `INGEST_SCOPE=it` получает официальный `/professional_roles`, проверяет
   имена ролей категории `11` и ищет только продуктовый allowlist по России

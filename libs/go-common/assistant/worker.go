@@ -3,8 +3,10 @@ package assistant
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"strconv"
 	"time"
 )
 
@@ -33,6 +35,9 @@ type WorkerUser struct {
 type WorkerCandidate struct {
 	ID, Source, ExternalID, Title, SourceURL string
 	Vacancy                                  Vacancy
+	Description                              string
+	DescriptionTruncated                     bool
+	Revision                                 int
 	SalaryText                               string
 	ObservedAt                               time.Time
 	CreatedAt                                time.Time
@@ -44,10 +49,14 @@ type WorkerMatch struct {
 	Result                                 Result
 	Method, Provider, Model, PromptVersion string
 	InputSnapshotHash                      []byte
+	VacancyRevision                        int
 }
 
 type AIStore interface {
 	SaveAIResult(context.Context, WorkerMatch, MatchOutput) error
+	AIResultExists(context.Context, string, int, string, int) (bool, error)
+	RecentAICalls(context.Context, string, time.Time) (int, error)
+	SaveAIFailure(context.Context, WorkerMatch, string) error
 }
 
 type AutomationStore interface {
@@ -59,7 +68,9 @@ type TelegramEligibilityStore interface {
 }
 
 type WorkItemStore interface {
-	CompleteWorkItem(context.Context, string, string) error
+	CompleteWorkItem(context.Context, string, string, int) error
+	RetryWorkItem(context.Context, string, string, int, string) error
+	DeferWorkItem(context.Context, string, string, int, time.Time) error
 }
 
 type WorkerDelivery struct {
@@ -81,6 +92,7 @@ type WorkerOptions struct {
 
 type WorkerStats struct {
 	Users, Processed, Eligible, Matched, Notified, Skipped, AICalls int
+	AIMatches, AIFailures, AISkipped                                int
 	RunID                                                           string
 }
 
@@ -89,6 +101,8 @@ func (s WorkerStats) LogValue() slog.Value {
 		slog.Int("users", s.Users), slog.Int("processed", s.Processed), slog.Int("eligible", s.Eligible),
 		slog.Int("matched", s.Matched), slog.Int("notified", s.Notified),
 		slog.Int("skipped", s.Skipped), slog.Int("ai_calls", s.AICalls),
+		slog.Int("ai_matches", s.AIMatches), slog.Int("ai_failures", s.AIFailures),
+		slog.Int("ai_skipped", s.AISkipped),
 	)
 }
 
@@ -145,6 +159,7 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 			stats = WorkerStats{
 				Users: len(users), RunID: claimedRunID, Processed: run.Processed,
 				Eligible: run.Eligible, Matched: run.Matched, AICalls: run.AICalls, Skipped: run.Skipped,
+				AIMatches: run.AIMatches, AIFailures: run.AIFailures, AISkipped: run.AISkipped,
 			}
 			if len(users) == 0 {
 				return stats, nil
@@ -215,13 +230,16 @@ func processCandidates(
 	manual bool,
 ) error {
 	aiCalls := stats.AICalls
+	perUserCalls := make(map[string]int)
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		stats.Processed++
+		candidateFailed := false
+		candidateDeferred := false
 		for _, user := range users {
-			settings := AutomationSettings{AIEnabled: true, MaxAICallsPerHour: 1}
+			settings := AutomationSettings{MaxAICallsPerHour: 20}
 			if settingsStore, ok := store.(AutomationStore); ok {
 				var settingsErr error
 				settings, settingsErr = settingsStore.AutomationSettings(ctx, user.ID)
@@ -235,80 +253,126 @@ func processCandidates(
 			}
 			stats.Eligible++
 			result := Match(candidate.Vacancy, toPreferences(user.Preference), opts.Now)
-			if result.Decision != DecisionMatch {
-				stats.Skipped++
-				continue
-			}
-			created, err := store.SaveMatch(ctx, WorkerMatch{
-				UserID: user.ID, VacancyID: candidate.ID, Source: candidate.Source,
-				ExternalID: candidate.ExternalID, PreferenceVersion: user.Preference.Version,
-				Result: result,
-			})
-			if err != nil {
-				return err
-			}
-			stats.Matched++
-			if !created {
-				continue
-			}
-			if opts.TelegramEnabled && settings.TelegramEnabled {
-				eligible := true
-				if eligibility, ok := store.(TelegramEligibilityStore); ok {
-					eligible, err = eligibility.TelegramEligible(ctx, user.ID)
-					if err != nil {
-						return err
-					}
-				}
-				if eligible {
-					created, err := store.SaveDelivery(ctx, WorkerDelivery{
-						UserID: user.ID, VacancyID: candidate.ID,
-						PreferenceVersion: user.Preference.Version,
-					})
-					if err != nil {
-						return err
-					}
-					if created {
-						stats.Notified++
-					}
-				}
-			}
-			if settings.AIEnabled && opts.AIProvider != nil && aiCalls < opts.AIBudget &&
-				(settings.MaxAICallsPerHour <= 0 || aiCalls < settings.MaxAICallsPerHour) &&
-				(opts.AIThreshold <= 0 || result.Score >= opts.AIThreshold) {
-				evidence := make(map[string]bool, len(result.Evidence))
-				for _, id := range result.Evidence {
-					evidence[id] = true
-				}
-				input := MinimizedInput(candidate.Title, candidate.SalaryText, nil, evidence)
-				output, err := opts.AIProvider.Complete(ctx, Request{InputSnapshot: input, Evidence: evidence})
+			if result.Decision == DecisionMatch {
+				created, err := store.SaveMatch(ctx, WorkerMatch{
+					UserID: user.ID, VacancyID: candidate.ID, Source: candidate.Source,
+					ExternalID: candidate.ExternalID, PreferenceVersion: user.Preference.Version,
+					VacancyRevision: candidate.Revision, Result: result,
+				})
 				if err != nil {
 					return err
 				}
-				if durable, ok := store.(AIStore); ok {
-					aiResult := Result{Decision: Decision(output.Decision), Score: output.Score,
-						Reasons: output.Matched, Unknowns: output.Unknowns, Conflicts: output.Conflicts, Evidence: output.Evidence}
-					if err := durable.SaveAIResult(ctx, WorkerMatch{
-						UserID: user.ID, VacancyID: candidate.ID, PreferenceVersion: user.Preference.Version,
-						Result: aiResult, Method: "ai", Provider: "deepseek",
-						InputSnapshotHash: sha256Bytes(input),
-					}, output); err != nil {
-						return err
+				stats.Matched++
+				if created && opts.TelegramEnabled && settings.TelegramEnabled {
+					eligible := true
+					if eligibility, ok := store.(TelegramEligibilityStore); ok {
+						eligible, err = eligibility.TelegramEligible(ctx, user.ID)
+						if err != nil {
+							return err
+						}
+					}
+					if eligible {
+						created, err := store.SaveDelivery(ctx, WorkerDelivery{
+							UserID: user.ID, VacancyID: candidate.ID,
+							PreferenceVersion: user.Preference.Version,
+						})
+						if err != nil {
+							return err
+						}
+						if created {
+							stats.Notified++
+						}
 					}
 				}
-				aiCalls++
-				stats.AICalls++
+			} else {
+				stats.Skipped++
+			}
+
+			durable, ok := store.(AIStore)
+			if !settings.AIEnabled || opts.AIProvider == nil || !ok {
+				stats.AISkipped++
+				continue
+			}
+			exists, err := durable.AIResultExists(ctx, user.ID, user.Preference.Version, candidate.ID, candidate.Revision)
+			if err != nil {
+				return err
+			}
+			if exists {
+				stats.AISkipped++
+				continue
+			}
+			if perUserCalls[user.ID] == 0 {
+				perUserCalls[user.ID], err = durable.RecentAICalls(ctx, user.ID, opts.Now.Add(-time.Hour))
+				if err != nil {
+					return err
+				}
+			}
+			if aiCalls >= opts.AIBudget || perUserCalls[user.ID] >= settings.MaxAICallsPerHour {
+				stats.AISkipped++
+				candidateDeferred = true
+				continue
+			}
+			evidence := map[string]bool{"vacancy:title": true, "vacancy:description": true, "preferences": true}
+			facts := map[string]string{
+				"salary":                 candidate.SalaryText,
+				"deterministic_decision": string(result.Decision),
+				"deterministic_score":    strconv.FormatFloat(result.Score, 'f', 2, 64),
+				"preferences":            preferenceSnapshot(user.Preference),
+				"description_truncated":  strconv.FormatBool(candidate.DescriptionTruncated),
+			}
+			input := MinimizedInput(candidate.Title, candidate.Description, facts, evidence)
+			match := WorkerMatch{
+				UserID: user.ID, VacancyID: candidate.ID, PreferenceVersion: user.Preference.Version,
+				VacancyRevision: candidate.Revision, Result: result, Method: "ai", Provider: "deepseek",
+				PromptVersion: "description-v1", InputSnapshotHash: sha256Bytes(input),
+			}
+			output, providerErr := opts.AIProvider.Complete(ctx, Request{InputSnapshot: input, Evidence: evidence})
+			aiCalls++
+			perUserCalls[user.ID]++
+			stats.AICalls++
+			if providerErr != nil {
+				stats.AIFailures++
+				candidateFailed = true
+				if err := durable.SaveAIFailure(ctx, match, "provider_failed"); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := durable.SaveAIResult(ctx, match, output); err != nil {
+				return err
+			}
+			if output.Decision == string(DecisionMatch) {
+				stats.AIMatches++
 			}
 		}
 		if !manual {
 			workItems, ok := store.(WorkItemStore)
 			if ok {
-				if err := workItems.CompleteWorkItem(ctx, candidate.Source, candidate.ExternalID); err != nil {
-					return err
+				var itemErr error
+				if candidateFailed {
+					itemErr = workItems.RetryWorkItem(
+						ctx, candidate.Source, candidate.ExternalID, candidate.Revision, "ai_provider_failed",
+					)
+				} else if candidateDeferred {
+					itemErr = workItems.DeferWorkItem(
+						ctx, candidate.Source, candidate.ExternalID, candidate.Revision, opts.Now.Add(time.Hour),
+					)
+				} else {
+					itemErr = workItems.CompleteWorkItem(ctx, candidate.Source, candidate.ExternalID, candidate.Revision)
+				}
+				if itemErr != nil {
+					return itemErr
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func preferenceSnapshot(p PreferenceRecord) string {
+	value := map[string]any{"note": p.Note, "hard_criteria": p.HardCriteria}
+	data, _ := json.Marshal(value)
+	return string(data)
 }
 
 func sha256Bytes(value string) []byte {

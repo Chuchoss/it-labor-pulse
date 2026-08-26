@@ -153,14 +153,16 @@ func DraftFromDetail(raw []byte, collectedAt time.Time) (normalize.Draft, error)
 		return normalize.Draft{}, fmt.Errorf("hh parse detail: empty name")
 	}
 
+	description, descriptionTruncated := SanitizeDescription(v.Description, MaxDescriptionRunes)
 	d := normalize.Draft{
-		SchemaVersion:   normalize.SchemaVersionV1,
-		Source:          SourceCode,
-		ExternalID:      v.ID,
-		Title:           v.Name,
-		CollectedAt:     collectedAt.UTC(),
-		DescriptionText: StripHTML(v.Description),
-		RawPayload:      append(json.RawMessage(nil), raw...),
+		SchemaVersion:        normalize.SchemaVersionV1,
+		Source:               SourceCode,
+		ExternalID:           v.ID,
+		Title:                v.Name,
+		CollectedAt:          collectedAt.UTC(),
+		DescriptionText:      description,
+		DescriptionTruncated: descriptionTruncated,
+		RawPayload:           append(json.RawMessage(nil), raw...),
 	}
 	if v.AlternateURL != "" {
 		sourceURL, err := ValidateSourceURL(v.AlternateURL)

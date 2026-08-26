@@ -465,9 +465,12 @@ aliases из [runbook assistant](../runbooks/personal-assistant.md): извес�
 outbox. Один активный run на пользователя; повтор того же `Idempotency-Key`
 возвращает исходный `run_id`.
 
-`GET /status` возвращает `processed/total`, `matched`, `ai_calls` и состояние.
-AI выключенный не блокирует deterministic scan. AI возможен только для
-deterministic matches при пользовательском и серверном opt-in.
+`GET /status` возвращает `processed/total`, deterministic `matched`, `ai_calls`,
+`ai_matches`, `ai_failures`, `ai_skipped` и состояние. AI выключенный или
+недоступный не блокирует deterministic scan. При пользовательском и серверном
+opt-in AI проверяет по очищенному описанию все вакансии снимка, включая
+deterministic rejects; автоматический путь делает то же только для новых/новых
+ревизий после `activation_at` и в пределах per-run/per-user лимитов.
 
 ---
 

@@ -894,17 +894,18 @@ func savePageInTx(
 		if err != nil {
 			return 0, 0, err
 		}
-		// The outbox row is written in the same transaction as the vacancy
-		// upsert. A unique source/external_id key makes retries harmless.
-		_, err = tx.Exec(ctx, `
-			INSERT INTO assistant_work_items (source, external_id)
-			VALUES ($1, $2)
-			ON CONFLICT (source, external_id) DO NOTHING
-		`, item.Vacancy.Source, item.Vacancy.ExternalID)
-		if err != nil {
-			return 0, 0, atDBStage("assistant outbox", err)
-		}
 		if changed {
+			// Emit only analysis-relevant revisions. The revision is allocated
+			// by the vacancy upsert in this same transaction.
+			_, err = tx.Exec(ctx, `
+				INSERT INTO assistant_work_items (source, external_id, vacancy_revision)
+				SELECT source, external_id, analysis_revision
+				FROM vacancies WHERE source = $1 AND external_id = $2
+				ON CONFLICT (source, external_id, vacancy_revision) DO NOTHING
+			`, item.Vacancy.Source, item.Vacancy.ExternalID)
+			if err != nil {
+				return 0, 0, atDBStage("assistant outbox", err)
+			}
 			upserted++
 		} else {
 			unchanged++
@@ -1009,15 +1010,15 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			source, external_id, source_url, title, employer_id, role_id, region_id,
 			salary_from, salary_to, salary_currency, salary_gross, salary_mid,
 			salary_from_rub_net, salary_to_rub_net, salary_rate_date, salary_rate_provider,
-			description_text, published_at, collected_at, first_observed_at, is_active, deleted_at,
+			description_text, description_truncated, published_at, collected_at, first_observed_at, is_active, deleted_at,
 			last_seen_at, content_hash, raw_payload, updated_at
 		) VALUES (
 			$1, $2, NULLIF($3, ''), $4, $5::uuid, $6::uuid, $7::uuid,
 			$8, $9, NULLIF($10, ''), $11, $12,
 			$13, $14, $15, NULLIF($16, ''),
-			NULLIF($17, ''), $18, $19, $19, $20, NULL,
-			CASE WHEN $20 THEN $19 ELSE NULL END,
-			$21, $22::jsonb, now()
+			NULLIF($17, ''), $18, $19, $20, $20, $21, NULL,
+			CASE WHEN $21 THEN $20 ELSE NULL END,
+			$22, $23::jsonb, now()
 		)
 		ON CONFLICT (source, external_id) DO UPDATE SET
 			source_url = EXCLUDED.source_url,
@@ -1035,6 +1036,7 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			salary_rate_date = EXCLUDED.salary_rate_date,
 			salary_rate_provider = EXCLUDED.salary_rate_provider,
 			description_text = EXCLUDED.description_text,
+			description_truncated = EXCLUDED.description_truncated,
 			published_at = EXCLUDED.published_at,
 			collected_at = EXCLUDED.collected_at,
 			is_active = EXCLUDED.is_active,
@@ -1043,6 +1045,7 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			deactivation_reason = CASE WHEN EXCLUDED.is_active THEN NULL ELSE COALESCE(vacancies.deactivation_reason, 'detail_reported_inactive') END,
 			deleted_at = NULL,
 			content_hash = EXCLUDED.content_hash,
+			analysis_revision = vacancies.analysis_revision + 1,
 			raw_payload = EXCLUDED.raw_payload,
 			updated_at = now()
 		RETURNING id::text
@@ -1051,7 +1054,7 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 		v.SalaryFrom, v.SalaryTo, v.SalaryCurrency, v.SalaryGross, salaryMidForStore(v),
 		salaryBoundRub(v, v.SalaryFrom), salaryBoundRub(v, v.SalaryTo),
 		nullTimePointer(v.SalaryRateDate), v.SalaryRateProvider,
-		truncate(v.DescriptionText, 20000), nullTime(v.PublishedAt), v.CollectedAt.UTC(), v.IsActive,
+		v.DescriptionText, v.DescriptionTruncated, nullTime(v.PublishedAt), v.CollectedAt.UTC(), v.IsActive,
 		hashBytes, raw,
 	).Scan(&vacancyID)
 	if err != nil {

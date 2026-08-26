@@ -11,7 +11,8 @@ function useSupportingAssistantHandlers() {
     http.get('*/api/v1/assistant/preferences/list', () => HttpResponse.json([])),
     http.get('*/api/v1/assistant/status', () => HttpResponse.json({
       ai_configured: false, state: 'disabled', processed: 0, eligible: 0, matched: 0,
-      ai_calls: 0, skipped: 0, pending_candidates: false,
+      ai_calls: 0, ai_matches: 0, ai_failures: 0, ai_skipped: 0,
+      skipped: 0, pending_candidates: false,
     })),
     http.get('*/api/v1/assistant/automation', () => HttpResponse.json({
       ai_enabled: false, telegram_enabled: false, max_ai_calls_per_hour: 20,
@@ -84,7 +85,7 @@ describe('AssistantPage', () => {
 
     expect(await screen.findByRole('status')).toHaveTextContent('Сохранено')
     if (!requestBody) throw new Error('save request was not captured')
-    expect(requestURL).toBe(new URL('/api/v1/assistant/preferences', window.location.origin).toString())
+    expect(new URL(requestURL).pathname).toBe('/api/v1/assistant/preferences')
     expect(requestMethod).toBe('PATCH')
     expect(requestBody.hard_criteria).toEqual({
       approved_roles: ['96'],
@@ -220,7 +221,8 @@ describe('AssistantPage', () => {
       })),
       http.get('*/api/v1/assistant/status', () => HttpResponse.json({
         ai_configured: false, state: 'succeeded', processed: 25, total: 151,
-        eligible: 25, matched: 3, ai_calls: 0, skipped: 22, pending_candidates: false,
+        eligible: 25, matched: 3, ai_calls: 0, ai_matches: 0, ai_failures: 0,
+        ai_skipped: 25, skipped: 22, pending_candidates: false,
       })),
       http.post('*/api/v1/assistant/analyze', () => {
         started = true
@@ -230,8 +232,10 @@ describe('AssistantPage', () => {
 
     const user = userEvent.setup()
     renderPage(<AssistantPage />)
-    expect(await screen.findByText(/25 из 151 вакансий/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Запустить анализ' }))
+    expect(await screen.findByText(/25 из 151/)).toBeInTheDocument()
+    expect(screen.getByText(/Новые вакансии будут автоматически анализироваться AI по полному описанию/)).toBeInTheDocument()
+    expect(screen.getByText(/Отправлено в AI: 0 · AI-совпадения: 0 · Ошибки: 0 · Пропущено AI: 25/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Полный анализ текущих вакансий' }))
     expect(screen.getByText(/анализ всех текущих активных вакансий/i)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Подтвердить' }))
 

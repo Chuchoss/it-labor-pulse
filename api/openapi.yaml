@@ -662,7 +662,7 @@ paths:
       tags: [assistant]
       operationId: runAssistantAnalysis
       summary: Запустить анализ всех текущих вакансий
-      description: Фиксирует конечный снимок всех активных неудалённых вакансий активных источников и обрабатывает его bounded keyset-пакетами. Новые вакансии после cutoff остаются для следующего запуска и инкрементального outbox. AI применяется только к deterministic matches и требует отдельного server-side opt-in.
+      description: Фиксирует конечный снимок всех активных неудалённых вакансий активных источников и обрабатывает его bounded keyset-пакетами. Новые вакансии после cutoff остаются для следующего запуска и инкрементального outbox. При пользовательском opt-in и server-side флаге AI получает каждую вакансию снимка, включая ограниченное безопасное текстовое описание; deterministic reject не исключает AI-проверку.
       security:
         - bearerAuth: []
       responses:
@@ -808,7 +808,7 @@ paths:
       tags: [assistant]
       operationId: updateAssistantAutomation
       summary: Включить или выключить AI и Telegram отдельно
-      description: Включение AI фиксирует activation_at; старые вакансии не backfill-ятся.
+      description: Включение AI фиксирует activation_at; каждая новая или содержательно изменившаяся вакансия после него анализируется по описанию в пределах лимитов. Старые вакансии не backfill-ятся.
       security:
         - bearerAuth: []
       requestBody:
@@ -1640,7 +1640,7 @@ components:
 
     AssistantStatus:
       type: object
-      required: [ai_configured, state, processed, total, eligible, matched, ai_calls, skipped, pending_candidates]
+      required: [ai_configured, state, processed, total, eligible, matched, ai_calls, ai_matches, ai_failures, ai_skipped, skipped, pending_candidates]
       properties:
         ai_configured: { type: boolean }
         state: { type: string, enum: [never_run, queued, running, succeeded, failed, disabled] }
@@ -1652,6 +1652,9 @@ components:
         eligible: { type: integer, minimum: 0 }
         matched: { type: integer, minimum: 0 }
         ai_calls: { type: integer, minimum: 0 }
+        ai_matches: { type: integer, minimum: 0 }
+        ai_failures: { type: integer, minimum: 0 }
+        ai_skipped: { type: integer, minimum: 0 }
         skipped: { type: integer, minimum: 0 }
         error_category: { type: [string, "null"] }
         request_id: { type: [string, "null"] }

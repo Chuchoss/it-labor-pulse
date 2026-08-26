@@ -44,6 +44,9 @@ type AnalysisStatus struct {
 	Eligible          int        `json:"eligible"`
 	Matched           int        `json:"matched"`
 	AICalls           int        `json:"ai_calls"`
+	AIMatches         int        `json:"ai_matches"`
+	AIFailures        int        `json:"ai_failures"`
+	AISkipped         int        `json:"ai_skipped"`
 	Skipped           int        `json:"skipped"`
 	ErrorCategory     *string    `json:"error_category,omitempty"`
 	RequestID         *string    `json:"request_id,omitempty"`
@@ -66,6 +69,9 @@ type AssistantRun struct {
 	Eligible        int
 	Matched         int
 	AICalls         int
+	AIMatches       int
+	AIFailures      int
+	AISkipped       int
 	Skipped         int
 	CursorCreatedAt *time.Time
 	CursorVacancyID string
@@ -216,11 +222,13 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 	var s AnalysisStatus
 	var cursorAt *time.Time
 	err := r.db.QueryRow(ctx, `SELECT state, started_at, finished_at, last_checked_at,
-		processed, snapshot_total, eligible, matched, ai_calls, skipped, error_category, request_id,
+		processed, snapshot_total, eligible, matched, ai_calls, ai_matches, ai_failures, ai_skipped,
+		skipped, error_category, request_id,
 		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version
 		FROM assistant_runs WHERE user_id = $1::uuid ORDER BY created_at DESC LIMIT 1`, userID).Scan(
 		&s.State, &s.StartedAt, &s.FinishedAt, &s.LastCheckedAt, &s.Processed, &s.Total, &s.Eligible,
-		&s.Matched, &s.AICalls, &s.Skipped, &s.ErrorCategory, &s.RequestID, &s.CursorSource,
+		&s.Matched, &s.AICalls, &s.AIMatches, &s.AIFailures, &s.AISkipped,
+		&s.Skipped, &s.ErrorCategory, &s.RequestID, &s.CursorSource,
 		&cursorAt, &s.PendingCandidates, &s.Provider, &s.Model, &s.PromptVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		s.State = "never_run"
@@ -291,10 +299,11 @@ func (r *PostgresRepository) ClaimAssistantRun(ctx context.Context) (AssistantRu
 			FOR UPDATE SKIP LOCKED LIMIT 1
 		)
 		RETURNING id::text, user_id::text, preference_id::text, snapshot_cutoff,
-			snapshot_total, processed, eligible, matched, ai_calls, skipped,
+			snapshot_total, processed, eligible, matched, ai_calls, ai_matches, ai_failures, ai_skipped, skipped,
 			snapshot_cursor_created_at, COALESCE(snapshot_cursor_vacancy_id::text, '')
 	`).Scan(&run.ID, &run.UserID, &run.PreferenceID, &run.SnapshotCutoff, &run.Total,
-		&run.Processed, &run.Eligible, &run.Matched, &run.AICalls, &run.Skipped,
+		&run.Processed, &run.Eligible, &run.Matched, &run.AICalls,
+		&run.AIMatches, &run.AIFailures, &run.AISkipped, &run.Skipped,
 		&run.CursorCreatedAt, &run.CursorVacancyID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssistantRun{}, false, nil
@@ -313,9 +322,11 @@ func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, st
 		UPDATE assistant_runs
 		SET state = $2, finished_at = now(), last_checked_at = now(),
 			processed = $3, eligible = $4, matched = $5, ai_calls = $6,
-			skipped = $7, error_category = NULLIF($8, ''), lease_until = NULL
+			ai_matches = $7, ai_failures = $8, ai_skipped = $9,
+			skipped = $10, error_category = NULLIF($11, ''), lease_until = NULL
 		WHERE id = $1::uuid
-	`, runID, state, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls, stats.Skipped, errorCategory)
+	`, runID, state, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls,
+		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, errorCategory)
 	if err != nil {
 		return fmt.Errorf("complete assistant run: %w", err)
 	}
@@ -722,7 +733,8 @@ func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run Assista
 	rows, err := r.db.Query(ctx, `
 		SELECT v.id::text, v.source, v.external_id, v.title, v.source_url,
 			v.salary_mid, COALESCE(ra.pattern, v.role_id::text), v.region_id::text,
-			v.published_at, v.collected_at, v.created_at,
+			v.published_at, v.collected_at, v.created_at, COALESCE(v.description_text, ''),
+			v.description_truncated, v.analysis_revision,
 			COALESCE(array_agg(sk.slug) FILTER (WHERE sk.slug IS NOT NULL), '{}')
 		FROM vacancies v
 		JOIN sources src ON src.code = v.source AND src.is_active
@@ -748,7 +760,8 @@ func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run Assista
 		var published *time.Time
 		var skills []string
 		if err := rows.Scan(&c.ID, &c.Source, &c.ExternalID, &c.Title, &sourceURL,
-			&salary, &roleID, &regionID, &published, &c.ObservedAt, &c.CreatedAt, &skills); err != nil {
+			&salary, &roleID, &regionID, &published, &c.ObservedAt, &c.CreatedAt,
+			&c.Description, &c.DescriptionTruncated, &c.Revision, &skills); err != nil {
 			return nil, fmt.Errorf("scan assistant snapshot candidate: %w", err)
 		}
 		if sourceURL != nil {
@@ -780,18 +793,20 @@ func (r *PostgresRepository) UpdateAssistantRunProgress(
 	}
 	_, err := r.db.Exec(ctx, `
 		UPDATE assistant_runs SET processed=$2, eligible=$3, matched=$4, ai_calls=$5,
-			skipped=$6, snapshot_cursor_created_at=COALESCE($7, snapshot_cursor_created_at),
-			snapshot_cursor_vacancy_id=COALESCE($8::uuid, snapshot_cursor_vacancy_id),
+			ai_matches=$6, ai_failures=$7, ai_skipped=$8, skipped=$9,
+			snapshot_cursor_created_at=COALESCE($10, snapshot_cursor_created_at),
+			snapshot_cursor_vacancy_id=COALESCE($11::uuid, snapshot_cursor_vacancy_id),
 			last_checked_at=now(), lease_until=now() + interval '10 minutes'
 		WHERE id=$1::uuid AND state='running'
-	`, runID, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls, stats.Skipped, cursorAt, cursorID)
+	`, runID, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls,
+		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, cursorAt, cursorID)
 	if err != nil {
 		return fmt.Errorf("update assistant run progress: %w", err)
 	}
 	return nil
 }
 
-func (r *PostgresRepository) Candidates(ctx context.Context, source string, cutoff time.Time, limit int) ([]WorkerCandidate, error) {
+func (r *PostgresRepository) Candidates(ctx context.Context, source string, _ time.Time, limit int) ([]WorkerCandidate, error) {
 	if limit < 1 || limit > 100 {
 		limit = 25
 	}
@@ -801,6 +816,14 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, cuto
 			SET status = 'pending', lease_until = NULL, claimed_by = NULL, updated_at = now()
 			WHERE status = 'processing' AND lease_until < now()
 			RETURNING id
+		), superseded AS (
+			UPDATE assistant_work_items w
+			SET status = 'done', completed_at = now(), updated_at = now()
+			FROM vacancies v
+			WHERE w.source = v.source AND w.external_id = v.external_id
+			  AND w.status IN ('pending', 'failed')
+			  AND w.vacancy_revision < v.analysis_revision
+			RETURNING w.id
 		), claimed AS (
 			UPDATE assistant_work_items
 			SET status = 'processing', lease_until = now() + interval '10 minutes',
@@ -810,25 +833,26 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, cuto
 				WHERE source = $1 AND status IN ('pending', 'failed')
 				  AND available_at <= now()
 				ORDER BY available_at, id
-				LIMIT $3
+				LIMIT $2
 				FOR UPDATE SKIP LOCKED
 			)
-			RETURNING source, external_id
+			RETURNING source, external_id, vacancy_revision
 		)
 		SELECT v.id::text, v.source, v.external_id, v.title, v.source_url,
 			v.salary_mid, COALESCE(ra.pattern, v.role_id::text), v.region_id::text, v.published_at,
-			v.collected_at, COALESCE(array_agg(s.slug) FILTER (WHERE s.slug IS NOT NULL), '{}')
+			v.collected_at, COALESCE(v.description_text, ''), v.description_truncated,
+			v.analysis_revision, COALESCE(array_agg(s.slug) FILTER (WHERE s.slug IS NOT NULL), '{}')
 		FROM vacancies v
 		JOIN claimed w ON w.source = v.source AND w.external_id = v.external_id
+			AND w.vacancy_revision = v.analysis_revision
 		LEFT JOIN role_aliases ra ON ra.role_id = v.role_id AND ra.source = 'hh'
 		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
 		LEFT JOIN skills s ON s.id = vs.skill_id
 		WHERE v.source = $1 AND v.is_active AND v.deleted_at IS NULL
-			AND COALESCE(v.published_at, v.collected_at) >= $2
 		GROUP BY v.id, ra.pattern
 		ORDER BY v.collected_at, v.external_id
-		LIMIT $3
-	`, source, cutoff, limit)
+		LIMIT $2
+	`, source, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list assistant candidates: %w", err)
 	}
@@ -842,7 +866,8 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, cuto
 		var published *time.Time
 		var skills []string
 		if err := rows.Scan(&c.ID, &c.Source, &c.ExternalID, &c.Title, &sourceURL,
-			&salary, &roleID, &regionID, &published, &c.ObservedAt, &skills); err != nil {
+			&salary, &roleID, &regionID, &published, &c.ObservedAt, &c.Description,
+			&c.DescriptionTruncated, &c.Revision, &skills); err != nil {
 			return nil, fmt.Errorf("scan assistant candidate: %w", err)
 		}
 		if sourceURL != nil {
@@ -860,12 +885,46 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, cuto
 	return candidates, rows.Err()
 }
 
-func (r *PostgresRepository) CompleteWorkItem(ctx context.Context, source, externalID string) error {
+func (r *PostgresRepository) CompleteWorkItem(ctx context.Context, source, externalID string, revision int) error {
 	_, err := r.db.Exec(ctx, `
 		UPDATE assistant_work_items
 		SET status = 'done', completed_at = now(), lease_until = NULL, updated_at = now()
-		WHERE source = $1 AND external_id = $2 AND status = 'processing'
-	`, source, externalID)
+		WHERE source = $1 AND external_id = $2 AND vacancy_revision = $3 AND status = 'processing'
+	`, source, externalID, max(revision, 1))
+	return err
+}
+
+func (r *PostgresRepository) RetryWorkItem(
+	ctx context.Context,
+	source, externalID string,
+	revision int,
+	errorCode string,
+) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE assistant_work_items
+		SET status = CASE WHEN attempts + 1 >= 5 THEN 'done' ELSE 'failed' END,
+			attempts = LEAST(attempts + 1, 20),
+			available_at = now() + make_interval(secs => LEAST(300, 5 * (1 << LEAST(attempts, 5)))),
+			last_error = $4, dead_letter_at = CASE WHEN attempts + 1 >= 5 THEN now() ELSE NULL END,
+			lease_until = NULL, claimed_by = NULL, updated_at = now()
+		WHERE source = $1 AND external_id = $2 AND vacancy_revision = $3 AND status = 'processing'
+	`, source, externalID, max(revision, 1), errorCode)
+	return err
+}
+
+func (r *PostgresRepository) DeferWorkItem(
+	ctx context.Context,
+	source, externalID string,
+	revision int,
+	availableAt time.Time,
+) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE assistant_work_items
+		SET status = 'pending', available_at = $4, lease_until = NULL,
+			claimed_by = NULL, updated_at = now()
+		WHERE source = $1 AND external_id = $2 AND vacancy_revision = $3
+		  AND status = 'processing'
+	`, source, externalID, max(revision, 1), availableAt)
 	return err
 }
 
@@ -876,15 +935,17 @@ func (r *PostgresRepository) SaveMatch(ctx context.Context, match WorkerMatch) (
 	tag, err := r.db.Exec(ctx, `
 		INSERT INTO vacancy_match_results
 			(user_id, preference_id, vacancy_id, decision, method, score, rationale,
-			 evidence_ids, conflicts, unknowns, provider, model, input_snapshot_hash)
+			 evidence_ids, conflicts, unknowns, provider, model, prompt_version, input_snapshot_hash,
+			 vacancy_revision)
 		SELECT $1::uuid, p.id, $2::uuid, $3, COALESCE(NULLIF($10, ''), 'deterministic'), $4, $5,
-			$6::jsonb, $7::jsonb, $8::jsonb, NULLIF($11, ''), NULLIF($12, ''), $13
+			$6::jsonb, $7::jsonb, $8::jsonb, NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), $14, $15
 		FROM vacancy_preferences p
 		WHERE p.user_id = $1::uuid AND p.version = $9
 		ON CONFLICT DO NOTHING
 	`, match.UserID, match.VacancyID, string(match.Result.Decision), match.Result.Score,
 		strings.Join(match.Result.Reasons, "; "), string(evidence), string(conflicts), string(unknowns),
-		match.PreferenceVersion, match.Method, match.Provider, match.Model, match.InputSnapshotHash)
+		match.PreferenceVersion, match.Method, match.Provider, match.Model, match.PromptVersion,
+		match.InputSnapshotHash, max(match.VacancyRevision, 1))
 	if err != nil {
 		return false, fmt.Errorf("save assistant match: %w", err)
 	}
@@ -895,33 +956,83 @@ func (r *PostgresRepository) SaveAIResult(ctx context.Context, match WorkerMatch
 	inputHash := match.InputSnapshotHash
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO assistant_ai_jobs
-			(user_id, preference_id, vacancy_id, status, provider, model, input_snapshot_hash, finished_at)
-		SELECT $1::uuid, p.id, $2::uuid, 'complete', $3, $4, $5, now()
+			(user_id, preference_id, vacancy_id, vacancy_revision, status, provider, model,
+			 input_snapshot_hash, attempts, finished_at)
+		SELECT $1::uuid, p.id, $2::uuid, $7, 'complete', $3, $4, $5, 1, now()
 		FROM vacancy_preferences p
 		WHERE p.user_id = $1::uuid AND p.version = $6
-		ON CONFLICT (user_id, preference_id, vacancy_id) DO UPDATE SET
+		ON CONFLICT (user_id, preference_id, vacancy_id, vacancy_revision) DO UPDATE SET
 			status = EXCLUDED.status, provider = EXCLUDED.provider, model = EXCLUDED.model,
-			input_snapshot_hash = EXCLUDED.input_snapshot_hash, finished_at = EXCLUDED.finished_at
-	`, match.UserID, match.VacancyID, match.Provider, match.Model, inputHash, match.PreferenceVersion)
+			input_snapshot_hash = EXCLUDED.input_snapshot_hash, attempts = assistant_ai_jobs.attempts + 1,
+			error_code = NULL, finished_at = EXCLUDED.finished_at
+	`, match.UserID, match.VacancyID, match.Provider, match.Model, inputHash,
+		match.PreferenceVersion, max(match.VacancyRevision, 1))
 	if err != nil {
 		return fmt.Errorf("save assistant AI job: %w", err)
 	}
 	_, err = r.db.Exec(ctx, `
 		INSERT INTO vacancy_match_results
 			(user_id, preference_id, vacancy_id, decision, method, score, confidence,
-			 rationale, evidence_ids, conflicts, unknowns, provider, model, input_snapshot_hash)
+			 rationale, evidence_ids, conflicts, unknowns, provider, model, prompt_version,
+			 input_snapshot_hash, vacancy_revision)
 		SELECT $1::uuid, p.id, $2::uuid, $3, 'ai', $4, $5, $6, $7::jsonb, $8::jsonb,
-			$9::jsonb, $10, $11, $12
+			$9::jsonb, $10, $11, $12, $13, $15
 		FROM vacancy_preferences p
-		WHERE p.user_id = $1::uuid AND p.version = $13
+		WHERE p.user_id = $1::uuid AND p.version = $14
 		ON CONFLICT DO NOTHING
 	`, match.UserID, match.VacancyID, output.Decision, output.Score, output.Confidence,
 		output.Rationale, jsonArray(output.Evidence), jsonArray(output.Conflicts),
-		jsonArray(output.Unknowns), match.Provider, match.Model, inputHash, match.PreferenceVersion)
+		jsonArray(output.Unknowns), match.Provider, match.Model, match.PromptVersion, inputHash,
+		match.PreferenceVersion, max(match.VacancyRevision, 1))
 	if err != nil {
 		return fmt.Errorf("save assistant AI result: %w", err)
 	}
 	return nil
+}
+
+func (r *PostgresRepository) AIResultExists(
+	ctx context.Context,
+	userID string,
+	preferenceVersion int,
+	vacancyID string,
+	vacancyRevision int,
+) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM assistant_ai_jobs j
+			JOIN vacancy_preferences p ON p.id = j.preference_id
+			WHERE j.user_id = $1::uuid AND p.version = $2 AND j.vacancy_id = $3::uuid
+			  AND j.vacancy_revision = $4 AND j.status IN ('complete', 'failed')
+			  AND (j.status = 'complete' OR j.attempts >= 5)
+		)
+	`, userID, preferenceVersion, vacancyID, max(vacancyRevision, 1)).Scan(&exists)
+	return exists, err
+}
+
+func (r *PostgresRepository) RecentAICalls(ctx context.Context, userID string, since time.Time) (int, error) {
+	var count int
+	err := r.db.QueryRow(ctx, `
+		SELECT COALESCE(sum(attempts), 0)::integer FROM assistant_ai_jobs
+		WHERE user_id = $1::uuid AND created_at >= $2 AND attempts > 0
+	`, userID, since).Scan(&count)
+	return count, err
+}
+
+func (r *PostgresRepository) SaveAIFailure(ctx context.Context, match WorkerMatch, errorCode string) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO assistant_ai_jobs
+			(user_id, preference_id, vacancy_id, vacancy_revision, status, provider, model,
+			 input_snapshot_hash, attempts, error_code, finished_at)
+		SELECT $1::uuid, p.id, $2::uuid, $7, 'failed', $3, $4, $5, 1, $8, now()
+		FROM vacancy_preferences p
+		WHERE p.user_id = $1::uuid AND p.version = $6
+		ON CONFLICT (user_id, preference_id, vacancy_id, vacancy_revision) DO UPDATE SET
+			status = 'failed', attempts = LEAST(assistant_ai_jobs.attempts + 1, 5),
+			error_code = EXCLUDED.error_code, finished_at = now()
+	`, match.UserID, match.VacancyID, match.Provider, match.Model, match.InputSnapshotHash,
+		match.PreferenceVersion, max(match.VacancyRevision, 1), errorCode)
+	return err
 }
 
 func jsonArray(values []string) string {

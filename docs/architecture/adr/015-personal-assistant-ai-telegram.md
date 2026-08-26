@@ -8,7 +8,7 @@ assistant для одной локальной учётной записи.
 
 ## Decision
 
-Вводим отдельный assistant-контур: preferences → deterministic prefilter →
+Вводим отдельный assistant-контур: preferences → deterministic assessment →
 опциональный AI provider → Telegram delivery. Внешние вызовы выключены по
 умолчанию и разрешаются только feature flags плюс серверные secrets. DeepSeek
 вызывается через узкий provider-neutral интерфейс; ответ принимается только после
@@ -38,13 +38,30 @@ immutable-версию preferences и количество всех активн
 
 Автоматический режим использует `assistant_work_items` как PostgreSQL outbox:
 запись создаётся в той же транзакции, что и upsert вакансии, и уникальна по
-`(source, external_id)`. Worker атомарно claim-ит bounded batch через
+`(source, external_id, vacancy_revision)`. Ревизия увеличивается только при
+изменении нормализованных analysis-relevant полей, включая очищенное описание.
+Worker атомарно claim-ит bounded batch через
 `FOR UPDATE SKIP LOCKED`, держит lease и возвращает просроченные leases в
 `pending`; завершённые элементы не выбираются после рестарта. AI и Telegram
 управляются отдельными пользовательскими настройками
 `assistant_automation_settings`, обе по умолчанию выключены. Включение AI
 фиксирует `activation_at`, поэтому старые `first_observed_at` не backfill-ятся;
 `published_at` остаётся только показателем свежести HH.
+
+После opt-in автоматический AI применяется ко всем новым или содержательно
+изменившимся вакансиям, поступившим после `activation_at`, даже если
+deterministic assessment дал `reject`; такой результат хранится как AI
+`match|reject|review`, а не превращается в совпадение. Отключение прекращает
+новые вызовы, повторное включение действует только вперёд. Ручной snapshot
+использует текущий opt-in и те же server-side flags, но намеренно охватывает
+исторический снимок.
+
+Стоимость ограничена одновременно `ASSISTANT_MAX_AI_CALLS_PER_RUN` и
+`max_ai_calls_per_hour` на пользователя. Достигший лимита work item
+откладывается, а не теряется. Идемпотентность AI:
+`(user, preference, vacancy, vacancy_revision)`; provider failures повторяются
+до пяти раз и затем переходят в dead-letter. Ошибка/отсутствие AI не отменяет
+сохранённый deterministic результат.
 
 Ручной snapshot и outbox не создают отдельные копии вакансий. Если одна вакансия
 попала в оба пути, unique key результата `(user, preference, vacancy, method, …)`
@@ -70,11 +87,14 @@ Long-poll linker подтверждает только одноразовый ha
 (+) Ручной запуск охватывает существующие вакансии, а не только события,
 появившиеся после включения assistant.
 
-(+) Prompt input минимизирован, PII redacted, vacancy text маркирован DATA.
+(+) Prompt input минимизирован, PII redacted, очищенное описание ограничено;
+vacancy text отделён маркерами как недоверенные данные, инструкции из него
+запрещено выполнять.
 
 (-) Production auth и multi-user tenancy остаются следующими задачами; dev
 identity нельзя использовать публично. Long polling для локального linker
 нужно заменить на production webhook/managed worker при развёртывании.
 
-(-) Retention/операционные лимиты очереди должны применяться отдельным
-maintenance job; dead-letter элементы не переотправляются автоматически.
+(-) `raw_payload` остаётся внутренним source evidence по общей retention
+политике; assistant получает только очищенный plain text. Dead-letter элементы
+не переотправляются автоматически.

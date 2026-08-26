@@ -88,8 +88,7 @@ func main() {
 			os.Exit(1)
 		}
 		opts.AIProvider = provider
-		opts.AIThreshold = 0.5
-		log.Warn("assistant_worker_external_ai_enabled", "max_calls", 1)
+		log.Warn("assistant_worker_external_ai_enabled", "max_calls_per_run", opts.AIBudget)
 	}
 	run := func() error {
 		runCtx, cancel := context.WithTimeout(ctx, durationEnv("ASSISTANT_RUN_TIMEOUT", 10*time.Minute))

@@ -180,7 +180,9 @@ Bash и 1C имеют явные отдельные категории и в н�
 | `salary_currency` | `CHAR(3)` NULL | |
 | `salary_gross` | `BOOLEAN` NULL | |
 | `salary_mid` | `NUMERIC(12,2)` NULL | computed: mid/from/to |
-| `description_text` | `TEXT` NULL | усечённый текст; без отдельного хранения PII-контактов |
+| `description_text` | `TEXT` NULL | очищенный plain text из official detail API; до 12 000 Unicode-символов |
+| `description_truncated` | `BOOLEAN` NOT NULL | description был усечён на безопасной UTF-8 границе |
+| `analysis_revision` | `INTEGER` NOT NULL | растёт при изменении нормализованного analysis-relevant content |
 | `published_at` | `TIMESTAMPTZ` NULL | |
 | `collected_at` | `TIMESTAMPTZ` NOT NULL | |
 | `first_observed_at` | `TIMESTAMPTZ` NOT NULL | UTC-время первого наблюдения; не изменяется при повторном ingest |
@@ -272,6 +274,10 @@ role/date search pages. Detail hydration использует отдельный
 | `vacancy_demand_weekly` | ISO Monday + те же dimensions + method | Воспроизводимый rollup из daily rows |
 | `ingest_cycle_partitions` | cycle + stable partition key | Page-level resume/progress discovery |
 | `ingest_cycle_observations` | `(cycle_id, source, external_id)` | Дедуплицированные минимальные search facts без descriptions/PII |
+
+`raw_payload` сохраняет исходную detail-карточку как внутреннее source evidence
+по общей retention-политике и не отдаётся assistant/UI. AI получает только
+`description_text`; тексты и prompt не пишутся в info-логи.
 
 Регион задаётся явно: `aggregation_level=all_regions` требует `region_id IS
 NULL`, `aggregation_level=region` — `region_id IS NOT NULL`; unique constraint

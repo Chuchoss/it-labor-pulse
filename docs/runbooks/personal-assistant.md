@@ -1,8 +1,8 @@
 # Локальный assistant: DeepSeek и Telegram
 
-Контур assistant отделён от публичного `/api/v1/vacancies`: сначала применяются
-структурированные hard-gates и deterministic score, затем (только для
-кандидатов) optional AI. При выключенных flags AI не вызывается, а Telegram не
+Контур assistant отделён от публичного `/api/v1/vacancies`: deterministic
+assessment считает hard-критерии, а включённый AI независимо проверяет каждую
+новую eligible-вакансию по очищенному описанию. При выключенных flags AI не вызывается, а Telegram не
 отправляет сообщений.
 
 ## Жизненный цикл критериев и статус анализа
@@ -49,6 +49,14 @@ Worker обрабатывает снимок пакетами до 25 строк
 требует отдельного server-side opt-in (`ASSISTANT_AI_ENABLED` и explicit
 live-test gate); при выключенном AI полный deterministic scan завершается без
 внешних вызовов.
+
+HH ingest получает search list, затем официальную detail-карточку
+`GET /vacancies/{id}`. HTML-описание превращается в plain text: script/style и
+разметка удаляются, entities декодируются, whitespace нормализуется, лимит —
+12 000 Unicode-символов с `description_truncated=true`. Assistant передаёт
+провайдеру не более 8 000 символов вместе со структурированными фактами и
+текущей версией предпочтений. Текст вакансии отделён как недоверенные данные;
+prompt запрещает выполнять инструкции из описания.
 
 ## Конфигурация
 
@@ -100,6 +108,15 @@ Telegram delivery — at-least-once: timeout после принятия Bot API
 `activation_at` исключает исторический backlog только из автоматического
 outbox-пути; ручной snapshot намеренно анализирует существующие вакансии.
 Пересечение snapshot/outbox безопасно дедуплицируется unique result key.
+
+AI-идемпотентность включает пользователя, immutable preference, вакансию и её
+analysis revision. Автоматический режим не backfill-ит вакансии до
+`activation_at`, но повторно ставит содержательно изменившуюся ревизию.
+Лимиты `ASSISTANT_MAX_AI_CALLS_PER_RUN` и `max_ai_calls_per_hour` действуют
+одновременно; отложенные элементы остаются в очереди. Provider timeout/5xx не
+останавливает deterministic обработку: до пяти попыток, затем dead-letter.
+Счётчики отдельно показывают просмотренные вакансии, AI-вызовы, AI-совпадения,
+ошибки и пропуски.
 
 ## Безопасный smoke
 

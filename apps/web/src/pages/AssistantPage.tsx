@@ -201,7 +201,8 @@ export function AssistantPage() {
         <Stack spacing={1}>
           <Typography variant="h6">Автоматизация</Typography>
           <Typography variant="body2" color="text.secondary">
-            AI анализирует только вакансии, впервые наблюдённые после включения. Это может расходовать лимит провайдера; Telegram включается отдельно.
+            Новые вакансии будут автоматически анализироваться AI по полному описанию. Возможны расходы.
+            Действует только после включения и в пределах установленного лимита; Telegram включается отдельно.
           </Typography>
           <Stack direction="row" sx={{ alignItems: 'center' }}>
             <Switch checked={automation.data?.ai_enabled ?? false} disabled={!status.data?.ai_configured || updateAutomation.isPending}
@@ -228,13 +229,16 @@ export function AssistantPage() {
           {status.data?.state === 'queued' && <Typography>Подготавливаем снимок всех текущих вакансий…</Typography>}
           {status.data?.state === 'running' && <Typography>Анализируем все текущие вакансии…</Typography>}
           <Typography>
-            Детерминированный анализ: {status.data?.processed ?? 0}
-            {status.data?.total !== undefined ? ` из ${status.data.total}` : ''} вакансий
+            Проверено по критериям: {status.data?.processed ?? 0}
+            {status.data?.total !== undefined ? ` из ${status.data.total}` : ''} · Подходят: {status.data?.matched ?? 0}
           </Typography>
-          <Typography>AI-анализ: {status.data?.ai_calls ?? 0} вакансий · Совпадения: {status.data?.matched ?? 0}</Typography>
+          <Typography>
+            Отправлено в AI: {status.data?.ai_calls ?? 0} · AI-совпадения: {status.data?.ai_matches ?? 0}
+            {' · '}Ошибки: {status.data?.ai_failures ?? 0} · Пропущено AI: {status.data?.ai_skipped ?? 0}
+          </Typography>
           <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключена; ручной детерминированный анализ ещё не запускался.' : status.data?.state === 'never_run' ? 'Анализ ещё не запускался.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала анализа.' : status.data?.state === 'running' ? 'Обработка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.' : status.data?.state === 'failed' ? 'Анализ завершился с безопасной ошибкой; повторите запуск.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Анализ всех вакансий из снимка завершён.'}</Typography>
           {status.data?.finished_at && <Typography variant="body2">Последний анализ: {new Date(status.data.finished_at).toLocaleString('ru-RU')}</Typography>}
-          <Button variant="contained" disabled={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'} onClick={() => setConfirmAction('run')}>Запустить анализ</Button>
+          <Button variant="contained" disabled={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'} onClick={() => setConfirmAction('run')}>Полный анализ текущих вакансий</Button>
           {run.data && <Alert severity="info">Поставлено в очередь. ID запуска: {run.data.run_id}</Alert>}
           {run.isError && <Alert severity="error">Не удалось запустить анализ: {run.error.message}</Alert>}
         </Stack>
@@ -383,7 +387,7 @@ export function AssistantPage() {
         <Typography>{confirmAction === 'archive'
           ? 'Архивировать текущую версию? Она останется в истории, совпадения не удаляются.'
           : confirmAction === 'run'
-            ? 'Запустить анализ всех текущих активных вакансий? Снимок фиксируется сейчас; новые вакансии попадут в следующий запуск. Внешний AI выключен без отдельного серверного разрешения.'
+            ? 'Запустить полный анализ всех текущих активных вакансий по описанию? Снимок фиксируется сейчас. AI вызывается только при вашем согласии, серверном разрешении и в пределах лимита.'
             : confirmAction === 'ai'
               ? `${automation.data?.ai_enabled ? 'Выключить' : 'Включить'} автоматический AI-анализ? Внешний провайдер может расходовать средства; исторические вакансии не будут обработаны.`
               : confirmAction === 'test'

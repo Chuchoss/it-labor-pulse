@@ -57,6 +57,7 @@ func Normalize(d Draft, opts Options) (NormalizeResult, error) {
 		PublishedAt:          d.PublishedAt,
 		CollectedAt:          d.CollectedAt,
 		DescriptionText:      d.DescriptionText,
+		DescriptionTruncated: d.DescriptionTruncated,
 	}
 	if roleOK {
 		v.RoleID = &roleID

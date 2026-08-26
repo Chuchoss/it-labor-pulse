@@ -220,6 +220,9 @@ export interface AssistantStatus {
   eligible: number
   matched: number
   ai_calls: number
+  ai_matches: number
+  ai_failures: number
+  ai_skipped: number
   skipped: number
   error_category?: string
   cursor_source?: string
