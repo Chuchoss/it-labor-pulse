@@ -96,6 +96,26 @@ function MetricCard({
   )
 }
 
+function RankingCardHeader({
+  title,
+  subtitle,
+}: {
+  title: string
+  subtitle: ReactNode
+}) {
+  return (
+    <Box
+      className="dashboard-ranking-card__header"
+      sx={{
+        minHeight: { lg: (theme) => theme.spacing(5.5) },
+      }}
+    >
+      <Typography variant="h6">{title}</Typography>
+      {subtitle}
+    </Box>
+  )
+}
+
 function RankingCard({
   kind,
   title,
@@ -133,20 +153,26 @@ function RankingCard({
   )
 
   return (
-    <Card variant="outlined">
-      <CardContent>
-        <Typography variant="h6">{title}</Typography>
-        <Tooltip
-          title={
-            metric === 'salary'
-              ? `Медиана offered salary, нормализованная в ${params.currency} net. ${ranking.data?.pages[0]?.rate_date ? `Курс ЦБ на ${ranking.data.pages[0].rate_date}. ` : ''}Приблизительный официальный дневной курс; не live-курс и не курс выплаты. Минимальная выборка: ${minimumSample}.`
-              : 'Доля считается среди активных вакансий соответствующего рейтинга за период.'
+    <Card variant="outlined" sx={{ display: 'flex' }}>
+      <CardContent sx={{ flex: 1 }}>
+        <RankingCardHeader
+          title={title}
+          subtitle={
+            <Tooltip
+              title={
+                metric === 'salary'
+                  ? `Медиана offered salary, нормализованная в ${params.currency} net. ${ranking.data?.pages[0]?.rate_date ? `Курс ЦБ на ${ranking.data.pages[0].rate_date}. ` : ''}Приблизительный официальный дневной курс; не live-курс и не курс выплаты. Минимальная выборка: ${minimumSample}.`
+                  : 'Доля считается среди активных вакансий соответствующего рейтинга за период.'
+              }
+            >
+              <Typography variant="body2" color="text.secondary">
+                {metric === 'count'
+                  ? 'Активные вакансии за период'
+                  : `Медианная зарплата, ${params.currency} net`}
+              </Typography>
+            </Tooltip>
           }
-        >
-          <Typography variant="body2" color="text.secondary" sx={{ display: 'inline-block' }}>
-            {metric === 'count' ? 'Активные вакансии за период' : `Медианная зарплата, ${params.currency} net`}
-          </Typography>
-        </Tooltip>
+        />
         <ToggleButtonGroup
           exclusive
           size="small"
@@ -389,6 +415,7 @@ export function DashboardPage() {
           display: 'grid',
           gridTemplateColumns: { xs: '1fr', lg: 'repeat(3, minmax(0, 1fr))' },
           gap: 2,
+          alignItems: 'stretch',
         }}
       >
         <Card variant="outlined" sx={{ gridColumn: { lg: '1 / -1' } }}>
@@ -433,12 +460,24 @@ export function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card variant="outlined">
-          <CardContent>
-            <Typography variant="h6">Топ навыков</Typography>
-            <Typography variant="body2" color="text.secondary">
-              Частота в вакансиях за период
-            </Typography>
+        <Card variant="outlined" sx={{ display: 'flex' }}>
+          <CardContent sx={{ flex: 1 }}>
+            <RankingCardHeader
+              title="Топ навыков"
+              subtitle={
+                <Typography variant="body2" color="text.secondary">
+                  Частота в вакансиях за период
+                </Typography>
+              }
+            />
+            <Box
+              className="dashboard-ranking-card__controls-spacer"
+              aria-hidden="true"
+              sx={{
+                display: { xs: 'none', lg: 'block' },
+                height: (theme) => theme.spacing(7),
+              }}
+            />
             {skills.isPending && (
               <Stack spacing={2} sx={{ mt: 3 }}>
                 {[1, 2, 3, 4, 5].map((item) => (

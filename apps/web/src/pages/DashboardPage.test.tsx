@@ -210,4 +210,13 @@ describe('DashboardPage', () => {
     expect(screen.getByText('8 · 40%')).toBeInTheDocument()
     expect(within(languageCard).queryByText('10 · 45%')).not.toBeInTheDocument()
   })
+
+  it('uses the shared ranking header and desktop controls spacer', async () => {
+    renderPage(<DashboardPage />)
+
+    const headers = await screen.findAllByText(/Топ навыков|Языки программирования|Управленческие IT-роли/)
+    expect(headers).toHaveLength(3)
+    expect(document.querySelectorAll('.dashboard-ranking-card__header')).toHaveLength(3)
+    expect(document.querySelectorAll('.dashboard-ranking-card__controls-spacer')).toHaveLength(1)
+  })
 })
