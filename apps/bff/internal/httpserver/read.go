@@ -199,19 +199,20 @@ func (h *ReadHandler) listVacancies(w http.ResponseWriter, r *http.Request) {
 		h.validationError(w, r, err)
 		return
 	}
-	roleID := strings.TrimSpace(values.Get("role_id"))
-	if roleID != "" {
-		if err := validateUUID("role_id", roleID); err != nil {
-			h.validationError(w, r, err)
-			return
-		}
+	roleIDs, err := parseUUIDList(values, "role_id", 20)
+	if err != nil {
+		h.validationError(w, r, err)
+		return
 	}
-	regionID := strings.TrimSpace(values.Get("region_id"))
-	if regionID != "" {
-		if err := validateUUID("region_id", regionID); err != nil {
-			h.validationError(w, r, err)
-			return
-		}
+	regionIDs, err := parseUUIDList(values, "region_id", 20)
+	if err != nil {
+		h.validationError(w, r, err)
+		return
+	}
+	skillIDs, err := parseUUIDList(values, "skill_id", 20)
+	if err != nil {
+		h.validationError(w, r, err)
+		return
 	}
 	source := strings.TrimSpace(values.Get("source"))
 	if err := validateSource(source); err != nil {
@@ -223,15 +224,37 @@ func (h *ReadHandler) listVacancies(w http.ResponseWriter, r *http.Request) {
 		h.validationError(w, r, err)
 		return
 	}
+	salaryMin, err := parseOptionalFloat(values, "salary_min", 0, 2_000_000)
+	if err != nil {
+		h.validationError(w, r, err)
+		return
+	}
+	salaryMax, err := parseOptionalFloat(values, "salary_max", 0, 2_000_000)
+	if err != nil {
+		h.validationError(w, r, err)
+		return
+	}
+	if salaryMin != nil && salaryMax != nil && *salaryMin > *salaryMax {
+		h.validationError(w, r, fieldError{"salary_min", "must not exceed salary_max"})
+		return
+	}
+	query := strings.TrimSpace(values.Get("q"))
+	if len([]rune(query)) > 200 {
+		h.validationError(w, r, fieldError{"q", "must be at most 200 characters"})
+		return
+	}
 	if h.requireService(w, r) {
 		return
 	}
 	result, err := h.service.ListVacancies(r.Context(), readapi.VacancyFilter{
-		Query:      strings.TrimSpace(values.Get("q")),
-		RoleID:     roleID,
-		RegionID:   regionID,
+		Query:      query,
+		RoleIDs:    roleIDs,
+		RegionIDs:  regionIDs,
+		SkillIDs:   skillIDs,
 		Source:     source,
 		OnlyActive: onlyActive,
+		SalaryMin:  salaryMin,
+		SalaryMax:  salaryMax,
 		Page:       page,
 	})
 	h.respond(w, r, result, err)
@@ -390,6 +413,43 @@ func parseBool(values url.Values, field string, fallback bool) (bool, error) {
 	default:
 		return false, fieldError{field, "must be true or false"}
 	}
+}
+
+func parseOptionalFloat(values url.Values, field string, minimum, maximum float64) (*float64, error) {
+	raw := strings.TrimSpace(values.Get(field))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < minimum || value > maximum {
+		return nil, fieldError{field, "is outside the allowed range"}
+	}
+	return &value, nil
+}
+
+func parseUUIDList(values url.Values, field string, maximum int) ([]string, error) {
+	result := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, raw := range values[field] {
+		for _, part := range strings.Split(raw, ",") {
+			value := strings.TrimSpace(part)
+			if value == "" {
+				continue
+			}
+			if err := validateUUID(field, value); err != nil {
+				return nil, err
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			result = append(result, value)
+			if len(result) > maximum {
+				return nil, fieldError{field, "has too many values"}
+			}
+		}
+	}
+	return result, nil
 }
 
 func queryDefault(values url.Values, field, fallback string) string {

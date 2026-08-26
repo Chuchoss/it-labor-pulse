@@ -106,11 +106,21 @@ Demand counts **не** зависят от outlier-фильтра.
 
 ## Role matching
 
+### Продуктовый scope HH (Phase 1)
+
+До общего role matching HH-вакансия проходит строгую проверку
+`professional_roles[]` по allowlist из [08](./08-integrations-and-extensibility.md).
+Хотя бы один официальный ID должен быть разрешён; иначе запись не активируется и
+не попадает в публичную выдачу. Пустой/неразрешённый mapping не уточняется по
+title. Для multi-role выбирается разрешённая роль по стабильному приоритету.
+Счётчик `excluded_out_of_scope` агрегируется без title/employer/описания.
+
 Порядок:
 
 1. HH `professional_roles[]` → lookup `role_aliases` (`source=hh`, pattern = external role id).
 2. Иначе нормализованный `title` (lowercase, ё→е, trim punctuation) → pattern / contains rules в `role_aliases`.
-3. Иначе `role_id = null` (вакансия живёт в OLTP; в role breakdown не попадает или попадает в bucket `unmapped`).
+3. Иначе `role_id = null`; для HH такая запись исключена из активного
+   продуктового списка до классификации.
 
 Правила:
 
@@ -165,6 +175,7 @@ Upsert `employers` by `(source, external_id)`; имя — из raw (fake в фи
 | Событие | Поля |
 |---------|------|
 | Вакансия пришла в ingest | `is_active=true`, `deleted_at=null`, обновить `collected_at` |
+| HH-вакансия вне утверждённого role scope | не upsert/reactivate; при reconciliation `is_active=false` |
 | Нет в источнике N дней / full sync miss | `is_active=false` |
 | Ops hide | `deleted_at=now()` |
 

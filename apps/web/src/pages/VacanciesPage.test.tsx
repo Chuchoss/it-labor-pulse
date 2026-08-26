@@ -1,4 +1,4 @@
-import { act, fireEvent, screen } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { delay, http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderPage } from '../test/render'
@@ -109,7 +109,7 @@ describe('VacanciesPage', () => {
     expect((await screen.findAllByText('Санкт-Петербург')).length).toBeGreaterThan(0)
     expect(screen.queryByText('region-2')).not.toBeInTheDocument()
     expect(requestedRegionPages).toEqual(['1', '2'])
-    expect(requestedRegionUrls.every((url) => url.includes('from=2026-08-25'))).toBe(true)
+    expect(requestedRegionUrls.every((url) => url.includes('from=2000-01-01'))).toBe(true)
     expect(screen.getByText('Загружено 1 из 3')).toBeInTheDocument()
 
     intersectSentinel()
@@ -157,6 +157,32 @@ describe('VacanciesPage', () => {
     expect((await screen.findAllByText('Data engineer')).length).toBeGreaterThan(0)
     expect(screen.queryByText('Initial vacancy')).not.toBeInTheDocument()
     expect(requestedQueries).toEqual(['', 'Data engineer'])
+  })
+
+  it('serializes combined URL filters and clears them', async () => {
+    const requestedUrls: string[] = []
+    server.use(
+      http.get('*/api/v1/vacancies', ({ request }) => {
+        requestedUrls.push(request.url)
+        return HttpResponse.json({ data: [], page: 1, page_size: 20, total: 0 })
+      }),
+    )
+    const role = '10000000-0000-4000-8000-000000000001'
+    const region = '20000000-0000-4000-8000-000000000001'
+    const skill = '30000000-0000-4000-8000-000000000001'
+    renderPage(
+      <VacanciesPage />,
+      `/vacancies?role_id=${role}&region_id=${region}&skill_id=${skill}&salary_min=100000&salary_max=300000`,
+    )
+    expect(await screen.findByText('Вакансии не найдены')).toBeInTheDocument()
+    expect(screen.getByText('Активных фильтров: 5')).toBeInTheDocument()
+    expect(requestedUrls[0]).toContain(`role_id=${role}`)
+    expect(requestedUrls[0]).toContain(`region_id=${region}`)
+    expect(requestedUrls[0]).toContain(`skill_id=${skill}`)
+    expect(requestedUrls[0]).toContain('salary_min=100000')
+    fireEvent.click(screen.getByRole('button', { name: 'Сбросить все' }))
+    await waitFor(() => expect(requestedUrls.length).toBeGreaterThan(1))
+    expect(requestedUrls.at(-1)).not.toContain('salary_min')
   })
 
   it('retries a failed next page from the fallback button', async () => {

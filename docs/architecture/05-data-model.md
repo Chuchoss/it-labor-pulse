@@ -107,6 +107,11 @@ erDiagram
 | `family` | `TEXT` NULL | backend, data, ... |
 | `is_active` | `BOOLEAN` NOT NULL DEFAULT true | |
 
+Для HH Phase 1 `family` также служит продуктовым scope:
+`software_development`, `analytics`, `quality_assurance`. Только эти семейства
+попадают в публичный vacancy list; официальный внешний ID остаётся в
+`role_aliases`. Это не title-классификация.
+
 ### `role_aliases`
 
 | Column | Type | Notes |
@@ -336,6 +341,9 @@ Vacancy demand Phase 1 живёт в `vacancies` / CH snapshots и API `/trends/
 | Справочники `is_active` | Отключение роли/скилла без удаления истории |
 
 Аналитические запросы по «текущему рынку» фильтруют `vacancies.is_active = true AND deleted_at IS NULL`.
+Reconciliation role policy также ставит HH-вакансии вне продуктового scope или
+без разрешённого официального mapping в `is_active=false`, сохраняя историю,
+employer и skills.
 
 ---
 

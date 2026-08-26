@@ -200,6 +200,14 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 				_ = r.Store.RecordError(ctx, runID, item.ID, "adapt", err.Error())
 				continue
 			}
+			allowedRole, inScope := hh.AllowedProfessionalRole(draft.ProfessionalRoleIDs)
+			if !inScope {
+				stats.Excluded++
+				continue
+			}
+			// Keep normalization deterministic for multi-role vacancies and do
+			// not allow a secondary out-of-scope alias to become canonical.
+			draft.ProfessionalRoleIDs = []string{allowedRole.ID}
 			res, err := normalize.Normalize(draft, opts)
 			if err != nil {
 				stats.Errors++
@@ -285,6 +293,7 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 		"fetched", stats.Fetched,
 		"upserted", stats.Upserted,
 		"errors", stats.Errors,
+		"excluded_out_of_scope", stats.Excluded,
 	)
 	out := Result{RunID: runID, Status: status, Stats: stats, Completed: completed}
 	if fatal != nil {

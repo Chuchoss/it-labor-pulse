@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,33 @@ func TestRunner_FixtureSource(t *testing.T) {
 	require.Zero(t, repeated.Stats.Upserted)
 	require.Equal(t, 2, repeated.Stats.Unchanged)
 	require.Len(t, mem.Vacancies, 2)
+}
+
+func TestRunner_ExcludesOutOfScopeAndMissingOfficialRoles(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(moduleRoot(t), "testdata", "hh", "vacancy_detail.json"))
+	require.NoError(t, err)
+	tests := []struct {
+		name   string
+		detail []byte
+	}{
+		{name: "sales", detail: []byte(strings.Replace(string(raw), `"id": "96"`, `"id": "70"`, 1))},
+		{name: "missing", detail: []byte(strings.Replace(
+			string(raw), `"professional_roles": [`, `"professional_roles": [], "ignored_roles": [`, 1,
+		))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mem := store.NewMemory()
+			r := &pipeline.Runner{Source: &pagingSource{pages: 1, detail: tt.detail}, Store: mem}
+			res, runErr := r.Run(context.Background(), pipeline.Params{MaxPages: 1})
+			require.NoError(t, runErr)
+			require.Equal(t, 1, res.Stats.Fetched)
+			require.Equal(t, 1, res.Stats.Excluded)
+			require.Zero(t, res.Stats.Upserted)
+			require.Empty(t, mem.Vacancies)
+			require.Empty(t, mem.Errors)
+		})
+	}
 }
 
 func TestRunner_httptest_WithBackoffPath(t *testing.T) {

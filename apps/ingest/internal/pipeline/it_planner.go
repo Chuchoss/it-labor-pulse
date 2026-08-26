@@ -78,7 +78,11 @@ func PlanIT(ctx context.Context, src RoleCatalogSource, opts ITPlanOptions) (ITP
 		opts.MaxRequests = 1024
 	}
 
-	roles, err := src.ProfessionalRoles(ctx, opts.CategoryID)
+	catalogRoles, err := src.ProfessionalRoles(ctx, opts.CategoryID)
+	if err != nil {
+		return ITPlan{}, err
+	}
+	roles, err := hh.FilterAllowedRoles(catalogRoles)
 	if err != nil {
 		return ITPlan{}, err
 	}

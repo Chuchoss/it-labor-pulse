@@ -51,11 +51,12 @@ func (m *Memory) FinishRun(_ context.Context, id, status string, stats Stats, er
 	}
 	run.Status = status
 	run.Stats = map[string]any{
-		"fetched":   stats.Fetched,
-		"upserted":  stats.Upserted,
-		"unchanged": stats.Unchanged,
-		"errors":    stats.Errors,
-		"pages":     stats.Pages,
+		"fetched":               stats.Fetched,
+		"upserted":              stats.Upserted,
+		"unchanged":             stats.Unchanged,
+		"excluded_out_of_scope": stats.Excluded,
+		"errors":                stats.Errors,
+		"pages":                 stats.Pages,
 	}
 	run.ErrorMsg = errMsg
 	m.Runs[id] = run

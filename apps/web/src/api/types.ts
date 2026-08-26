@@ -87,6 +87,18 @@ export interface RegionPage {
   total: number
 }
 
+export interface RoleStat {
+  role_id?: string
+  title?: string
+}
+
+export interface RolePage {
+  data: RoleStat[]
+  page: number
+  page_size: number
+  total: number
+}
+
 export interface ApiErrorBody {
   error?: {
     code?: string

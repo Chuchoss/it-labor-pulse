@@ -127,10 +127,13 @@ type TopSkills struct {
 
 type VacancyFilter struct {
 	Query      string
-	RoleID     string
-	RegionID   string
+	RoleIDs    []string
+	RegionIDs  []string
+	SkillIDs   []string
 	Source     string
 	OnlyActive bool
+	SalaryMin  *float64
+	SalaryMax  *float64
 	Page       Page
 }
 

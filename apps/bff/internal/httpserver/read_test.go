@@ -109,6 +109,9 @@ func TestReadHandlerValidation(t *testing.T) {
 		{name: "invalid_active", path: "/api/v1/vacancies?only_active=1"},
 		{name: "invalid_source", path: "/api/v1/vacancies?source=unknown"},
 		{name: "invalid_role_uuid", path: "/api/v1/vacancies?role_id=role_go"},
+		{name: "invalid_skill_uuid", path: "/api/v1/vacancies?skill_id=skill_go"},
+		{name: "invalid_salary", path: "/api/v1/vacancies?salary_min=-1"},
+		{name: "reversed_salary", path: "/api/v1/vacancies?salary_min=200000&salary_max=100000"},
 		{name: "invalid_sort", path: "/api/v1/roles?from=2026-08-01&to=2026-08-26&sort=title"},
 		{name: "invalid_grain", path: "/api/v1/trends/salaries?from=2026-08-01&to=2026-08-26&grain=year"},
 		{name: "invalid_limit", path: "/api/v1/skills/top?from=2026-08-01&to=2026-08-26&limit=0"},
@@ -165,6 +168,33 @@ func TestVacanciesDefaultsAndResponseEnvelope(t *testing.T) {
 	require.Equal(t, "vacancies-request", recorder.Header().Get("X-Request-Id"))
 	require.NotEmpty(t, recorder.Header().Get("Traceparent"))
 	require.JSONEq(t, `{"data":[],"page":1,"page_size":20,"total":0}`, recorder.Body.String())
+}
+
+func TestVacancyFilterCombination(t *testing.T) {
+	t.Parallel()
+	const (
+		roleOne   = "10000000-0000-4000-8000-000000000001"
+		roleTwo   = "10000000-0000-4000-8000-000000000002"
+		regionOne = "20000000-0000-4000-8000-000000000001"
+		skillOne  = "30000000-0000-4000-8000-000000000001"
+	)
+	service := stubReadService{
+		listVacancies: func(_ context.Context, filter readapi.VacancyFilter) (readapi.VacancyPage, error) {
+			require.Equal(t, []string{roleOne, roleTwo}, filter.RoleIDs)
+			require.Equal(t, []string{regionOne}, filter.RegionIDs)
+			require.Equal(t, []string{skillOne}, filter.SkillIDs)
+			require.Equal(t, 100000.0, *filter.SalaryMin)
+			require.Equal(t, 300000.0, *filter.SalaryMax)
+			return readapi.VacancyPage{Data: []readapi.Vacancy{}, Page: 1, PageSize: 20}, nil
+		},
+	}
+	server := New(Options{Addr: ":0", ReadService: service})
+	path := "/api/v1/vacancies?role_id=" + roleOne + "," + roleTwo +
+		"&region_id=" + regionOne + "&skill_id=" + skillOne +
+		"&salary_min=100000&salary_max=300000"
+	recorder := httptest.NewRecorder()
+	server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+	require.Equal(t, http.StatusOK, recorder.Code)
 }
 
 func TestReadHandlerErrorMapping(t *testing.T) {
@@ -269,6 +299,10 @@ func expectedField(path string) string {
 		return "source"
 	case stringsContains(path, "role_id"):
 		return "role_id"
+	case stringsContains(path, "skill_id"):
+		return "skill_id"
+	case stringsContains(path, "salary_min"):
+		return "salary_min"
 	case stringsContains(path, "sort"):
 		return "sort"
 	case stringsContains(path, "grain"):
@@ -294,6 +328,12 @@ func expectedReason(path string) string {
 		return "is not supported"
 	case stringsContains(path, "role_id"):
 		return "must be a UUID"
+	case stringsContains(path, "skill_id"):
+		return "must be a UUID"
+	case stringsContains(path, "salary_min=200000"):
+		return "must not exceed salary_max"
+	case stringsContains(path, "salary_min"):
+		return "is outside the allowed range"
 	case stringsContains(path, "sort"):
 		return "must be count or median_salary"
 	default:

@@ -16,6 +16,14 @@ type planningSource struct {
 	found func(hh.SearchQuery) int
 }
 
+func allowedCatalog() []hh.ProfessionalRole {
+	result := make([]hh.ProfessionalRole, 0, len(hh.AllowedRoles()))
+	for _, role := range hh.AllowedRoles() {
+		result = append(result, hh.ProfessionalRole{ID: role.ID, Name: role.ExpectedName})
+	}
+	return result
+}
+
 func (s planningSource) ProfessionalRoles(context.Context, string) ([]hh.ProfessionalRole, error) {
 	return s.roles, nil
 }
@@ -29,7 +37,7 @@ func TestPlanITSelectsOfficialRolesAndSplitsWithoutDateGaps(t *testing.T) {
 	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	to := from.Add(9 * time.Second)
 	src := planningSource{
-		roles: []hh.ProfessionalRole{{ID: "96", Name: "Developer"}, {ID: "10", Name: "Analyst"}},
+		roles: append(allowedCatalog(), hh.ProfessionalRole{ID: "107", Name: "Руководитель проектов"}),
 		found: func(q hh.SearchQuery) int {
 			if q.DateFrom.IsZero() {
 				return 2001
@@ -38,12 +46,12 @@ func TestPlanITSelectsOfficialRolesAndSplitsWithoutDateGaps(t *testing.T) {
 		},
 	}
 	plan, err := pipeline.PlanIT(context.Background(), src, pipeline.ITPlanOptions{
-		Area: "113", Earliest: from, Now: to, MaxDepth: 4, MaxPartitions: 10, MaxRequests: 20,
+		Area: "113", Earliest: from, Now: to, MaxDepth: 4, MaxPartitions: 20, MaxRequests: 30,
 	})
 	require.NoError(t, err)
-	require.Len(t, plan.Roles, 2)
-	require.Len(t, plan.Partitions, 4)
-	require.Equal(t, "10", plan.Partitions[0].RoleID)
+	require.Len(t, plan.Roles, 7)
+	require.Len(t, plan.Partitions, 14)
+	require.Equal(t, "104", plan.Partitions[0].RoleID)
 	for i := 0; i < len(plan.Partitions); i += 2 {
 		left, right := plan.Partitions[i], plan.Partitions[i+1]
 		require.Equal(t, left.To.Add(time.Second), right.From)
@@ -54,18 +62,18 @@ func TestPlanITSelectsOfficialRolesAndSplitsWithoutDateGaps(t *testing.T) {
 
 func TestPlanITKeepsPartitionAtCap(t *testing.T) {
 	src := planningSource{
-		roles: []hh.ProfessionalRole{{ID: "96", Name: "Developer"}},
+		roles: allowedCatalog(),
 		found: func(hh.SearchQuery) int { return hh.MaxSearchResults },
 	}
-	plan, err := pipeline.PlanIT(context.Background(), src, pipeline.ITPlanOptions{MaxRequests: 5})
+	plan, err := pipeline.PlanIT(context.Background(), src, pipeline.ITPlanOptions{MaxRequests: 10})
 	require.NoError(t, err)
-	require.Len(t, plan.Partitions, 1)
-	require.Equal(t, hh.MaxSearchResults, plan.EstimatedResults)
+	require.Len(t, plan.Partitions, 7)
+	require.Equal(t, 7*hh.MaxSearchResults, plan.EstimatedResults)
 }
 
 func TestPlanITFailsAtSafetyCeilings(t *testing.T) {
 	src := planningSource{
-		roles: []hh.ProfessionalRole{{ID: "96", Name: "Developer"}},
+		roles: allowedCatalog(),
 		found: func(hh.SearchQuery) int { return hh.MaxSearchResults + 1 },
 	}
 	_, err := pipeline.PlanIT(context.Background(), src, pipeline.ITPlanOptions{

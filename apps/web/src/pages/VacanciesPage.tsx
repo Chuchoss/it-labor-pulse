@@ -1,6 +1,7 @@
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import {
   Box,
+  Autocomplete,
   Card,
   CardContent,
   Chip,
@@ -23,7 +24,7 @@ import {
   Button,
 } from '@mui/material'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import type { Vacancy } from '../api/types'
@@ -55,19 +56,34 @@ function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
 
 const FIRST_PAGE = 1
 
+function csvParam(value: string | null) {
+  return value?.split(',').map((item) => item.trim()).filter(Boolean) ?? []
+}
+
 export function VacanciesPage() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const query = searchParams.get('q') || ''
   const source = searchParams.get('source') || ''
   const onlyActive = searchParams.get('only_active') !== 'false'
+  const roleParam = searchParams.get('role_id')
+  const regionParam = searchParams.get('region_id')
+  const skillParam = searchParams.get('skill_id')
+  const roleIDs = useMemo(() => csvParam(roleParam), [roleParam])
+  const regionIDs = useMemo(() => csvParam(regionParam), [regionParam])
+  const skillIDs = useMemo(() => csvParam(skillParam), [skillParam])
+  const salaryMin = searchParams.get('salary_min') || ''
+  const salaryMax = searchParams.get('salary_max') || ''
   const pageSize = Math.min(Math.max(Number(searchParams.get('page_size')) || 20, 1), 100)
   const [draftQuery, setDraftQuery] = useState(query)
+  const [draftSalaryMin, setDraftSalaryMin] = useState(salaryMin)
+  const [draftSalaryMax, setDraftSalaryMax] = useState(salaryMax)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
 
   const vacancyQueryKey = useMemo(
-    () => ['vacancies', { query, source, onlyActive, pageSize }] as const,
-    [onlyActive, pageSize, query, source],
+    () =>
+      ['vacancies', { query, source, onlyActive, pageSize, roleIDs, regionIDs, skillIDs, salaryMin, salaryMax }] as const,
+    [onlyActive, pageSize, query, regionIDs, roleIDs, salaryMax, salaryMin, skillIDs, source],
   )
   const vacancies = useInfiniteQuery({
     queryKey: vacancyQueryKey,
@@ -76,6 +92,11 @@ export function VacanciesPage() {
       api.vacancies(
         {
           q: query || undefined,
+          role_id: roleIDs.join(',') || undefined,
+          region_id: regionIDs.join(',') || undefined,
+          skill_id: skillIDs.join(',') || undefined,
+          salary_min: salaryMin ? Number(salaryMin) : undefined,
+          salary_max: salaryMax ? Number(salaryMax) : undefined,
           source: source || undefined,
           only_active: onlyActive,
           page: pageParam,
@@ -110,18 +131,23 @@ export function VacanciesPage() {
     return () => observer.disconnect()
   }, [loadNextPage, vacancies.hasNextPage, vacancies.isFetchingNextPage])
 
-  const regionPeriod = useMemo(() => {
-    const dates = rows
-      .map((vacancy) => vacancy.published_at?.slice(0, 10))
-      .filter((date): date is string => Boolean(date && /^\d{4}-\d{2}-\d{2}$/.test(date)))
-      .sort()
-    return dates.length > 0 ? { from: dates[0], to: dates[dates.length - 1] } : undefined
-  }, [rows])
+  const dictionaryPeriod = useMemo(
+    () => ({ from: '2000-01-01', to: new Date().toISOString().slice(0, 10) }),
+    [],
+  )
   const regions = useQuery({
-    queryKey: ['regions', 'dictionary', regionPeriod],
-    queryFn: ({ signal }) =>
-      regionPeriod ? api.regions(regionPeriod, signal) : Promise.resolve([]),
-    enabled: Boolean(regionPeriod),
+    queryKey: ['regions', 'dictionary', dictionaryPeriod],
+    queryFn: ({ signal }) => api.regions(dictionaryPeriod, signal),
+    staleTime: 5 * 60 * 1000,
+  })
+  const roles = useQuery({
+    queryKey: ['roles', 'dictionary', dictionaryPeriod],
+    queryFn: ({ signal }) => api.roles(dictionaryPeriod, signal),
+    staleTime: 5 * 60 * 1000,
+  })
+  const skills = useQuery({
+    queryKey: ['skills', 'vacancy-dictionary', dictionaryPeriod],
+    queryFn: ({ signal }) => api.vacancySkills(dictionaryPeriod, signal),
     staleTime: 5 * 60 * 1000,
   })
   const regionNames = useMemo(
@@ -135,7 +161,7 @@ export function VacanciesPage() {
     [regions.data],
   )
 
-  const updateParams = (updates: Record<string, string | undefined>) => {
+  const updateParams = useCallback((updates: Record<string, string | undefined>) => {
     const next = new URLSearchParams(searchParams)
     next.delete('page')
     Object.entries(updates).forEach(([key, value]) => {
@@ -143,7 +169,24 @@ export function VacanciesPage() {
       else next.set(key, value)
     })
     setSearchParams(next)
-  }
+  }, [searchParams, setSearchParams])
+
+  useEffect(() => {
+    if (draftQuery === query) return
+    const timer = window.setTimeout(
+      () => updateParams({ q: draftQuery.trim() || undefined }),
+      400,
+    )
+    return () => window.clearTimeout(timer)
+  }, [draftQuery, query, updateParams])
+
+  const roleOptions = roles.data ?? []
+  const regionOptions = regions.data ?? []
+  const skillOptions = skills.data?.data ?? []
+  const activeFilterCount =
+    Number(Boolean(query)) + roleIDs.length + regionIDs.length + skillIDs.length +
+    Number(Boolean(salaryMin)) + Number(Boolean(salaryMax)) + Number(Boolean(source)) +
+    Number(!onlyActive)
 
   return (
     <Stack spacing={3}>
@@ -178,7 +221,11 @@ export function VacanciesPage() {
             }}
             onSubmit={(event) => {
               event.preventDefault()
-              updateParams({ q: draftQuery.trim() || undefined })
+              updateParams({
+                q: draftQuery.trim() || undefined,
+                salary_min: draftSalaryMin || undefined,
+                salary_max: draftSalaryMax || undefined,
+              })
             }}
           >
             <TextField
@@ -189,6 +236,66 @@ export function VacanciesPage() {
               size="small"
               fullWidth
               sx={{ minWidth: 0, flex: { md: '1 1 auto' }, width: { md: 'auto' } }}
+            />
+            <Autocomplete
+              multiple
+              size="small"
+              options={regionOptions}
+              loading={regions.isLoading}
+              value={regionOptions.filter((option) => option.region_id && regionIDs.includes(option.region_id))}
+              getOptionLabel={(option) => option.title || 'Регион'}
+              isOptionEqualToValue={(option, value) => option.region_id === value.region_id}
+              onChange={(_, values) =>
+                updateParams({ region_id: values.flatMap((item) => item.region_id ? [item.region_id] : []).join(',') || undefined })
+              }
+              renderInput={(params) => <TextField {...params} label="Регионы" />}
+              sx={{ minWidth: { md: 240 }, flex: { md: '1 1 240px' } }}
+            />
+            <Autocomplete
+              multiple
+              size="small"
+              options={roleOptions}
+              loading={roles.isLoading}
+              value={roleOptions.filter((option) => option.role_id && roleIDs.includes(option.role_id))}
+              getOptionLabel={(option) => option.title || 'Роль'}
+              isOptionEqualToValue={(option, value) => option.role_id === value.role_id}
+              onChange={(_, values) =>
+                updateParams({ role_id: values.flatMap((item) => item.role_id ? [item.role_id] : []).join(',') || undefined })
+              }
+              renderInput={(params) => <TextField {...params} label="Роли" />}
+              sx={{ minWidth: { md: 240 }, flex: { md: '1 1 240px' } }}
+            />
+            <Autocomplete
+              multiple
+              size="small"
+              options={skillOptions}
+              loading={skills.isLoading}
+              value={skillOptions.filter((option) => option.skill_id && skillIDs.includes(option.skill_id))}
+              getOptionLabel={(option) => option.name}
+              isOptionEqualToValue={(option, value) => option.skill_id === value.skill_id}
+              onChange={(_, values) =>
+                updateParams({ skill_id: values.flatMap((item) => item.skill_id ? [item.skill_id] : []).join(',') || undefined })
+              }
+              renderInput={(params) => <TextField {...params} label="Стек / навыки (любой)" />}
+              sx={{ minWidth: { md: 280 }, flex: { md: '1 1 280px' } }}
+            />
+            <TextField
+              label="Зарплата от"
+              type="number"
+              value={draftSalaryMin}
+              onChange={(event) => setDraftSalaryMin(event.target.value)}
+              slotProps={{ htmlInput: { min: 0, max: 2000000, step: 10000 } }}
+              size="small"
+              sx={{ width: { xs: '100%', md: 160 } }}
+            />
+            <TextField
+              label="Зарплата до"
+              type="number"
+              value={draftSalaryMax}
+              onChange={(event) => setDraftSalaryMax(event.target.value)}
+              slotProps={{ htmlInput: { min: 0, max: 2000000, step: 10000 } }}
+              size="small"
+              sx={{ width: { xs: '100%', md: 160 } }}
             />
             <FormControl
               size="small"
@@ -232,6 +339,27 @@ export function VacanciesPage() {
             >
               Найти
             </Button>
+            <Button
+              variant="text"
+              disabled={activeFilterCount === 0}
+              onClick={() => {
+                setDraftQuery('')
+                setDraftSalaryMin('')
+                setDraftSalaryMax('')
+                setSearchParams({})
+              }}
+            >
+              Сбросить все
+            </Button>
+          </Stack>
+          <Stack direction="row" useFlexGap sx={{ mt: 1.5, gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Chip size="small" label={`Активных фильтров: ${activeFilterCount}`} />
+            {regions.isError && <Chip size="small" color="warning" label="Справочник регионов недоступен" />}
+            {roles.isError && <Chip size="small" color="warning" label="Справочник ролей недоступен" />}
+            {skills.isError && <Chip size="small" color="warning" label="Справочник навыков недоступен" />}
+            <Typography variant="caption" color="text.secondary">
+              Зарплата: каноническая середина диапазона в RUB, оценка net; без указанной зарплаты не совпадает.
+            </Typography>
           </Stack>
         </CardContent>
       </Card>

@@ -50,6 +50,7 @@ type Stats struct {
 	Fetched   int `json:"fetched"`
 	Upserted  int `json:"upserted"`
 	Unchanged int `json:"unchanged"`
+	Excluded  int `json:"excluded_out_of_scope"`
 	Errors    int `json:"errors"`
 	Pages     int `json:"pages"`
 }

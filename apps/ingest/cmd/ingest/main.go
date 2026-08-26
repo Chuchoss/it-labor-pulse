@@ -32,6 +32,7 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "plan only; do not fetch vacancy details or write vacancies")
 	area := flag.String("area", "", "HH area id (default INGEST_DEFAULT_AREA)")
 	text := flag.String("text", "", "HH search text (default INGEST_DEFAULT_TEXT)")
+	professionalRole := flag.String("professional-role", "", "allowed official HH professional role id")
 	maxPages := flag.Int("max-pages", -1, "max pages; 0 means all available (default INGEST_MAX_PAGES)")
 	perPage := flag.Int("per-page", 0, "HH page size, 1..100 (default INGEST_PER_PAGE)")
 	flag.Parse()
@@ -116,6 +117,14 @@ func main() {
 	if *text != "" {
 		p.Text = *text
 	}
+	if *professionalRole != "" {
+		policyRole, ok := hh.AllowedProfessionalRole([]string{*professionalRole})
+		if !ok {
+			fmt.Fprintln(os.Stderr, "config: professional-role is outside the Phase 1 allowlist")
+			os.Exit(1)
+		}
+		p.ProfessionalRole = policyRole.ID
+	}
 	if *maxPages >= 0 {
 		p.MaxPages = *maxPages
 	}
@@ -123,11 +132,25 @@ func main() {
 		p.PerPage = *perPage
 	}
 
+	runnerOpts := normalize.DefaultOptions()
+	if p.ProfessionalRole != "" {
+		policyRole, _ := hh.AllowedProfessionalRole([]string{p.ProfessionalRole})
+		roleIDs, syncErr := st.SyncRoles(ctx, hh.SourceCode, []store.SourceRole{{
+			ExternalID: policyRole.ID, Title: policyRole.ExpectedName, Family: policyRole.Group,
+		}})
+		if syncErr != nil {
+			log.Error("role_sync_failed", "err", syncErr.Error())
+			os.Exit(1)
+		}
+		runnerOpts.Roles = normalize.MapRoleMatcher{
+			RoleByExternalID: map[string]map[string]string{hh.SourceCode: roleIDs},
+		}
+	}
 	runner := &pipeline.Runner{
 		Source: src,
 		Store:  st,
 		Log:    log,
-		Opts:   normalize.DefaultOptions(),
+		Opts:   runnerOpts,
 	}
 	runCtx, cancelRun := context.WithTimeout(ctx, cfg.RunTimeout)
 	defer cancelRun()
@@ -142,6 +165,7 @@ func main() {
 		"fetched", res.Stats.Fetched,
 		"upserted", res.Stats.Upserted,
 		"unchanged", res.Stats.Unchanged,
+		"excluded_out_of_scope", res.Stats.Excluded,
 		"errors", res.Stats.Errors,
 	)
 }
@@ -178,8 +202,12 @@ func runIT(
 
 	sourceRoles := make([]store.SourceRole, 0, len(plan.Roles))
 	for _, role := range plan.Roles {
+		policyRole, ok := hh.AllowedProfessionalRole([]string{role.ID})
+		if !ok {
+			return fmt.Errorf("it role %s missing from validated policy", role.ID)
+		}
 		sourceRoles = append(sourceRoles, store.SourceRole{
-			ExternalID: role.ID, Title: role.Name, Family: "it",
+			ExternalID: role.ID, Title: role.Name, Family: policyRole.Group,
 		})
 	}
 	roleIDs, err := st.SyncRoles(ctx, hh.SourceCode, sourceRoles)
@@ -234,6 +262,7 @@ func runIT(
 		total.Fetched += result.Stats.Fetched
 		total.Upserted += result.Stats.Upserted
 		total.Unchanged += result.Stats.Unchanged
+		total.Excluded += result.Stats.Excluded
 		total.Errors += result.Stats.Errors
 		total.Pages += result.Stats.Pages
 		remainingRequests -= result.Stats.Fetched + result.Stats.Pages
@@ -259,6 +288,7 @@ func runIT(
 		"fetched", total.Fetched,
 		"upserted", total.Upserted,
 		"unchanged", total.Unchanged,
+		"excluded_out_of_scope", total.Excluded,
 		"errors", total.Errors,
 	)
 	return nil

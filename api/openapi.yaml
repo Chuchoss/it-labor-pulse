@@ -320,8 +320,11 @@ paths:
           in: query
           schema:
             type: string
-        - $ref: "#/components/parameters/RoleIdOptional"
-        - $ref: "#/components/parameters/RegionIdOptional"
+        - $ref: "#/components/parameters/RoleIdsOptional"
+        - $ref: "#/components/parameters/RegionIdsOptional"
+        - $ref: "#/components/parameters/SkillIdsOptional"
+        - $ref: "#/components/parameters/SalaryMinOptional"
+        - $ref: "#/components/parameters/SalaryMaxOptional"
         - $ref: "#/components/parameters/SourceOptional"
         - name: only_active
           in: query
@@ -337,6 +340,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VacancyPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /api/v1/admin/ingest/runs:
     post:
@@ -471,6 +476,52 @@ components:
       in: query
       schema:
         type: string
+    RoleIdsOptional:
+      name: role_id
+      in: query
+      style: form
+      explode: false
+      description: До 20 канонических UUID ролей через запятую; совпадение ANY.
+      schema:
+        type: array
+        maxItems: 20
+        items: { type: string, format: uuid }
+    RegionIdsOptional:
+      name: region_id
+      in: query
+      style: form
+      explode: false
+      description: До 20 канонических UUID регионов через запятую; совпадение ANY.
+      schema:
+        type: array
+        maxItems: 20
+        items: { type: string, format: uuid }
+    SkillIdsOptional:
+      name: skill_id
+      in: query
+      style: form
+      explode: false
+      description: До 20 UUID навыков через запятую; вакансия совпадает хотя бы по одному навыку (ANY).
+      schema:
+        type: array
+        maxItems: 20
+        items: { type: string, format: uuid }
+    SalaryMinOptional:
+      name: salary_min
+      in: query
+      description: Нижняя граница канонической salary_mid в RUB, приведённой к оценке net. Вакансии без salary не совпадают.
+      schema:
+        type: number
+        minimum: 0
+        maximum: 2000000
+    SalaryMaxOptional:
+      name: salary_max
+      in: query
+      description: Верхняя граница канонической salary_mid в RUB, приведённой к оценке net. Вакансии без salary не совпадают.
+      schema:
+        type: number
+        minimum: 0
+        maximum: 2000000
     RoleIdPath:
       name: role_id
       in: path
@@ -844,6 +895,9 @@ components:
       type: object
       properties:
         fetched: { type: integer }
+        excluded_out_of_scope:
+          type: integer
+          description: HH-вакансии без разрешённой официальной professional role; агрегат без PII.
         published:
           type: integer
           description: Число записей, переданных следующему этапу pipeline (in-process в Phase 1 или Kafka в Phase 2).

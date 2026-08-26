@@ -44,7 +44,7 @@ func TestPostgresReadQueries(t *testing.T) {
 	var roleID, regionID, skillID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO roles (slug, title, family)
-		VALUES ($1, 'Synthetic Backend Role', 'backend')
+		VALUES ($1, 'Synthetic Backend Role', 'software_development')
 		RETURNING id::text
 	`, fmt.Sprintf("bff-role-%d", suffix)).Scan(&roleID)
 	require.NoError(t, err)
@@ -83,10 +83,22 @@ func TestPostgresReadQueries(t *testing.T) {
 		skillID,
 	)
 	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO vacancies (
+			source, external_id, title, role_id, region_id,
+			published_at, collected_at, is_active
+		) VALUES ($1, $2, 'Synthetic Missing Salary', $3::uuid, $4::uuid, $5, $5, true)
+	`, source, fmt.Sprintf("missing-salary-%d", suffix), roleID, regionID, published)
+	require.NoError(t, err)
 
 	repository := NewPostgres(tx)
 	page, err := repository.ListVacancies(ctx, readapi.VacancyFilter{
 		Query:      "Synthetic Go",
+		RoleIDs:    []string{roleID},
+		RegionIDs:  []string{regionID},
+		SkillIDs:   []string{skillID},
+		SalaryMin:  floatPointer(100000),
+		SalaryMax:  floatPointer(200000),
 		OnlyActive: true,
 		Page:       readapi.Page{Number: 1, Size: 10},
 	})
@@ -95,6 +107,28 @@ func TestPostgresReadQueries(t *testing.T) {
 	require.Len(t, page.Data, 1)
 	require.Equal(t, vacancyID, page.Data[0].ID)
 	require.Equal(t, []string{"Synthetic Skill"}, page.Data[0].Skills)
+
+	allRoleRows, err := repository.ListVacancies(ctx, readapi.VacancyFilter{
+		RoleIDs: []string{roleID},
+		Page:    readapi.Page{Number: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, allRoleRows.Total)
+	salaryRows, err := repository.ListVacancies(ctx, readapi.VacancyFilter{
+		RoleIDs:   []string{roleID},
+		SalaryMin: floatPointer(100000),
+		Page:      readapi.Page{Number: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, salaryRows.Total)
+
+	noSalaryMatch, err := repository.ListVacancies(ctx, readapi.VacancyFilter{
+		SalaryMin: floatPointer(200001),
+		RoleIDs:   []string{roleID},
+		Page:      readapi.Page{Number: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	require.Zero(t, noSalaryMatch.Total)
 
 	filter := readapi.AnalyticsFilter{
 		Period: readapi.Period{
@@ -105,8 +139,8 @@ func TestPostgresReadQueries(t *testing.T) {
 	}
 	summary, err := repository.Dashboard(ctx, filter)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, summary.VacanciesActive)
-	require.EqualValues(t, 1, summary.VacanciesNew)
+	require.EqualValues(t, 2, summary.VacanciesActive)
+	require.EqualValues(t, 2, summary.VacanciesNew)
 	require.Equal(t, 150000.0, summary.MedianSalary)
 	require.EqualValues(t, 1, summary.SalarySample)
 
@@ -119,7 +153,7 @@ func TestPostgresReadQueries(t *testing.T) {
 	role, err := repository.GetRole(ctx, roleID, filter)
 	require.NoError(t, err)
 	require.Equal(t, roleID, role.RoleID)
-	require.EqualValues(t, 1, role.VacanciesCount)
+	require.EqualValues(t, 2, role.VacanciesCount)
 
 	dimensionFilter := filter
 	dimensionFilter.Source = ""
@@ -135,7 +169,7 @@ func TestPostgresReadQueries(t *testing.T) {
 	region, err := repository.GetRegion(ctx, regionID, dimensionFilter)
 	require.NoError(t, err)
 	require.Equal(t, regionID, region.RegionID)
-	require.EqualValues(t, 1, region.VacanciesCount)
+	require.EqualValues(t, 2, region.VacanciesCount)
 
 	salaries, err := repository.SalaryTrends(ctx, dimensionFilter, "month")
 	require.NoError(t, err)
@@ -150,5 +184,7 @@ func TestPostgresReadQueries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, skills.Data, 1)
 	require.Equal(t, skillID, skills.Data[0].SkillID)
-	require.Equal(t, 1.0, skills.Data[0].Share)
+	require.Equal(t, 0.5, skills.Data[0].Share)
 }
+
+func floatPointer(value float64) *float64 { return &value }

@@ -50,6 +50,14 @@ export const handlers = [
       total: 0,
     }),
   ),
+  http.get('*/api/v1/roles', () =>
+    HttpResponse.json({
+      data: [],
+      page: 1,
+      page_size: 100,
+      total: 0,
+    }),
+  ),
   http.get('*/api/v1/vacancies', ({ request }) => {
     const url = new URL(request.url)
     return HttpResponse.json({

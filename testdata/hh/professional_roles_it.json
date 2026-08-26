@@ -1,0 +1,35 @@
+{
+  "categories": [
+    {
+      "id": "11",
+      "name": "Информационные технологии",
+      "roles": [
+        {"id": "156", "name": "BI-аналитик, аналитик данных", "search_deprecated": false},
+        {"id": "160", "name": "DevOps-инженер", "search_deprecated": false},
+        {"id": "10", "name": "Аналитик", "search_deprecated": false},
+        {"id": "12", "name": "Арт-директор, креативный директор", "search_deprecated": false},
+        {"id": "150", "name": "Бизнес-аналитик", "search_deprecated": false},
+        {"id": "25", "name": "Гейм-дизайнер", "search_deprecated": false},
+        {"id": "165", "name": "Дата-сайентист", "search_deprecated": false},
+        {"id": "34", "name": "Дизайнер, художник", "search_deprecated": false},
+        {"id": "36", "name": "Директор по информационным технологиям (CIO)", "search_deprecated": false},
+        {"id": "73", "name": "Менеджер продукта", "search_deprecated": false},
+        {"id": "155", "name": "Методолог", "search_deprecated": false},
+        {"id": "96", "name": "Программист, разработчик", "search_deprecated": false},
+        {"id": "164", "name": "Продуктовый аналитик", "search_deprecated": false},
+        {"id": "104", "name": "Руководитель группы разработки", "search_deprecated": false},
+        {"id": "157", "name": "Руководитель отдела аналитики", "search_deprecated": false},
+        {"id": "107", "name": "Руководитель проектов", "search_deprecated": false},
+        {"id": "112", "name": "Сетевой инженер", "search_deprecated": false},
+        {"id": "113", "name": "Системный администратор", "search_deprecated": false},
+        {"id": "148", "name": "Системный аналитик", "search_deprecated": false},
+        {"id": "114", "name": "Системный инженер", "search_deprecated": false},
+        {"id": "116", "name": "Специалист по информационной безопасности", "search_deprecated": false},
+        {"id": "121", "name": "Специалист технической поддержки", "search_deprecated": false},
+        {"id": "124", "name": "Тестировщик", "search_deprecated": false},
+        {"id": "125", "name": "Технический директор (CTO)", "search_deprecated": false},
+        {"id": "126", "name": "Технический писатель", "search_deprecated": false}
+      ]
+    }
+  ]
+}

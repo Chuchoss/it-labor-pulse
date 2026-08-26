@@ -225,7 +225,20 @@ OpenAPI: `x-lifecycle: target`.
 
 Поиск/список (OLTP). Для UI drill-down, не для тяжёлой аналитики.
 
-**Query:** `q`, filters, pagination
+**Query:** `q`, `role_id`, `region_id`, `skill_id`, `salary_min`,
+`salary_max`, `source`, `only_active`, pagination.
+
+- `role_id`, `region_id`, `skill_id`: один UUID или до 20 UUID через запятую;
+  внутри одного фильтра семантика **ANY**. Для навыков достаточно совпадения
+  хотя бы одного выбранного skill.
+- `salary_min` / `salary_max`: границы по канонической `salary_mid` в RUB,
+  приведённой к оценке net. При заданной границе вакансии без salary не
+  совпадают.
+- Публичная выдача всегда ограничена утверждёнными семействами ролей
+  `software_development`, `analytics`, `quality_assurance`; unresolved и
+  out-of-scope строки не возвращаются даже с `only_active=false`.
+- Сортировка стабильна: `published_at DESC NULLS LAST, id`; смена фильтра
+  начинает пагинацию с первой страницы.
 
 ```json
 {

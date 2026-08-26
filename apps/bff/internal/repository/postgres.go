@@ -40,6 +40,8 @@ func (p *Postgres) Dashboard(ctx context.Context, filter readapi.AnalyticsFilter
 			current_timestamp
 		FROM vacancies v
 		WHERE v.deleted_at IS NULL
+			AND EXISTS (SELECT 1 FROM roles sr WHERE sr.id = v.role_id
+				AND sr.family IN ('software_development', 'analytics', 'quality_assurance'))
 			AND ($3 = '' OR v.role_id = $3::uuid)
 			AND ($4 = '' OR v.region_id = $4::uuid)
 			AND ($5 = '' OR v.source = $5)
@@ -65,6 +67,7 @@ func (p *Postgres) Dashboard(ctx context.Context, filter readapi.AnalyticsFilter
 		FROM vacancies v
 		JOIN roles r ON r.id = v.role_id
 		WHERE v.deleted_at IS NULL AND v.is_active
+			AND r.family IN ('software_development', 'analytics', 'quality_assurance')
 			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
 			AND ($3 = '' OR v.role_id = $3::uuid)
 			AND ($4 = '' OR v.region_id = $4::uuid)
@@ -93,6 +96,8 @@ func (p *Postgres) Dashboard(ctx context.Context, filter readapi.AnalyticsFilter
 		FROM vacancies v
 		JOIN regions r ON r.id = v.region_id
 		WHERE v.deleted_at IS NULL AND v.is_active
+			AND EXISTS (SELECT 1 FROM roles sr WHERE sr.id = v.role_id
+				AND sr.family IN ('software_development', 'analytics', 'quality_assurance'))
 			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
 			AND ($3 = '' OR v.role_id = $3::uuid)
 			AND ($4 = '' OR v.region_id = $4::uuid)
@@ -148,7 +153,8 @@ func (p *Postgres) ListRoles(
 					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p75_salary
 			FROM roles r
 			JOIN vacancies v ON v.role_id = r.id
-			WHERE r.is_active AND v.deleted_at IS NULL
+			WHERE r.is_active AND v.deleted_at IS NULL AND v.is_active
+				AND r.family IN ('software_development', 'analytics', 'quality_assurance')
 				AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
 				AND ($3 = '' OR v.region_id = $3::uuid)
 				AND ($4 = '' OR v.source = $4)
@@ -211,9 +217,11 @@ func (p *Postgres) GetRole(
 		FROM roles r
 		LEFT JOIN vacancies v ON v.role_id = r.id
 			AND v.deleted_at IS NULL
+			AND v.is_active
 			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
 			AND ($4 = '' OR v.region_id = $4::uuid)
 		WHERE r.id = $3::uuid AND r.is_active
+			AND r.family IN ('software_development', 'analytics', 'quality_assurance')
 		GROUP BY r.id, r.title
 	`, args...).Scan(
 		&item.RoleID,
@@ -257,7 +265,9 @@ func (p *Postgres) ListRegions(
 					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p75_salary
 			FROM regions r
 			JOIN vacancies v ON v.region_id = r.id
-			WHERE r.is_active AND v.deleted_at IS NULL
+			WHERE r.is_active AND v.deleted_at IS NULL AND v.is_active
+				AND EXISTS (SELECT 1 FROM roles sr WHERE sr.id = v.role_id
+					AND sr.family IN ('software_development', 'analytics', 'quality_assurance'))
 				AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
 				AND ($3 = '' OR v.role_id = $3::uuid)
 			GROUP BY r.id, r.name
@@ -319,6 +329,9 @@ func (p *Postgres) GetRegion(
 		FROM regions r
 		LEFT JOIN vacancies v ON v.region_id = r.id
 			AND v.deleted_at IS NULL
+			AND v.is_active
+			AND EXISTS (SELECT 1 FROM roles sr WHERE sr.id = v.role_id
+				AND sr.family IN ('software_development', 'analytics', 'quality_assurance'))
 			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
 			AND ($3 = '' OR v.role_id = $3::uuid)
 		WHERE r.id = $4::uuid AND r.is_active
@@ -355,6 +368,8 @@ func (p *Postgres) SalaryTrends(
 			count(*)
 		FROM vacancies v
 		WHERE v.deleted_at IS NULL
+			AND EXISTS (SELECT 1 FROM roles sr WHERE sr.id = v.role_id
+				AND sr.family IN ('software_development', 'analytics', 'quality_assurance'))
 			AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
 			AND ($3 = '' OR v.role_id = $3::uuid)
 			AND ($4 = '' OR v.region_id = $4::uuid)
@@ -409,6 +424,8 @@ func (p *Postgres) DemandTrends(
 					ELSE interval '1 month' END)
 		FROM buckets b
 		LEFT JOIN vacancies v ON v.deleted_at IS NULL
+			AND EXISTS (SELECT 1 FROM roles sr WHERE sr.id = v.role_id
+				AND sr.family IN ('software_development', 'analytics', 'quality_assurance'))
 			AND v.published_at < ($2::date + interval '1 day')
 			AND ($3 = '' OR v.role_id = $3::uuid)
 			AND ($4 = '' OR v.region_id = $4::uuid)
@@ -445,7 +462,9 @@ func (p *Postgres) TopSkills(
 		WITH base AS (
 			SELECT v.id
 			FROM vacancies v
-			WHERE v.deleted_at IS NULL
+			WHERE v.deleted_at IS NULL AND v.is_active
+				AND EXISTS (SELECT 1 FROM roles sr WHERE sr.id = v.role_id
+					AND sr.family IN ('software_development', 'analytics', 'quality_assurance'))
 				AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')
 				AND ($3 = '' OR v.role_id = $3::uuid)
 				AND ($4 = '' OR v.region_id = $4::uuid)
@@ -482,14 +501,34 @@ func (p *Postgres) TopSkills(
 }
 
 func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilter) (readapi.VacancyPage, error) {
-	args := []any{filter.Query, filter.RoleID, filter.RegionID, filter.Source, filter.OnlyActive}
+	args := []any{
+		filter.Query, nonNilStrings(filter.RoleIDs), nonNilStrings(filter.RegionIDs), filter.Source, filter.OnlyActive,
+		filter.SalaryMin, filter.SalaryMax, nonNilStrings(filter.SkillIDs),
+	}
 	conditions := `
 		v.deleted_at IS NULL
+			AND EXISTS (
+				SELECT 1 FROM roles scope_role
+				WHERE scope_role.id = v.role_id
+				  AND scope_role.is_active
+				  AND scope_role.family IN ('software_development', 'analytics', 'quality_assurance')
+			)
 			AND ($1 = '' OR v.title ILIKE '%' || $1 || '%')
-			AND ($2 = '' OR v.role_id = $2::uuid)
-			AND ($3 = '' OR v.region_id = $3::uuid)
+			AND (cardinality($2::uuid[]) = 0 OR v.role_id = ANY($2::uuid[]))
+			AND (cardinality($3::uuid[]) = 0 OR v.region_id = ANY($3::uuid[]))
 			AND ($4 = '' OR v.source = $4)
 			AND (NOT $5 OR v.is_active)
+			AND ($6::float8 IS NULL OR v.salary_mid >= $6)
+			AND ($7::float8 IS NULL OR v.salary_mid <= $7)
+			AND (
+				cardinality($8::uuid[]) = 0
+				OR EXISTS (
+					SELECT 1
+					FROM vacancy_skills filter_vs
+					WHERE filter_vs.vacancy_id = v.id
+					  AND filter_vs.skill_id = ANY($8::uuid[])
+				)
+			)
 	`
 	var total int64
 	if err := p.db.QueryRow(ctx, `SELECT count(*) FROM vacancies v WHERE `+conditions, args...).Scan(&total); err != nil {
@@ -512,7 +551,7 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 		WHERE `+conditions+`
 		GROUP BY v.id
 		ORDER BY v.published_at DESC NULLS LAST, v.id
-		LIMIT $6 OFFSET $7
+		LIMIT $9 OFFSET $10
 	`, args...)
 	if err != nil {
 		return readapi.VacancyPage{}, fmt.Errorf("query vacancies: %w", err)
@@ -550,6 +589,13 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 		return readapi.VacancyPage{}, fmt.Errorf("iterate vacancies: %w", err)
 	}
 	return result, nil
+}
+
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func analyticsArgs(filter readapi.AnalyticsFilter) []any {
