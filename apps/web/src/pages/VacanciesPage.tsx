@@ -4,6 +4,7 @@ import {
   Box,
   Autocomplete,
   Card,
+  CardActionArea,
   CardContent,
   Chip,
   FormControl,
@@ -44,6 +45,14 @@ import {
   vacancyKey,
 } from './vacancyPagination'
 
+function vacancySourceLabel(vacancy: Vacancy) {
+  return vacancy.source === 'hh' ? 'hh.ru' : vacancy.source_name || vacancy.source || 'источнике'
+}
+
+function vacancyLinkLabel(vacancy: Vacancy) {
+  return `Открыть вакансию «${vacancy.title || 'Без названия'}» на ${vacancySourceLabel(vacancy)} в новой вкладке`
+}
+
 function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
   return (
     <Stack spacing={1}>
@@ -67,17 +76,14 @@ function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
         ))}
       </Stack>
       {vacancy.source_url && (
-        <Link
-          href={vacancy.source_url}
-          target="_blank"
-          rel="noopener noreferrer nofollow"
-          aria-label={`Открыть вакансию на ${vacancy.source_name || vacancy.source}`}
-          onClick={(event) => event.stopPropagation()}
+        <Typography
+          component="span"
+          color="primary"
           sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, width: 'fit-content' }}
         >
-          Открыть на {vacancy.source === 'hh' ? 'hh.ru' : vacancy.source_name || vacancy.source}
-          <OpenInNewRoundedIcon fontSize="small" />
-        </Link>
+          Открыть на {vacancySourceLabel(vacancy)}
+          <OpenInNewRoundedIcon fontSize="small" aria-hidden="true" />
+        </Typography>
       )}
     </Stack>
   )
@@ -608,12 +614,40 @@ export function VacanciesPage({
                   return (
                     <TableRow
                       key={vacancyKey(vacancy)}
-                      hover
                       data-new-vacancy={isNew || undefined}
                       data-reduced-motion={isNew ? prefersReducedMotion : undefined}
-                      sx={newVacancyStyle(vacancy)}
+                      sx={{
+                        ...newVacancyStyle(vacancy),
+                        position: 'relative',
+                        ...(vacancy.source_url && {
+                          cursor: 'pointer',
+                          transition: 'box-shadow 160ms ease',
+                          '&:hover': {
+                            boxShadow: 'inset 0 0 0 1px rgba(25, 118, 210, 0.45)',
+                          },
+                          '&:focus-within': {
+                            outline: '3px solid',
+                            outlineColor: 'primary.main',
+                            outlineOffset: '-3px',
+                          },
+                        }),
+                      }}
                     >
                       <TableCell sx={{ minWidth: 320 }}>
+                        {vacancy.source_url && (
+                          <Link
+                            href={vacancy.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer nofollow"
+                            aria-label={vacancyLinkLabel(vacancy)}
+                            sx={{
+                              position: 'absolute',
+                              inset: 0,
+                              zIndex: 1,
+                              '&:focus-visible': { outline: 'none' },
+                            }}
+                          />
+                        )}
                         <VacancyDetails vacancy={vacancy} />
                       </TableCell>
                       <TableCell>{vacancy.source?.toUpperCase() || '—'}</TableCell>
@@ -642,27 +676,72 @@ export function VacanciesPage({
                   variant="outlined"
                   data-new-vacancy={isNew || undefined}
                   data-reduced-motion={isNew ? prefersReducedMotion : undefined}
-                  sx={newVacancyStyle(vacancy)}
+                  sx={{
+                    ...newVacancyStyle(vacancy),
+                    ...(vacancy.source_url && {
+                      transition: 'box-shadow 160ms ease, transform 160ms ease',
+                      '&:hover': {
+                        boxShadow: 2,
+                        transform: 'translateY(-1px)',
+                      },
+                      '&:focus-within': {
+                        outline: '3px solid',
+                        outlineColor: 'primary.main',
+                        outlineOffset: 2,
+                      },
+                    }),
+                  }}
                 >
-                  <CardContent>
-                    <VacancyDetails vacancy={vacancy} />
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
-                      {getRegionLabel(vacancy.region_id, regionNames)}
-                    </Typography>
-                    <Stack
-                      direction="row"
-                      sx={{ justifyContent: 'space-between', mt: 2 }}
+                  {vacancy.source_url ? (
+                    <CardActionArea
+                      component="a"
+                      href={vacancy.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer nofollow"
+                      aria-label={vacancyLinkLabel(vacancy)}
+                      sx={{ '&.Mui-focusVisible': { outline: 'none' } }}
                     >
-                      <Typography variant="caption" color="text.secondary">
-                        {vacancy.source?.toUpperCase() || '—'} · {formatDate(vacancy.published_at)}
+                      <CardContent>
+                        <VacancyDetails vacancy={vacancy} />
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+                          {getRegionLabel(vacancy.region_id, regionNames)}
+                        </Typography>
+                        <Stack
+                          direction="row"
+                          sx={{ justifyContent: 'space-between', mt: 2 }}
+                        >
+                          <Typography variant="caption" color="text.secondary">
+                            {vacancy.source?.toUpperCase() || '—'} · {formatDate(vacancy.published_at)}
+                          </Typography>
+                          <Chip
+                            size="small"
+                            color={vacancy.is_active ? 'success' : 'default'}
+                            label={vacancy.is_active ? 'Активна' : 'Закрыта'}
+                          />
+                        </Stack>
+                      </CardContent>
+                    </CardActionArea>
+                  ) : (
+                    <CardContent>
+                      <VacancyDetails vacancy={vacancy} />
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+                        {getRegionLabel(vacancy.region_id, regionNames)}
                       </Typography>
-                      <Chip
-                        size="small"
-                        color={vacancy.is_active ? 'success' : 'default'}
-                        label={vacancy.is_active ? 'Активна' : 'Закрыта'}
-                      />
-                    </Stack>
-                  </CardContent>
+                      <Stack
+                        direction="row"
+                        sx={{ justifyContent: 'space-between', mt: 2 }}
+                      >
+                        <Typography variant="caption" color="text.secondary">
+                          {vacancy.source?.toUpperCase() || '—'} · {formatDate(vacancy.published_at)}
+                        </Typography>
+                        <Chip
+                          size="small"
+                          color={vacancy.is_active ? 'success' : 'default'}
+                          label={vacancy.is_active ? 'Активна' : 'Закрыта'}
+                        />
+                      </Stack>
+                    </CardContent>
+                  )}
                 </Card>
               )
             })}

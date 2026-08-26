@@ -118,9 +118,17 @@ describe('VacanciesPage', () => {
     expect(requestedRegionPages).toEqual(['1', '2'])
     expect(requestedRegionUrls.every((url) => url.includes('from=2000-01-01'))).toBe(true)
     expect(screen.getByText('Загружено 1 из 3')).toBeInTheDocument()
-    const sourceLinks = screen.getAllByRole('link', { name: 'Открыть вакансию на HeadHunter' })
-    expect(sourceLinks[0]).toHaveAttribute('target', '_blank')
-    expect(sourceLinks[0]).toHaveAttribute('rel', 'noopener noreferrer nofollow')
+    const sourceLinks = screen.getAllByRole('link', {
+      name: 'Открыть вакансию «Senior Go Developer» на hh.ru в новой вкладке',
+    })
+    expect(sourceLinks).toHaveLength(2)
+    sourceLinks.forEach((link) => {
+      expect(link).toHaveAttribute('href', 'https://hh.ru/vacancy/123')
+      expect(link).toHaveAttribute('target', '_blank')
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer nofollow')
+      expect(link.tagName).toBe('A')
+      expect(link.querySelector('a, button, input, select, textarea')).toBeNull()
+    })
     expect(requestedUrls.every((url) => url.includes('currency=RUB'))).toBe(true)
 
     intersectSentinel()
@@ -135,6 +143,36 @@ describe('VacanciesPage', () => {
         .every((url) => url.includes('page_size=20')),
     ).toBe(true)
     expect(requestedUrls.every((url) => url.includes('only_active=true'))).toBe(true)
+  })
+
+  it('renders missing source URLs as non-clickable rows and cards', async () => {
+    server.use(
+      http.get('*/api/v1/vacancies', () =>
+        HttpResponse.json({
+          data: [
+            {
+              id: 'without-source-url',
+              source: 'hh',
+              source_name: 'HeadHunter',
+              source_url: null,
+              title: 'Vacancy without source URL',
+              is_active: true,
+            },
+          ],
+          page: 1,
+          page_size: 20,
+          total: 1,
+        }),
+      ),
+    )
+
+    renderPage(<VacanciesPage pollIntervalMs={0} />)
+
+    const titles = await screen.findAllByText('Vacancy without source URL')
+    expect(titles).toHaveLength(2)
+    expect(screen.queryByRole('link', { name: /Vacancy without source URL/ })).not.toBeInTheDocument()
+    expect(titles[0].closest('tr')?.querySelector('a')).toBeNull()
+    expect(titles[1].closest('.MuiCard-root')?.querySelector('a')).toBeNull()
   })
 
   it('resets accumulated pages when a filter changes', async () => {
