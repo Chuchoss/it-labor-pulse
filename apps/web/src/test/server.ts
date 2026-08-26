@@ -36,7 +36,7 @@ export const handlers = [
       grain: 'week',
       status: 'ready',
       source: 'hh',
-      method_version: 'vacancy_demand_v1',
+      method_version: 'vacancy_demand_v2',
       points: [
         {
           period_start: '2026-08-18',
@@ -53,7 +53,7 @@ export const handlers = [
     HttpResponse.json({
       status: 'ready',
       source: 'hh',
-      method_version: 'vacancy_demand_v1',
+      method_version: 'vacancy_demand_v2',
       available_years: [2026],
       first_observation: '2026-08-26',
       last_observation: '2026-08-26',
@@ -61,6 +61,11 @@ export const handlers = [
       publication_to: '2026-08-26',
       complete_daily_count: 1,
       complete_weekly_count: 0,
+      expected_daily_count: 1,
+      missed_daily_count: 0,
+      incomplete_daily_count: 0,
+      latest_incomplete_date: null,
+      next_scheduled_cycle: '2026-08-27T01:00:00Z',
       latest_complete_cycle: '2026-08-26T10:00:00Z',
       regions: [],
     }),

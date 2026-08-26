@@ -250,28 +250,33 @@ Bash и 1C имеют явные отдельные категории и в н�
 
 ### `ingest_cycles` и market snapshots (Phase 1)
 
-`ingest_cycles` — долговечное доказательство полного all-IT coverage. Статус
-`complete` допустим только при `completed_partitions = partition_count`; обычный
-успешный `ingest_run` одной partition этого не доказывает.
+`ingest_cycles` — долговечное доказательство полного coverage. Для
+`daily_discovery` статус `complete` допустим только после commit всех
+role/date search pages. Detail hydration использует отдельный checkpoint и не
+влияет на дневной marker.
 
 | Таблица | Natural key | Назначение |
 |---------|-------------|------------|
 | `analytics_runs` | `(run_type, target_period_start, source, method_version)` | Идемпотентный daily/weekly run, status, counts, sanitized error |
 | `vacancy_demand_daily` | date + source + role group + aggregation level + region + method | Сохранённые active/published/salary metrics полного cycle |
 | `vacancy_demand_weekly` | ISO Monday + те же dimensions + method | Воспроизводимый rollup из daily rows |
+| `ingest_cycle_partitions` | cycle + stable partition key | Page-level resume/progress discovery |
+| `ingest_cycle_observations` | `(cycle_id, source, external_id)` | Дедуплицированные минимальные search facts без descriptions/PII |
 
 Регион задаётся явно: `aggregation_level=all_regions` требует `region_id IS
 NULL`, `aggregation_level=region` — `region_id IS NOT NULL`; unique constraint
 использует `NULLS NOT DISTINCT`, поэтому all-Russia row не дублируется.
 
-Методика `vacancy_demand_v1`:
+Методика `vacancy_demand_v2`:
 
 - группы: development/leads (`96`, `104`), analytics (`148`, `150`, `156`,
   `164`), QA (`124`);
-- `active_count` — active in-scope rows, наблюдавшиеся между start/complete
-  конкретного полного cycle;
+- `active_count` — дедуплицированные in-scope search observations полного
+  дневного discovery cycle;
 - `published_count` — их `published_at` в UTC-дне snapshot;
-- salary sample — валидный normalized RUB/net offered salary, `10 000..2 000 000`;
+- role/region берутся из per-vacancy search item, не из partition defaults;
+- salary sample — search offered salary, обработанная shared normalizer в
+  RUB/net, `10 000..2 000 000`; сохраняются method и coverage;
 - weekly `active_count` — последний daily snapshot недели;
   `published_count` — сумма дней; weekly salary — медиана daily medians;
 - `source_daily_count < 7` означает `complete=false`, такой ряд BFF не показывает
@@ -280,7 +285,9 @@ NULL`, `aggregation_level=region` — `region_id IS NOT NULL`; unique constraint
 Skill snapshots отложены: текущий Market UI не показывает skill trend. Это
 отдельная методика, а не повод расширять v1 без потребности.
 
-Решение: [ADR 011](./adr/011-phase1-market-snapshots.md).
+Observations хранятся минимум 35 дней и удаляются только после успешного
+snapshot. Решения: [ADR 011](./adr/011-phase1-market-snapshots.md),
+[ADR 013](./adr/013-daily-discovery-snapshots.md).
 
 ### `ai_jobs` (Target)
 

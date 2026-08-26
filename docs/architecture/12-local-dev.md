@@ -107,7 +107,8 @@ make migrate-up
 ```bash
 make run-bff          # public :8080
 make run-web          # Vite SPA :3000, /api proxy → BFF :8080
-make analytics-daily  # latest eligible complete all-IT cycle
+make discovery-once   # search-only cycle предыдущего UTC-дня + snapshot
+make analytics-daily  # fallback: latest eligible complete discovery cycle
 make analytics-weekly # current ISO week; incomplete stays hidden in API
 
 # UI / API
@@ -228,11 +229,15 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `INGEST_IT_AREA` | нет | `113` | Россия; менять только при явной смене продуктового гео |
 | `INGEST_IT_MAX_PARTITIONS` | нет | `512` | Hard ceiling leaf-partitions плана |
 | `INGEST_IT_MAX_REQUESTS` | нет | `500` | Hard budget probe + search/detail запросов одного запуска |
-| `INGEST_SCHEDULER_INTERVAL` | нет | `30m` | Интервал bounded all-IT batch; минимум `10m` |
+| `INGEST_SCHEDULER_INTERVAL` | нет | `30m` | Интервал фоновой detail hydration; минимум `10m` |
 | `INGEST_SCHEDULER_RUN_ON_START` | нет | `true` | Первый batch сразу после старта dedicated scheduler |
 | `INGEST_SCHEDULER_MAX_PARTITIONS_PER_BATCH` | нет | `8` | Дополнительный ceiling role/date partitions одного tick |
 | `INGEST_SCHEDULER_BACKOFF_INITIAL` / `MAX` | нет | `1m` / `15m` | Exponential backoff после failed batch |
 | `INGEST_SCHEDULER_JITTER_PERCENT` | нет | `20` | Симметричный jitter, `0..100` |
+| `INGEST_DISCOVERY_UTC_HOUR` | нет | `1` | Ежедневный search discovery в 01:00 UTC / 04:00 Europe/Moscow |
+| `INGEST_DISCOVERY_MAX_REQUESTS` | нет | `300` | Hard ceiling taxonomy/probe/search attempts; detail calls отсутствуют |
+| `INGEST_DISCOVERY_RUN_TIMEOUT` | нет | `4h` | Максимальная длительность одного resumable daily cycle |
+| `INGEST_DISCOVERY_RETRY_INTERVAL` | нет | `15m` | Retry старейшего незавершённого дня без overlap |
 | `INGEST_SCHEDULER_SHUTDOWN_TIMEOUT` | нет | `30s` | Bounded wait после отмены текущего run |
 | `INGEST_SCHEDULER_TEST_MODE` | нет | `false` | Разрешает интервал `<10m` только для явного local smoke/test |
 | `ANALYTICS_SCHEDULER_INTERVAL` | нет | `30m` | Poll complete cycle markers + weekly rollup |
@@ -285,7 +290,8 @@ partition по одной роли и времени. Обычный старт 
 | `make ingest-hh` / `ingest-hh-fixture` | one-shot HH → normalize → PG (`apps/ingest`); fixture без live HH | Phase 1 |
 | `make ingest-hh-it-plan` | live aggregate-only planning, без vacancy content/записи | Phase 1 |
 | `make ingest-hh-it` | bounded/resumable IT crawl; при budget продолжить следующим запуском | Phase 1 |
-| `make run-ingest-scheduler` | dedicated scheduler: bounded/resumable all-IT batch по расписанию | Phase 1 |
+| `make run-discovery-scheduler` / `discovery-once` | Daily/run-once search discovery; complete marker запускает snapshot | Phase 1 |
+| `make run-hydrate-scheduler` | Background bounded detail hydration для skills/listing | Phase 1 |
 | `make analytics-daily` / `analytics-weekly` / `analytics-backfill` | Идемпотентные market snapshots | Phase 1 |
 | `make run-analytics-scheduler` | Poll durable complete cycles + weekly rollup | Phase 1 |
 | `make test` | `go test ./...` + Vitest web | **есть** |
@@ -306,7 +312,11 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 # aggregate-only план, затем явный bounded crawl:
 go run ./apps/ingest/cmd/ingest -scope it -dry-run
 go run ./apps/ingest/cmd/ingest -scope it
-# dedicated scheduler; сам загружает корневой .env через godotenv:
+# два отдельных process; оба загружают корневой .env через godotenv:
+$env:INGEST_DISCOVERY_RUN_ON_START = "false"
+go run ./apps/ingest/cmd/discovery
+# manual catch-up/resume:
+go run ./apps/ingest/cmd/discovery -once
 $env:INGEST_SCOPE = "it"
 go run ./apps/ingest/cmd/scheduler
 go run ./apps/analytics/cmd/worker -mode daily

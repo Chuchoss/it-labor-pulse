@@ -39,8 +39,8 @@ func TestDailySnapshotFromCompleteSyntheticCycle(t *testing.T) {
 		_, _ = w.pool.Exec(cleanupCtx, `DELETE FROM vacancy_demand_weekly WHERE source = $1`, source)
 		_, _ = w.pool.Exec(cleanupCtx, `DELETE FROM vacancy_demand_daily WHERE source = $1`, source)
 		_, _ = w.pool.Exec(cleanupCtx, `DELETE FROM analytics_runs WHERE source = $1`, source)
-		_, _ = w.pool.Exec(cleanupCtx, `DELETE FROM vacancies WHERE source = $1`, source)
 		_, _ = w.pool.Exec(cleanupCtx, `DELETE FROM ingest_cycles WHERE source = $1`, source)
+		_, _ = w.pool.Exec(cleanupCtx, `DELETE FROM region_external_ids WHERE source = $1`, source)
 		_, _ = w.pool.Exec(cleanupCtx, `DELETE FROM sources WHERE code = $1`, source)
 		if roleID != "" {
 			_, _ = w.pool.Exec(cleanupCtx, `DELETE FROM roles WHERE id = $1::uuid`, roleID)
@@ -62,30 +62,41 @@ func TestDailySnapshotFromCompleteSyntheticCycle(t *testing.T) {
 		RETURNING id::text
 	`, fmt.Sprintf("analytics-region-%d", suffix)).Scan(&regionID)
 	require.NoError(t, err)
+	_, err = w.pool.Exec(ctx, `
+		INSERT INTO region_external_ids (source, external_id, region_id)
+		VALUES ($1, 'synthetic-area', $2::uuid)
+	`, source, regionID)
+	require.NoError(t, err)
 
-	cycleEnd := time.Date(2026, 8, 26, 20, 0, 0, 0, time.UTC)
+	cycleDate := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	cycleEnd := cycleDate.AddDate(0, 0, 1)
 	started := cycleEnd.Add(-time.Hour)
 	completed := cycleEnd.Add(time.Hour)
 	var cycleID string
 	err = w.pool.QueryRow(ctx, `
 		INSERT INTO ingest_cycles (
 			source, scope, scope_hash, cycle_end, status, partition_count,
-			completed_partitions, started_at, completed_at
-		) VALUES ($1, 'all_it', repeat('b', 64), $2, 'complete', 1, 1, $3, $4)
+			completed_partitions, started_at, completed_at, cycle_date, cutoff_at,
+			expected_pages, completed_pages, method_version
+		) VALUES (
+			$1, 'daily_discovery', repeat('b', 64), $2, 'complete', 1, 1, $3, $4,
+			$5, $2, 1, 1, $6
+		)
 		RETURNING id::text
-	`, source, cycleEnd, started, completed).Scan(&cycleID)
+	`, source, cycleEnd, started, completed, cycleDate, MethodVersion).Scan(&cycleID)
 	require.NoError(t, err)
 	_, err = w.pool.Exec(ctx, `
-		INSERT INTO vacancies (
-			source, external_id, title, role_id, region_id,
-			salary_from, salary_to, salary_currency, salary_gross, salary_mid,
-			published_at, collected_at, is_active
+		INSERT INTO ingest_cycle_observations (
+			cycle_id, source, external_id, published_at,
+			external_region_id, primary_role_external_id, role_group,
+			external_role_ids, salary_from, salary_to, salary_currency,
+			salary_gross, salary_mid_rub_net, salary_eligible, observed_at
 		) VALUES (
-			$1, 'synthetic-1', 'Synthetic vacancy', $2::uuid, $3::uuid,
-			100000, 200000, 'RUB', false, 150000,
-			'2026-08-26T10:00:00Z', $4, true
+			$1::uuid, $2, 'synthetic-1', '2026-08-26T10:00:00Z',
+			'synthetic-area', '96', 'software_development',
+			ARRAY['96'], 100000, 200000, 'RUB', false, 150000, true, $3
 		)
-	`, source, roleID, regionID, cycleEnd)
+	`, cycleID, source, cycleEnd)
 	require.NoError(t, err)
 
 	first, err := w.RunDaily(ctx, cycleID)

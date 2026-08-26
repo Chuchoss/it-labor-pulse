@@ -20,10 +20,26 @@ type SearchPage struct {
 	Items   []SearchItem `json:"items"`
 }
 
-// SearchItem is a minimal search list item (ids for detail fetch).
+// SearchItem contains only fields documented on the HH vacancy search item.
+// It deliberately excludes employer/title persistence and descriptions.
 type SearchItem struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	PublishedAt string `json:"published_at"`
+	Area        *struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"area"`
+	Salary *struct {
+		From     *float64 `json:"from"`
+		To       *float64 `json:"to"`
+		Currency string   `json:"currency"`
+		Gross    *bool    `json:"gross"`
+	} `json:"salary"`
+	ProfessionalRoles []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"professional_roles"`
 }
 
 type vacancyPayload struct {
@@ -68,6 +84,48 @@ func ParseSearchPage(raw []byte) (SearchPage, error) {
 		return SearchPage{}, fmt.Errorf("hh parse search page: %w", err)
 	}
 	return page, nil
+}
+
+// DraftFromSearch maps the search response fields shared with vacancy detail.
+// Search does not expose key_skills or description; callers must not infer them.
+func DraftFromSearch(item SearchItem, observedAt time.Time) (normalize.Draft, error) {
+	if item.ID == "" {
+		return normalize.Draft{}, fmt.Errorf("hh parse search item: empty id")
+	}
+	if item.Name == "" {
+		return normalize.Draft{}, fmt.Errorf("hh parse search item: empty name")
+	}
+	d := normalize.Draft{
+		SchemaVersion: normalize.SchemaVersionV1,
+		Source:        SourceCode,
+		ExternalID:    item.ID,
+		Title:         item.Name,
+		CollectedAt:   observedAt.UTC(),
+	}
+	if item.PublishedAt == "" {
+		return normalize.Draft{}, fmt.Errorf("hh parse search item: empty published_at")
+	}
+	publishedAt, err := parseHHTime(item.PublishedAt)
+	if err != nil {
+		return normalize.Draft{}, fmt.Errorf("hh parse search item published_at: %w", err)
+	}
+	d.PublishedAt = publishedAt
+	if item.Area != nil {
+		d.RegionExternalID = item.Area.ID
+		d.RegionName = item.Area.Name
+	}
+	if item.Salary != nil {
+		d.SalaryFrom = item.Salary.From
+		d.SalaryTo = item.Salary.To
+		d.SalaryCurrencyRaw = item.Salary.Currency
+		d.SalaryGross = item.Salary.Gross
+	}
+	for _, role := range item.ProfessionalRoles {
+		if role.ID != "" {
+			d.ProfessionalRoleIDs = append(d.ProfessionalRoleIDs, role.ID)
+		}
+	}
+	return d, nil
 }
 
 // DraftFromDetail maps HH vacancy detail JSON → SourceNeutralDraftV1.

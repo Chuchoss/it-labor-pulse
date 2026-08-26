@@ -894,12 +894,17 @@ components:
         - publication_to
         - complete_daily_count
         - complete_weekly_count
+        - expected_daily_count
+        - missed_daily_count
+        - incomplete_daily_count
+        - latest_incomplete_date
+        - next_scheduled_cycle
         - latest_complete_cycle
         - regions
       properties:
         status:
           type: string
-          enum: [ready, collecting]
+          enum: [ready, collecting, degraded]
         source: { type: string, enum: [hh] }
         method_version: { type: string }
         available_years:
@@ -911,6 +916,11 @@ components:
         publication_to: { type: [string, "null"], format: date }
         complete_daily_count: { type: integer, minimum: 0 }
         complete_weekly_count: { type: integer, minimum: 0 }
+        expected_daily_count: { type: integer, minimum: 0 }
+        missed_daily_count: { type: integer, minimum: 0 }
+        incomplete_daily_count: { type: integer, minimum: 0 }
+        latest_incomplete_date: { type: [string, "null"], format: date }
+        next_scheduled_cycle: { type: string, format: date-time }
         latest_complete_cycle: { type: [string, "null"], format: date-time }
         regions:
           type: array

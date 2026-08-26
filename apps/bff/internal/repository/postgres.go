@@ -12,7 +12,7 @@ import (
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/readapi"
 )
 
-const marketMethodVersion = "vacancy_demand_v1"
+const marketMethodVersion = "vacancy_demand_v2"
 
 type DBTX interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -496,7 +496,7 @@ func (p *Postgres) TrendsCoverage(ctx context.Context) (readapi.TrendsCoverage, 
 		Status: "collecting", Source: "hh", AvailableYears: []int{},
 		Regions: []readapi.CoverageRegion{},
 	}
-	var first, last, publicationFrom, publicationTo *time.Time
+	var first, last, publicationFrom, publicationTo, latestIncomplete *time.Time
 	err := p.db.QueryRow(ctx, `
 		SELECT
 			min(snapshot_date),
@@ -512,8 +512,33 @@ func (p *Postgres) TrendsCoverage(ctx context.Context) (readapi.TrendsCoverage, 
 			(
 				SELECT max(cycle_end)
 				FROM ingest_cycles
-				WHERE source = 'hh' AND scope = 'all_it' AND status = 'complete'
-			)
+				WHERE source = 'hh' AND scope = 'daily_discovery'
+				  AND status = 'complete' AND method_version = $1
+			),
+			coalesce((
+				SELECT greatest(current_date - min(cycle_date), 0)
+				FROM ingest_cycles
+				WHERE source = 'hh' AND scope = 'daily_discovery'
+				  AND method_version = $1
+			), 0),
+			coalesce((
+				SELECT count(*)
+				FROM ingest_cycles
+				WHERE source = 'hh' AND scope = 'daily_discovery'
+				  AND method_version = $1 AND status IN ('running', 'failed')
+			), 0),
+			(
+				SELECT max(cycle_date)
+				FROM ingest_cycles
+				WHERE source = 'hh' AND scope = 'daily_discovery'
+				  AND method_version = $1 AND status IN ('running', 'failed')
+			),
+			CASE
+				WHEN now() AT TIME ZONE 'UTC'
+					< date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 hour'
+				THEN date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 hour'
+				ELSE date_trunc('day', now() AT TIME ZONE 'UTC') + interval '25 hours'
+			END AT TIME ZONE 'UTC'
 		FROM vacancy_demand_daily
 		WHERE source = 'hh' AND method_version = $1
 		  AND aggregation_level = 'all_regions'
@@ -525,6 +550,10 @@ func (p *Postgres) TrendsCoverage(ctx context.Context) (readapi.TrendsCoverage, 
 		&result.CompleteDailyCount,
 		&result.CompleteWeeklyCount,
 		&result.LatestCompleteCycle,
+		&result.ExpectedDailyCount,
+		&result.IncompleteDailyCount,
+		&latestIncomplete,
+		&result.NextScheduledCycle,
 	)
 	if err != nil {
 		return readapi.TrendsCoverage{}, fmt.Errorf("query trends coverage: %w", err)
@@ -535,9 +564,20 @@ func (p *Postgres) TrendsCoverage(ctx context.Context) (readapi.TrendsCoverage, 
 		result.MethodVersion = marketMethodVersion
 		result.Status = "ready"
 	}
+	result.MissedDailyCount = result.ExpectedDailyCount -
+		result.CompleteDailyCount - result.IncompleteDailyCount
+	if result.MissedDailyCount < 0 {
+		result.MissedDailyCount = 0
+	}
+	if result.MissedDailyCount > 0 || result.IncompleteDailyCount > 0 {
+		result.Status = "degraded"
+	}
 	if publicationFrom != nil {
 		result.PublicationFrom = datePointer(*publicationFrom)
 		result.PublicationTo = datePointer(*publicationTo)
+	}
+	if latestIncomplete != nil {
+		result.LatestIncompleteDate = datePointer(*latestIncomplete)
 	}
 
 	yearRows, err := p.db.Query(ctx, `

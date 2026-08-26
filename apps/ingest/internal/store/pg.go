@@ -320,6 +320,330 @@ func (s *PG) CompleteCycle(ctx context.Context, id string, completedPartitions i
 	return nil
 }
 
+// PendingDiscoveryCycle returns the oldest unfinished day to prevent overlap.
+func (s *PG) PendingDiscoveryCycle(
+	ctx context.Context,
+	source, methodVersion string,
+) (Cycle, bool, error) {
+	var cycle Cycle
+	err := s.pool.QueryRow(ctx, `
+		SELECT id::text, source, scope, scope_hash, cycle_end, status,
+			partition_count, completed_partitions, cycle_date, cutoff_at,
+			expected_pages, completed_pages, method_version
+		FROM ingest_cycles
+		WHERE source = $1 AND scope = 'daily_discovery'
+		  AND method_version = $2 AND status = 'running'
+		ORDER BY cycle_date
+		LIMIT 1
+	`, source, methodVersion).Scan(
+		&cycle.ID, &cycle.Source, &cycle.Scope, &cycle.ScopeHash, &cycle.CycleEnd,
+		&cycle.Status, &cycle.PartitionCount, &cycle.CompletedPartitions,
+		&cycle.CycleDate, &cycle.CutoffAt, &cycle.ExpectedPages,
+		&cycle.CompletedPages, &cycle.MethodVersion,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Cycle{}, false, nil
+	}
+	if err != nil {
+		return Cycle{}, false, sanitizeDBError("pending discovery cycle", err)
+	}
+	return cycle, true, nil
+}
+
+// StartDiscoveryCycle creates one UTC-day cycle and its immutable partition plan.
+func (s *PG) StartDiscoveryCycle(
+	ctx context.Context,
+	cycle Cycle,
+	partitions []DiscoveryPartition,
+) (string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", sanitizeDBError("begin discovery cycle", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var id string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO ingest_cycles (
+			source, scope, scope_hash, cycle_end, status,
+			partition_count, completed_partitions, started_at,
+			cycle_date, cutoff_at, expected_pages, completed_pages, method_version
+		) VALUES (
+			$1, 'daily_discovery', $2, $3, 'running',
+			$4, $5, now(), $6, $3, $7, 0, $8
+		)
+		ON CONFLICT (source, cycle_date, method_version)
+			WHERE scope = 'daily_discovery'
+		DO UPDATE SET source = EXCLUDED.source
+		RETURNING id::text
+	`, cycle.Source, cycle.ScopeHash, cycle.CutoffAt.UTC(), len(partitions),
+		cycle.CompletedPartitions, cycle.CycleDate.UTC(), cycle.ExpectedPages,
+		cycle.MethodVersion).Scan(&id)
+	if err != nil {
+		return "", sanitizeDBError("start discovery cycle", err)
+	}
+	for _, part := range partitions {
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO ingest_cycle_partitions (
+				cycle_id, partition_key, professional_role_id, area,
+				date_from, date_to, expected_pages, status
+			) VALUES (
+				$1::uuid, $2, $3, $4, $5, $6, $7,
+				CASE WHEN $7 = 0 THEN 'complete' ELSE 'pending' END
+			)
+			ON CONFLICT (cycle_id, partition_key) DO NOTHING
+		`, id, part.Key, part.ProfessionalRoleID, part.Area,
+			nullTime(part.DateFrom), part.DateTo.UTC(), part.ExpectedPages); err != nil {
+			return "", sanitizeDBError("insert discovery partition", err)
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", sanitizeDBError("commit discovery cycle", err)
+	}
+	return id, nil
+}
+
+// NextDiscoveryPartition selects the stable next incomplete partition.
+func (s *PG) NextDiscoveryPartition(
+	ctx context.Context,
+	cycleID string,
+) (DiscoveryPartition, bool, error) {
+	var part DiscoveryPartition
+	var from *time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT partition_key, professional_role_id, area, date_from, date_to,
+			expected_pages, next_page, status
+		FROM ingest_cycle_partitions
+		WHERE cycle_id = $1::uuid AND status <> 'complete'
+		ORDER BY partition_key
+		LIMIT 1
+	`, cycleID).Scan(
+		&part.Key, &part.ProfessionalRoleID, &part.Area, &from, &part.DateTo,
+		&part.ExpectedPages, &part.NextPage, &part.Status,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DiscoveryPartition{}, false, nil
+	}
+	if err != nil {
+		return DiscoveryPartition{}, false, sanitizeDBError("next discovery partition", err)
+	}
+	if from != nil {
+		part.DateFrom = *from
+	}
+	return part, true, nil
+}
+
+// SetDiscoveryExpectedPages reconciles a plan probe with page-zero metadata.
+func (s *PG) SetDiscoveryExpectedPages(
+	ctx context.Context,
+	cycleID, partitionKey string,
+	expectedPages int,
+) error {
+	if expectedPages < 0 {
+		return fmt.Errorf("store discovery expected pages: negative value")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return sanitizeDBError("begin discovery page reconcile", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var oldExpected, nextPage int
+	if err = tx.QueryRow(ctx, `
+		SELECT expected_pages, next_page
+		FROM ingest_cycle_partitions
+		WHERE cycle_id = $1::uuid AND partition_key = $2
+		FOR UPDATE
+	`, cycleID, partitionKey).Scan(&oldExpected, &nextPage); err != nil {
+		return sanitizeDBError("lock discovery page reconcile", err)
+	}
+	if nextPage != 0 || oldExpected == expectedPages {
+		return tx.Commit(ctx)
+	}
+	status := "pending"
+	completedDelta := 0
+	if expectedPages == 0 {
+		status = "complete"
+		completedDelta = 1
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE ingest_cycle_partitions
+		SET expected_pages = $3, status = $4, updated_at = now()
+		WHERE cycle_id = $1::uuid AND partition_key = $2
+	`, cycleID, partitionKey, expectedPages, status); err != nil {
+		return sanitizeDBError("update discovery page reconcile", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE ingest_cycles
+		SET expected_pages = expected_pages + $2,
+			completed_partitions = completed_partitions + $3
+		WHERE id = $1::uuid AND status = 'running'
+	`, cycleID, expectedPages-oldExpected, completedDelta); err != nil {
+		return sanitizeDBError("update discovery cycle reconcile", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return sanitizeDBError("commit discovery page reconcile", err)
+	}
+	return nil
+}
+
+// SaveDiscoveryPage atomically deduplicates observations and advances one page.
+func (s *PG) SaveDiscoveryPage(
+	ctx context.Context,
+	cycleID string,
+	part DiscoveryPartition,
+	observations []DiscoveryObservation,
+) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return sanitizeDBError("begin discovery page", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var current, expected int
+	if err = tx.QueryRow(ctx, `
+		SELECT next_page, expected_pages
+		FROM ingest_cycle_partitions
+		WHERE cycle_id = $1::uuid AND partition_key = $2
+		FOR UPDATE
+	`, cycleID, part.Key).Scan(&current, &expected); err != nil {
+		return sanitizeDBError("lock discovery partition", err)
+	}
+	for _, observation := range observations {
+		if observation.ExternalRegionID != "" {
+			if _, err = upsertRegion(
+				ctx, tx, "hh", observation.ExternalRegionID, observation.ExternalRegionName,
+			); err != nil {
+				return sanitizeDBError("upsert discovery region", err)
+			}
+		}
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO ingest_cycle_observations (
+				cycle_id, source, external_id, published_at,
+				external_region_id, external_region_name,
+				primary_role_external_id, role_group, external_role_ids,
+				salary_from, salary_to, salary_currency, salary_gross,
+				salary_mid_rub_net, salary_eligible, observed_at
+			) VALUES (
+				$1::uuid, 'hh', $2, $3, NULLIF($4, ''), NULLIF($5, ''),
+				$6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13, $14, $15
+			)
+			ON CONFLICT (cycle_id, source, external_id) DO UPDATE SET
+				published_at = EXCLUDED.published_at,
+				external_region_id = EXCLUDED.external_region_id,
+				external_region_name = EXCLUDED.external_region_name,
+				primary_role_external_id = EXCLUDED.primary_role_external_id,
+				role_group = EXCLUDED.role_group,
+				external_role_ids = EXCLUDED.external_role_ids,
+				salary_from = EXCLUDED.salary_from,
+				salary_to = EXCLUDED.salary_to,
+				salary_currency = EXCLUDED.salary_currency,
+				salary_gross = EXCLUDED.salary_gross,
+				salary_mid_rub_net = EXCLUDED.salary_mid_rub_net,
+				salary_eligible = EXCLUDED.salary_eligible,
+				observed_at = EXCLUDED.observed_at
+		`, cycleID, observation.ExternalID, observation.PublishedAt.UTC(),
+			observation.ExternalRegionID, observation.ExternalRegionName,
+			observation.PrimaryRoleExternalID, observation.RoleGroup,
+			observation.ExternalRoleIDs, observation.SalaryFrom, observation.SalaryTo,
+			observation.SalaryCurrency, observation.SalaryGross,
+			observation.SalaryMidRubNet, observation.SalaryEligible,
+			observation.ObservedAt.UTC()); err != nil {
+			return sanitizeDBError("upsert discovery observation", err)
+		}
+	}
+	next := part.NextPage + 1
+	if next <= current {
+		return tx.Commit(ctx)
+	}
+	if next > expected {
+		return fmt.Errorf("store discovery page: page exceeds expected count")
+	}
+	status := "running"
+	completedPart := 0
+	if next == expected {
+		status = "complete"
+		completedPart = 1
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE ingest_cycle_partitions
+		SET next_page = $3, status = $4, updated_at = now()
+		WHERE cycle_id = $1::uuid AND partition_key = $2
+	`, cycleID, part.Key, next, status); err != nil {
+		return sanitizeDBError("advance discovery partition", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE ingest_cycles
+		SET completed_pages = completed_pages + 1,
+			completed_partitions = completed_partitions + $2
+		WHERE id = $1::uuid AND status = 'running'
+	`, cycleID, completedPart); err != nil {
+		return sanitizeDBError("advance discovery cycle", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return sanitizeDBError("commit discovery page", err)
+	}
+	return nil
+}
+
+// CompleteDiscoveryCycle proves that every planned search page was committed.
+func (s *PG) CompleteDiscoveryCycle(ctx context.Context, cycleID string) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE ingest_cycles c
+		SET status = 'complete', completed_at = COALESCE(completed_at, now())
+		WHERE c.id = $1::uuid
+		  AND c.scope = 'daily_discovery'
+		  AND c.status IN ('running', 'complete')
+		  AND c.completed_pages = c.expected_pages
+		  AND c.completed_partitions = c.partition_count
+		  AND NOT EXISTS (
+			SELECT 1 FROM ingest_cycle_partitions p
+			WHERE p.cycle_id = c.id AND p.status <> 'complete'
+		  )
+	`, cycleID)
+	if err != nil {
+		return sanitizeDBError("complete discovery cycle", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("store complete discovery cycle: page coverage is incomplete")
+	}
+	return nil
+}
+
+// FailDiscoveryCycle records a terminal miss without publishing observations.
+func (s *PG) FailDiscoveryCycle(ctx context.Context, cycleID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE ingest_cycles
+		SET status = 'failed', failed_at = now()
+		WHERE id = $1::uuid AND scope = 'daily_discovery' AND status = 'running'
+	`, cycleID)
+	return sanitizeDBError("fail discovery cycle", err)
+}
+
+// CleanupDiscoveryObservations removes expired staging rows only after a
+// successful snapshot preserved their aggregate provenance.
+func (s *PG) CleanupDiscoveryObservations(
+	ctx context.Context,
+	before time.Time,
+) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM ingest_cycle_observations o
+		USING ingest_cycles c
+		WHERE o.cycle_id = c.id
+		  AND c.scope = 'daily_discovery'
+		  AND c.cycle_date < $1::date
+		  AND EXISTS (
+			SELECT 1
+			FROM analytics_runs ar
+			WHERE ar.source_cycle_id = c.id
+			  AND ar.run_type = 'daily_snapshot'
+			  AND ar.status = 'success'
+			  AND ar.method_version = c.method_version
+		  )
+	`, before.UTC())
+	if err != nil {
+		return 0, sanitizeDBError("cleanup discovery observations", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // SyncRoles persists official source role ids as canonical roles plus source aliases.
 func (s *PG) SyncRoles(ctx context.Context, source string, roles []SourceRole) (map[string]string, error) {
 	result := make(map[string]string, len(roles))

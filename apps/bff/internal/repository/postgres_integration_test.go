@@ -138,10 +138,12 @@ func TestPostgresReadQueries(t *testing.T) {
 	err = tx.QueryRow(ctx, `
 		INSERT INTO ingest_cycles (
 			source, scope, scope_hash, cycle_end, status, partition_count,
-			completed_partitions, started_at, completed_at
+			completed_partitions, started_at, completed_at, cycle_date, cutoff_at,
+			expected_pages, completed_pages, method_version
 		) VALUES (
-			$1, 'all_it', repeat('a', 64), $2::timestamptz, 'complete', 1, 1,
-			$2::timestamptz - interval '1 hour', $2::timestamptz
+			$1, 'daily_discovery', repeat('a', 64), $2::timestamptz, 'complete', 1, 1,
+			$2::timestamptz - interval '1 hour', $2::timestamptz,
+			$2::date, $2::timestamptz, 1, 1, 'vacancy_demand_v2'
 		)
 		RETURNING id::text
 	`, source, published).Scan(&cycleID)
@@ -152,7 +154,7 @@ func TestPostgresReadQueries(t *testing.T) {
 			status, method_version, finished_at, row_count
 		) VALUES (
 			'daily_snapshot', $1::date, $2, $3::uuid,
-			'success', 'vacancy_demand_v1', now(), 2
+			'success', 'vacancy_demand_v2', now(), 2
 		)
 		RETURNING id::text
 	`, published, source, cycleID).Scan(&analyticsRunID)
@@ -165,9 +167,9 @@ func TestPostgresReadQueries(t *testing.T) {
 			analytics_run_id, method_version, observed_at
 		) VALUES
 			($1::date, $2, 'software_development', 'all_regions', NULL,
-			 2, 2, 1, 150000, true, $3::uuid, $4::uuid, 'vacancy_demand_v1', $1),
+			 2, 2, 1, 150000, true, $3::uuid, $4::uuid, 'vacancy_demand_v2', $1),
 			($1::date, $2, 'software_development', 'region', $5::uuid,
-			 2, 2, 1, 150000, true, $3::uuid, $4::uuid, 'vacancy_demand_v1', $1)
+			 2, 2, 1, 150000, true, $3::uuid, $4::uuid, 'vacancy_demand_v2', $1)
 	`, published, source, cycleID, analyticsRunID, regionID)
 	require.NoError(t, err)
 

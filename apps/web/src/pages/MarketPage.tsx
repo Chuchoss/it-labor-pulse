@@ -58,7 +58,7 @@ export function MarketPage() {
         },
         signal,
       ),
-    enabled: coverage.data?.status === 'ready' && Boolean(year),
+    enabled: ['ready', 'degraded'].includes(coverage.data?.status ?? '') && Boolean(year),
   })
   const points = demand.data?.points ?? []
   const canUseWeek = (coverage.data?.complete_weekly_count ?? 0) > 0
@@ -102,7 +102,17 @@ export function MarketPage() {
         </Alert>
       )}
 
-      {coverage.data?.status === 'ready' && (
+      {coverage.data?.status === 'degraded' && (
+        <Alert severity="warning">
+          Покрытие неполное: пропущено дней — {coverage.data.missed_daily_count}, незавершено —
+          {' '}{coverage.data.incomplete_daily_count}
+          {coverage.data.latest_incomplete_date
+            ? ` (последний: ${formatDate(coverage.data.latest_incomplete_date)})`
+            : ''}. Незавершённые дни не публикуются.
+        </Alert>
+      )}
+
+      {(coverage.data?.status === 'ready' || coverage.data?.status === 'degraded') && (
         <>
           <Card variant="outlined">
             <CardContent>
@@ -193,7 +203,11 @@ export function MarketPage() {
                 />
                 <CoverageItem
                   label="Полные снимки"
-                  value={`${coverage.data.complete_daily_count} дней · ${coverage.data.complete_weekly_count} недель`}
+                  value={`${coverage.data.complete_daily_count} из ${coverage.data.expected_daily_count} дней · ${coverage.data.complete_weekly_count} недель`}
+                />
+                <CoverageItem
+                  label="Следующий discovery"
+                  value={new Date(coverage.data.next_scheduled_cycle).toLocaleString('ru-RU')}
                 />
                 <CoverageItem
                   label="Методика"
@@ -209,9 +223,9 @@ export function MarketPage() {
                 />
               </Box>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-                Активные — вакансии, наблюдавшиеся в полном all-IT цикле. Опубликованные —
-                вакансии с <code>published_at</code> в UTC-окне снимка. Зарплатная
-                методика использует валидные offered salary в RUB, приведённые к оценке net.
+                Активные — дедуплицированные вакансии из полного дневного search-discovery.
+                Опубликованные — вакансии с <code>published_at</code> в UTC-окне снимка.
+                Навыки и полные карточки обновляются отдельно фоновой hydration.
               </Typography>
             </CardContent>
           </Card>

@@ -12,33 +12,49 @@ import (
 // SchedulerAdvisoryLockKey is the stable Phase 1 mutex for HH scheduler runs.
 // Decimal is used deliberately so the same key is easy to inspect in pg_locks.
 const SchedulerAdvisoryLockKey int64 = 549_004_801
+const DiscoveryAdvisoryLockKey int64 = 549_004_804
 
 // AdvisoryLock owns the dedicated PostgreSQL session holding a lock.
 type AdvisoryLock struct {
 	conn *pgxpool.Conn
+	key  int64
 	once sync.Once
 }
 
 // TrySchedulerLock acquires the session-level lock without waiting.
 // The returned connection is dedicated until Release.
 func (s *PG) TrySchedulerLock(ctx context.Context) (*AdvisoryLock, bool, error) {
+	return s.tryAdvisoryLock(ctx, SchedulerAdvisoryLockKey, "scheduler")
+}
+
+// TryDiscoveryLock prevents overlapping daily discovery processes while
+// allowing the separately keyed detail hydration scheduler to continue.
+func (s *PG) TryDiscoveryLock(ctx context.Context) (*AdvisoryLock, bool, error) {
+	return s.tryAdvisoryLock(ctx, DiscoveryAdvisoryLockKey, "discovery")
+}
+
+func (s *PG) tryAdvisoryLock(
+	ctx context.Context,
+	key int64,
+	label string,
+) (*AdvisoryLock, bool, error) {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
-		return nil, false, sanitizeDBError("acquire scheduler lock connection", err)
+		return nil, false, sanitizeDBError("acquire "+label+" lock connection", err)
 	}
 	var acquired bool
 	if err := conn.QueryRow(ctx,
 		`SELECT pg_try_advisory_lock($1)`,
-		SchedulerAdvisoryLockKey,
+		key,
 	).Scan(&acquired); err != nil {
 		conn.Release()
-		return nil, false, sanitizeDBError("try scheduler advisory lock", err)
+		return nil, false, sanitizeDBError("try "+label+" advisory lock", err)
 	}
 	if !acquired {
 		conn.Release()
 		return nil, false, nil
 	}
-	return &AdvisoryLock{conn: conn}, true, nil
+	return &AdvisoryLock{conn: conn, key: key}, true, nil
 }
 
 // Release unlocks and returns the dedicated connection to the pool.
@@ -53,7 +69,7 @@ func (l *AdvisoryLock) Release(ctx context.Context) error {
 		var unlocked bool
 		if err := l.conn.QueryRow(cleanupCtx,
 			`SELECT pg_advisory_unlock($1)`,
-			SchedulerAdvisoryLockKey,
+			l.key,
 		).Scan(&unlocked); err != nil {
 			releaseErr = sanitizeDBError("release scheduler advisory lock", err)
 			raw := l.conn.Hijack()

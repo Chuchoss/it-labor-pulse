@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	// MethodVersion identifies the immutable Phase 1 vacancy-demand methodology.
-	MethodVersion = "vacancy_demand_v1"
+	// MethodVersion identifies search-observation-based daily demand snapshots.
+	MethodVersion = "vacancy_demand_v2"
 
 	dailyLockKey  int64 = 549004802
 	weeklyLockKey int64 = 549004803
@@ -87,6 +87,7 @@ type cycle struct {
 	CycleEnd    time.Time
 	StartedAt   time.Time
 	CompletedAt time.Time
+	CycleDate   time.Time
 }
 
 // RunDaily creates or deterministically replaces a daily snapshot. Empty
@@ -118,15 +119,17 @@ func (w *Worker) selectCycle(ctx context.Context, cycleID string) (cycle, bool, 
 	var row pgx.Row
 	if strings.TrimSpace(cycleID) != "" {
 		row = w.pool.QueryRow(ctx, `
-			SELECT id::text, source, cycle_end, started_at, completed_at
+			SELECT id::text, source, cycle_end, started_at, completed_at, cycle_date
 			FROM ingest_cycles
-			WHERE id = $1::uuid AND scope = 'all_it' AND status = 'complete'
-		`, cycleID)
+			WHERE id = $1::uuid AND scope = 'daily_discovery' AND status = 'complete'
+			  AND method_version = $2
+		`, cycleID, MethodVersion)
 	} else {
 		row = w.pool.QueryRow(ctx, `
-			SELECT c.id::text, c.source, c.cycle_end, c.started_at, c.completed_at
+			SELECT c.id::text, c.source, c.cycle_end, c.started_at, c.completed_at, c.cycle_date
 			FROM ingest_cycles c
-			WHERE c.scope = 'all_it' AND c.status = 'complete'
+			WHERE c.scope = 'daily_discovery' AND c.status = 'complete'
+			  AND c.method_version = $1
 			  AND NOT EXISTS (
 				SELECT 1
 				FROM analytics_runs ar
@@ -141,7 +144,7 @@ func (w *Worker) selectCycle(ctx context.Context, cycleID string) (cycle, bool, 
 	}
 	err := row.Scan(
 		&selected.ID, &selected.Source, &selected.CycleEnd,
-		&selected.StartedAt, &selected.CompletedAt,
+		&selected.StartedAt, &selected.CompletedAt, &selected.CycleDate,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return cycle{}, false, nil
@@ -153,7 +156,7 @@ func (w *Worker) selectCycle(ctx context.Context, cycleID string) (cycle, bool, 
 }
 
 func (w *Worker) writeDaily(ctx context.Context, selected cycle) (Result, error) {
-	target := dayUTC(selected.CycleEnd)
+	target := dayUTC(selected.CycleDate)
 	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Result{}, fmt.Errorf("analytics: begin daily transaction failed")
@@ -195,60 +198,62 @@ func (w *Worker) writeDaily(ctx context.Context, selected cycle) (Result, error)
 
 	tag, err := tx.Exec(ctx, `
 		WITH cycle AS (
-			SELECT id, source, cycle_end, started_at, completed_at
+			SELECT id, source, cycle_end, cycle_date
 			FROM ingest_cycles
-			WHERE id = $1::uuid AND status = 'complete' AND scope = 'all_it'
+			WHERE id = $1::uuid AND status = 'complete'
+			  AND scope = 'daily_discovery' AND method_version = $4
 		), base AS (
 			SELECT
-				v.source,
-				r.family AS role_group,
-				v.region_id,
-				v.is_active,
-				v.published_at,
-				CASE
-					WHEN trim(v.salary_currency) = 'RUB'
-					 AND v.salary_mid BETWEEN 10000 AND 2000000
-					THEN v.salary_mid
-				END AS salary_rub_net
+				o.source, o.role_group, rei.region_id, o.published_at,
+				CASE WHEN o.salary_eligible THEN o.salary_mid_rub_net END AS salary_rub_net
 			FROM cycle c
-			JOIN vacancies v
-			  ON v.source = c.source
-			 AND v.collected_at >= c.started_at
-			 AND v.collected_at <= c.completed_at
-			 AND v.deleted_at IS NULL
-			JOIN roles r
-			  ON r.id = v.role_id
-			 AND r.family IN ('software_development', 'analytics', 'quality_assurance')
+			JOIN ingest_cycle_observations o ON o.cycle_id = c.id
+			LEFT JOIN region_external_ids rei
+			  ON rei.source = o.source AND rei.external_id = o.external_region_id
 		), aggregate_rows AS (
 			SELECT
-				role_group,
-				CASE WHEN grouping(region_id) = 1 THEN 'all_regions' ELSE 'region' END
-					AS aggregation_level,
-				CASE WHEN grouping(region_id) = 1 THEN NULL ELSE region_id END AS region_id,
-				count(*) FILTER (WHERE is_active)::integer AS active_count,
+				role_group, 'all_regions'::text AS aggregation_level,
+				NULL::uuid AS region_id,
+				count(*)::integer AS active_count,
 				count(*) FILTER (
 					WHERE published_at >= $2::date
 					  AND published_at < ($2::date + interval '1 day')
 				)::integer AS published_count,
-				count(salary_rub_net) FILTER (WHERE is_active)::integer
-					AS vacancies_with_salary,
+				count(salary_rub_net)::integer AS vacancies_with_salary,
 				percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_rub_net)
-					FILTER (WHERE is_active AND salary_rub_net IS NOT NULL)
-					AS median_salary_rub_net
+					FILTER (WHERE salary_rub_net IS NOT NULL) AS median_salary_rub_net,
+				(count(salary_rub_net)::numeric / NULLIF(count(*), 0)) AS salary_coverage
 			FROM base
-			GROUP BY GROUPING SETS ((role_group), (role_group, region_id))
+			GROUP BY role_group
+			UNION ALL
+			SELECT
+				role_group, 'region'::text, region_id,
+				count(*)::integer,
+				count(*) FILTER (
+					WHERE published_at >= $2::date
+					  AND published_at < ($2::date + interval '1 day')
+				)::integer,
+				count(salary_rub_net)::integer,
+				percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_rub_net)
+					FILTER (WHERE salary_rub_net IS NOT NULL),
+				(count(salary_rub_net)::numeric / NULLIF(count(*), 0))
+			FROM base
+			WHERE region_id IS NOT NULL
+			GROUP BY role_group, region_id
 		)
 		INSERT INTO vacancy_demand_daily (
 			snapshot_date, source, role_group, aggregation_level, region_id,
 			active_count, published_count, vacancies_with_salary,
 			median_salary_rub_net, cycle_complete, source_cycle_id,
-			analytics_run_id, method_version, observed_at
+			analytics_run_id, method_version, observed_at,
+			salary_method, salary_coverage
 		)
 		SELECT
 			$2, c.source, a.role_group, a.aggregation_level, a.region_id,
 			a.active_count, a.published_count, a.vacancies_with_salary,
 			a.median_salary_rub_net, true, c.id,
-			$3::uuid, $4, c.cycle_end
+			$3::uuid, $4, c.cycle_end,
+			'hh_search_shared_normalizer_v1', coalesce(a.salary_coverage, 0)
 		FROM aggregate_rows a
 		CROSS JOIN cycle c
 	`, selected.ID, target, runID, MethodVersion)

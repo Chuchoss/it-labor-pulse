@@ -67,6 +67,52 @@ type Cycle struct {
 	PartitionCount      int
 	CompletedPartitions int
 	Status              string
+	CycleDate           time.Time
+	CutoffAt            time.Time
+	ExpectedPages       int
+	CompletedPages      int
+	MethodVersion       string
+}
+
+// DiscoveryPartition is one durable search-only unit in a daily cycle.
+type DiscoveryPartition struct {
+	Key                string
+	ProfessionalRoleID string
+	Area               string
+	DateFrom           time.Time
+	DateTo             time.Time
+	ExpectedPages      int
+	NextPage           int
+	Status             string
+}
+
+// DiscoveryObservation is the minimal, non-PII aggregate input from HH search.
+type DiscoveryObservation struct {
+	ExternalID            string
+	PublishedAt           time.Time
+	ExternalRegionID      string
+	ExternalRegionName    string
+	PrimaryRoleExternalID string
+	RoleGroup             string
+	ExternalRoleIDs       []string
+	SalaryFrom            *float64
+	SalaryTo              *float64
+	SalaryCurrency        string
+	SalaryGross           *bool
+	SalaryMidRubNet       *float64
+	SalaryEligible        bool
+	ObservedAt            time.Time
+}
+
+// DiscoveryStore persists resumable daily search observations.
+type DiscoveryStore interface {
+	PendingDiscoveryCycle(context.Context, string, string) (Cycle, bool, error)
+	StartDiscoveryCycle(context.Context, Cycle, []DiscoveryPartition) (string, error)
+	NextDiscoveryPartition(context.Context, string) (DiscoveryPartition, bool, error)
+	SetDiscoveryExpectedPages(context.Context, string, string, int) error
+	SaveDiscoveryPage(context.Context, string, DiscoveryPartition, []DiscoveryObservation) error
+	CompleteDiscoveryCycle(context.Context, string) error
+	FailDiscoveryCycle(context.Context, string) error
 }
 
 // Store persists ingest runs, checkpoints and vacancies.

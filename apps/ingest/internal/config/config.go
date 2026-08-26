@@ -34,6 +34,7 @@ type Config struct {
 	FixtureDir string
 
 	Scheduler SchedulerConfig
+	Discovery DiscoveryConfig
 }
 
 // SchedulerConfig contains dedicated scheduler process settings.
@@ -46,6 +47,15 @@ type SchedulerConfig struct {
 	JitterPercent   float64
 	ShutdownTimeout time.Duration
 	TestMode        bool
+}
+
+// DiscoveryConfig controls the fast, search-only daily cycle.
+type DiscoveryConfig struct {
+	UTCHour       int
+	RunOnStart    bool
+	MaxRequests   int
+	RunTimeout    time.Duration
+	RetryInterval time.Duration
 }
 
 // Load reads ingest config from env.
@@ -78,6 +88,13 @@ func Load() Config {
 			ShutdownTimeout: envDuration("INGEST_SCHEDULER_SHUTDOWN_TIMEOUT", 30*time.Second),
 			TestMode:        envBool("INGEST_SCHEDULER_TEST_MODE", false),
 		},
+		Discovery: DiscoveryConfig{
+			UTCHour:       envInt("INGEST_DISCOVERY_UTC_HOUR", 1),
+			RunOnStart:    envBool("INGEST_DISCOVERY_RUN_ON_START", false),
+			MaxRequests:   envInt("INGEST_DISCOVERY_MAX_REQUESTS", 300),
+			RunTimeout:    envDuration("INGEST_DISCOVERY_RUN_TIMEOUT", 4*time.Hour),
+			RetryInterval: envDuration("INGEST_DISCOVERY_RETRY_INTERVAL", 15*time.Minute),
+		},
 	}
 	delayMS := envInt("INGEST_PAGE_DELAY_MS", 350)
 	if delayMS < 0 {
@@ -85,6 +102,26 @@ func Load() Config {
 	}
 	cfg.PageDelay = time.Duration(delayMS) * time.Millisecond
 	return cfg
+}
+
+// ValidateDiscovery rejects settings that could overlap or hammer HH.
+func (c Config) ValidateDiscovery() error {
+	if err := c.ValidateLive(); err != nil {
+		return err
+	}
+	if c.Discovery.UTCHour < 0 || c.Discovery.UTCHour > 23 {
+		return fmt.Errorf("INGEST_DISCOVERY_UTC_HOUR must be between 0 and 23")
+	}
+	if c.Discovery.MaxRequests < 10 || c.Discovery.MaxRequests > 1000 {
+		return fmt.Errorf("INGEST_DISCOVERY_MAX_REQUESTS must be between 10 and 1000")
+	}
+	if c.Discovery.RunTimeout <= 0 || c.Discovery.RunTimeout > 24*time.Hour {
+		return fmt.Errorf("INGEST_DISCOVERY_RUN_TIMEOUT must be positive and at most 24h")
+	}
+	if c.Discovery.RetryInterval < time.Minute {
+		return fmt.Errorf("INGEST_DISCOVERY_RETRY_INTERVAL must be at least 1m")
+	}
+	return nil
 }
 
 // ValidateScheduler validates both live ingest and scheduler-specific settings.

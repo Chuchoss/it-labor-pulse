@@ -180,13 +180,14 @@ Cursor-pagination (Target) для больших списков: `cursor`, `next
 - `published_count` — `published_at` в UTC-окне snapshot;
 - `new_count` — deprecated alias `published_count`;
 - weekly API возвращает только `complete=true` (`source_day_count=7`);
-- до первого полного all-IT cycle ответ: `status=no_complete_snapshots`,
+- до первого полного daily discovery cycle ответ: `status=no_complete_snapshots`,
   `points=[]`, без фиктивных точек.
 
 #### `GET /api/v1/trends/coverage`
 
 Покрытие для `/market`: `available_years`, first/last observation,
-publication range, число complete daily/weekly snapshots, latest complete cycle,
+publication range, expected/complete/missed/incomplete daily dates, следующий
+запланированный discovery, число complete weekly snapshots, latest complete cycle,
 source/method version и регионы, присутствующие в snapshots. До первого снимка
 возвращает `status=collecting` и пустые годы.
 

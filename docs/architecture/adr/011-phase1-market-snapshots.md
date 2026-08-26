@@ -1,5 +1,9 @@
 # ADR 011: Phase 1 market snapshots в PostgreSQL
 
+> Частично заменён [ADR 013](./013-daily-discovery-snapshots.md): начиная с
+> `vacancy_demand_v2` completeness доказывает search-only daily discovery, а не
+> завершение detail hydration.
+
 ## Context
 
 Текущее состояние `vacancies` не позволяет достоверно восстановить исторический

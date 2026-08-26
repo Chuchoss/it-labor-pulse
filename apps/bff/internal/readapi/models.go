@@ -127,18 +127,23 @@ type CoverageRegion struct {
 }
 
 type TrendsCoverage struct {
-	Status              string           `json:"status"`
-	Source              string           `json:"source"`
-	MethodVersion       string           `json:"method_version,omitempty"`
-	AvailableYears      []int            `json:"available_years"`
-	FirstObservation    *string          `json:"first_observation"`
-	LastObservation     *string          `json:"last_observation"`
-	PublicationFrom     *string          `json:"publication_from"`
-	PublicationTo       *string          `json:"publication_to"`
-	CompleteDailyCount  int64            `json:"complete_daily_count"`
-	CompleteWeeklyCount int64            `json:"complete_weekly_count"`
-	LatestCompleteCycle *time.Time       `json:"latest_complete_cycle"`
-	Regions             []CoverageRegion `json:"regions"`
+	Status               string           `json:"status"`
+	Source               string           `json:"source"`
+	MethodVersion        string           `json:"method_version,omitempty"`
+	AvailableYears       []int            `json:"available_years"`
+	FirstObservation     *string          `json:"first_observation"`
+	LastObservation      *string          `json:"last_observation"`
+	PublicationFrom      *string          `json:"publication_from"`
+	PublicationTo        *string          `json:"publication_to"`
+	CompleteDailyCount   int64            `json:"complete_daily_count"`
+	CompleteWeeklyCount  int64            `json:"complete_weekly_count"`
+	ExpectedDailyCount   int64            `json:"expected_daily_count"`
+	MissedDailyCount     int64            `json:"missed_daily_count"`
+	IncompleteDailyCount int64            `json:"incomplete_daily_count"`
+	LatestIncompleteDate *string          `json:"latest_incomplete_date"`
+	NextScheduledCycle   time.Time        `json:"next_scheduled_cycle"`
+	LatestCompleteCycle  *time.Time       `json:"latest_complete_cycle"`
+	Regions              []CoverageRegion `json:"regions"`
 }
 
 type SkillStat struct {

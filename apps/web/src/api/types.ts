@@ -48,7 +48,7 @@ export interface DemandTrends {
 }
 
 export interface TrendsCoverage {
-  status: 'ready' | 'collecting'
+  status: 'ready' | 'collecting' | 'degraded'
   source: string
   method_version?: string
   available_years: number[]
@@ -58,6 +58,11 @@ export interface TrendsCoverage {
   publication_to: string | null
   complete_daily_count: number
   complete_weekly_count: number
+  expected_daily_count: number
+  missed_daily_count: number
+  incomplete_daily_count: number
+  latest_incomplete_date: string | null
+  next_scheduled_cycle: string
   latest_complete_cycle: string | null
   regions: Array<{ region_id: string; name: string }>
 }

@@ -7,7 +7,7 @@ COMPOSE      := docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 # Optional local data plane; cloud PG/Redis need no Compose services.
 PROFILES_INFRA := --profile local-redis --profile local-pg
 
-.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff run-web run-ingest-scheduler run-analytics-scheduler analytics-daily analytics-weekly analytics-backfill ingest-hh ingest-hh-it-plan ingest-hh-it ingest-hh-fixture test test-go test-web
+.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff run-web run-ingest-scheduler run-hydrate-scheduler run-discovery-scheduler discovery-once run-analytics-scheduler analytics-daily analytics-weekly analytics-backfill ingest-hh ingest-hh-it-plan ingest-hh-it ingest-hh-fixture test test-go test-web
 
 help:
 	@echo "LMA local targets:"
@@ -23,7 +23,9 @@ help:
 	@echo "  make ingest-hh      - one-shot HH ingest → normalize → PG (needs DATABASE_URL + HH_USER_AGENT)"
 	@echo "  make ingest-hh-it-plan - aggregate-only plan for all official HH IT roles in Russia"
 	@echo "  make ingest-hh-it   - bounded/resumable all-IT crawl (explicit; may take multiple runs)"
-	@echo "  make run-ingest-scheduler - periodic bounded/resumable all-IT scheduler"
+	@echo "  make run-discovery-scheduler - daily search-only snapshots (01:00 UTC)"
+	@echo "  make discovery-once - run/resume one bounded daily discovery"
+	@echo "  make run-hydrate-scheduler - background detail hydration"
 	@echo "  make analytics-daily - snapshot latest eligible complete all-IT cycle"
 	@echo "  make analytics-weekly - roll up current ISO week from daily snapshots"
 	@echo "  make analytics-backfill - process eligible complete cycles and weeks"
@@ -189,6 +191,16 @@ ingest-hh-it: $(ENV_FILE)
 run-ingest-scheduler: $(ENV_FILE)
 	@set -a; . ./$(ENV_FILE); set +a; \
 	INGEST_SCOPE=it go run ./apps/ingest/cmd/scheduler
+
+run-hydrate-scheduler: run-ingest-scheduler
+
+run-discovery-scheduler: $(ENV_FILE)
+	@set -a; . ./$(ENV_FILE); set +a; \
+	go run ./apps/ingest/cmd/discovery
+
+discovery-once: $(ENV_FILE)
+	@set -a; . ./$(ENV_FILE); set +a; \
+	go run ./apps/ingest/cmd/discovery -once
 
 analytics-daily: $(ENV_FILE)
 	@set -a; . ./$(ENV_FILE); set +a; \
