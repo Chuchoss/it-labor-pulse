@@ -27,6 +27,7 @@ import {
   Link,
   Tooltip,
   useMediaQuery,
+  useTheme,
 } from '@mui/material'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -111,6 +112,7 @@ export function VacanciesPage({
   highlightDurationMs?: number
 }) {
   const { currency } = useCurrency()
+  const theme = useTheme()
   const queryClient = useQueryClient()
   const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const [searchParams, setSearchParams] = useSearchParams()
@@ -289,16 +291,16 @@ export function VacanciesPage({
     (vacancy: Vacancy) => {
       if (!newVacancyIDs.has(vacancyKey(vacancy))) return undefined
       return {
-        backgroundColor: 'rgba(46, 125, 50, 0.18)',
-        boxShadow: 'inset 3px 0 0 rgba(46, 125, 50, 0.8)',
+        backgroundColor: theme.palette.highlight.new,
+        boxShadow: `inset 3px 0 0 ${theme.palette.highlight.newEdge}`,
         animation: prefersReducedMotion ? 'none' : 'vacancy-new-fade 8s ease-out forwards',
         '@keyframes vacancy-new-fade': {
-          from: { backgroundColor: 'rgba(46, 125, 50, 0.18)' },
-          to: { backgroundColor: 'rgba(46, 125, 50, 0)' },
+          from: { backgroundColor: theme.palette.highlight.new },
+          to: { backgroundColor: theme.palette.highlight.newFade },
         },
       }
     },
-    [newVacancyIDs, prefersReducedMotion],
+    [newVacancyIDs, prefersReducedMotion, theme],
   )
 
   useEffect(() => {
@@ -625,7 +627,7 @@ export function VacanciesPage({
                           cursor: 'pointer',
                           transition: 'box-shadow 160ms ease',
                           '&:hover': {
-                            boxShadow: 'inset 0 0 0 1px rgba(25, 118, 210, 0.45)',
+                            boxShadow: `inset 0 0 0 1px ${theme.palette.primary.main}`,
                           },
                           '&:focus-within': {
                             outline: '3px solid',

@@ -20,6 +20,7 @@ import {
   ToggleButtonGroup,
   Tooltip,
   Typography,
+  useTheme,
 } from '@mui/material'
 import { useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -242,6 +243,7 @@ function RankingCard({
 }
 
 export function DashboardPage() {
+  const theme = useTheme()
   const { currency } = useCurrency()
   const fallback = defaultPeriod()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -417,12 +419,12 @@ export function DashboardPage() {
                   {
                     data: demandPoints.map((point) => point.active_count),
                     label: 'Активные',
-                    color: '#4f46e5',
+                    color: theme.palette.chart.primary,
                   },
                   {
                     data: demandPoints.map((point) => point.new_count),
                     label: 'Новые',
-                    color: '#14b8a6',
+                    color: theme.palette.chart.secondary,
                   },
                 ]}
                 grid={{ horizontal: true }}
@@ -545,17 +547,17 @@ export function DashboardPage() {
                 {
                   data: salaryPoints.map((point) => point.p25),
                   label: 'P25',
-                  color: '#a5b4fc',
+                  color: theme.palette.chart.tertiary,
                 },
                 {
                   data: salaryPoints.map((point) => point.median),
                   label: 'Медиана',
-                  color: '#4f46e5',
+                  color: theme.palette.chart.primary,
                 },
                 {
                   data: salaryPoints.map((point) => point.p75),
                   label: 'P75',
-                  color: '#14b8a6',
+                  color: theme.palette.chart.secondary,
                 },
               ]}
               grid={{ horizontal: true }}

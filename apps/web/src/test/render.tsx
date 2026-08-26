@@ -1,9 +1,10 @@
-import { CssBaseline, ThemeProvider, createTheme } from '@mui/material'
+import { CssBaseline, ThemeProvider } from '@mui/material'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { CurrencyProvider } from '../components/CurrencyContext'
+import { createAppTheme } from '../theme'
 
 export function renderPage(ui: ReactElement, initialEntry = '/') {
   const queryClient = new QueryClient({
@@ -14,7 +15,7 @@ export function renderPage(ui: ReactElement, initialEntry = '/') {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={createTheme()}>
+      <ThemeProvider theme={createAppTheme('light')}>
         <CssBaseline />
         <CurrencyProvider value={{ currency: 'RUB', setCurrency: () => undefined }}>
           <MemoryRouter initialEntries={[initialEntry]}>{ui}</MemoryRouter>

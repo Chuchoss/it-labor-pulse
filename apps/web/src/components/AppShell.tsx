@@ -84,7 +84,7 @@ export function AppShell({ children, mode, onToggleMode }: AppShellProps) {
   }, [currencies.data, currencies.isError, currency, setCurrency])
 
   const drawer = (
-    <Stack sx={{ height: '100%' }}>
+    <Stack sx={{ height: '100%', bgcolor: 'background.paper' }}>
       <Toolbar sx={{ px: 2.5 }}>
         <Box
           sx={{
@@ -144,7 +144,7 @@ export function AppShell({ children, mode, onToggleMode }: AppShellProps) {
           borderBottom: 1,
           borderColor: 'divider',
           backdropFilter: 'blur(12px)',
-          bgcolor: 'rgba(var(--mui-palette-background-defaultChannel) / 0.88)',
+          bgcolor: 'surface.elevated',
         }}
       >
         <Toolbar>
@@ -270,7 +270,10 @@ export function AppShell({ children, mode, onToggleMode }: AppShellProps) {
         <Container maxWidth="xl" sx={{ py: { xs: 3, md: 4 } }}>
           {children}
         </Container>
-        <Box component="footer" sx={{ borderTop: 1, borderColor: 'divider', px: 3, py: 2.5 }}>
+        <Box
+          component="footer"
+          sx={{ borderTop: 1, borderColor: 'divider', bgcolor: 'surface.muted', px: 3, py: 2.5 }}
+        >
           <Typography variant="caption" color="text.secondary">
             Данные вакансий: HeadHunter. Медианные зарплаты — оценка по указанным
             в вакансиях значениям (offered), приведённым к net упрощённо; это не

@@ -8,6 +8,18 @@
       name="description"
       content="IT Labor Pulse — аналитика спроса и зарплат по данным вакансий"
     />
+    <script>
+      ;(() => {
+        const saved = localStorage.getItem('lma-color-mode')
+        const mode =
+          saved === 'light' || saved === 'dark'
+            ? saved
+            : matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light'
+        document.documentElement.dataset.colorMode = mode
+      })()
+    </script>
     <title>IT Labor Pulse</title>
   </head>
   <body>

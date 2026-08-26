@@ -15,6 +15,7 @@ import {
   Skeleton,
   Stack,
   Typography,
+  useTheme,
 } from '@mui/material'
 import { useState } from 'react'
 import { api } from '../api/client'
@@ -34,6 +35,7 @@ function formatDate(value: string | null | undefined) {
 }
 
 export function MarketPage() {
+  const theme = useTheme()
   const { currency } = useCurrency()
   const [roleGroup, setRoleGroup] = useState('software_development')
   const [selectedYear, setSelectedYear] = useState<number>()
@@ -202,7 +204,7 @@ export function MarketPage() {
                   series={[{
                     data: points.map((point) => point.median_salary ?? null),
                     label: `Медиана, ${currency}`,
-                    color: '#7c3aed',
+                    color: theme.palette.chart.primary,
                   }]}
                   grid={{ horizontal: true }}
                 />
@@ -302,12 +304,12 @@ export function MarketPage() {
                     {
                       data: points.map((point) => point.active_count),
                       label: 'Активные',
-                      color: '#4f46e5',
+                      color: theme.palette.chart.primary,
                     },
                     {
                       data: points.map((point) => point.published_count),
                       label: 'Опубликованные',
-                      color: '#0f766e',
+                      color: theme.palette.chart.secondary,
                     },
                   ]}
                   grid={{ horizontal: true }}
