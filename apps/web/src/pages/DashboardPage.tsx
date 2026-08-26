@@ -3,7 +3,7 @@ import CurrencyRubleRoundedIcon from '@mui/icons-material/CurrencyRubleRounded'
 import FiberNewRoundedIcon from '@mui/icons-material/FiberNewRounded'
 import WorkRoundedIcon from '@mui/icons-material/WorkRounded'
 import { LineChart } from '@mui/x-charts/LineChart'
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import {
   Alert,
   Box,
@@ -11,6 +11,7 @@ import {
   Card,
   CardContent,
   Chip,
+  CircularProgress,
   LinearProgress,
   Skeleton,
   Stack,
@@ -22,6 +23,8 @@ import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { EmptyState, ErrorState } from '../components/DataState'
 import { formatCompact, formatNumber, formatSalary } from '../utils/format'
+
+const SKILLS_PAGE_SIZE = 10
 
 function isoDate(date: Date) {
   return date.toISOString().slice(0, 10)
@@ -107,9 +110,13 @@ export function DashboardPage() {
     queryKey: ['demand-trends', params],
     queryFn: ({ signal }) => api.demandTrends(params, signal),
   })
-  const skills = useQuery({
+  const skills = useInfiniteQuery({
     queryKey: ['top-skills', params],
-    queryFn: ({ signal }) => api.topSkills(params, signal),
+    queryFn: ({ pageParam, signal }) =>
+      api.topSkills(params, pageParam, SKILLS_PAGE_SIZE, signal),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) =>
+      lastPage.page * lastPage.page_size < lastPage.total ? lastPage.page + 1 : undefined,
   })
 
   const applyPeriod = () => {
@@ -120,8 +127,16 @@ export function DashboardPage() {
   const lowSample = (summary.data?.salary_sample_size ?? 0) < 5
   const salaryPoints = salaries.data?.points ?? []
   const demandPoints = demand.data?.points ?? []
-  const skillItems = skills.data?.data ?? []
-  const maxSkillCount = Math.max(...skillItems.map((item) => item.count), 1)
+  const skillItems = Array.from(
+    new Map(
+      (skills.data?.pages.flatMap((page) => page.data) ?? []).map((item) => [
+        item.skill_id || item.name,
+        item,
+      ]),
+    ).values(),
+  )
+  const skillTotal = skills.data?.pages.at(-1)?.total ?? 0
+  const maxSkillCount = Math.max(skills.data?.pages[0]?.data[0]?.count ?? 0, 1)
 
   return (
     <Stack spacing={3.5}>
@@ -269,14 +284,14 @@ export function DashboardPage() {
             <Typography variant="body2" color="text.secondary">
               Частота в вакансиях за период
             </Typography>
-            {skills.isLoading && (
+            {skills.isPending && (
               <Stack spacing={2} sx={{ mt: 3 }}>
                 {[1, 2, 3, 4, 5].map((item) => (
                   <Skeleton key={item} height={28} />
                 ))}
               </Stack>
             )}
-            {skills.isError && (
+            {skills.isError && skillItems.length === 0 && (
               <Box sx={{ mt: 2 }}>
                 <ErrorState error={skills.error} onRetry={() => skills.refetch()} compact />
               </Box>
@@ -301,6 +316,39 @@ export function DashboardPage() {
                 </Box>
               ))}
             </Stack>
+            {skillItems.length > 0 && (
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                sx={{ mt: 2.5, gap: 1, alignItems: { sm: 'center' } }}
+              >
+                {(skills.hasNextPage || skills.isFetchNextPageError) && (
+                  <Button
+                    variant="outlined"
+                    onClick={() => void skills.fetchNextPage()}
+                    disabled={skills.isFetchingNextPage}
+                    startIcon={
+                      skills.isFetchingNextPage ? <CircularProgress size={16} /> : undefined
+                    }
+                    aria-label={
+                      skills.isFetchNextPageError
+                        ? 'Повторить загрузку навыков'
+                        : 'Показать ещё навыки'
+                    }
+                  >
+                    {skills.isFetchNextPageError ? 'Повторить' : 'Показать ещё'}
+                  </Button>
+                )}
+                <Typography
+                  variant="caption"
+                  color={skills.isFetchNextPageError ? 'error' : 'text.secondary'}
+                  aria-live="polite"
+                >
+                  {skills.isFetchNextPageError
+                    ? `Не удалось загрузить ещё. Показано ${skillItems.length} из ${skillTotal}`
+                    : `Показано ${skillItems.length} из ${skillTotal}`}
+                </Typography>
+              </Stack>
+            )}
           </CardContent>
         </Card>
       </Box>

@@ -26,7 +26,7 @@ type ReadService interface {
 	SalaryTrends(context.Context, readapi.AnalyticsFilter, string) (readapi.SalaryTrends, error)
 	DemandTrends(context.Context, readapi.AnalyticsFilter, string) (readapi.DemandTrends, error)
 	TrendsCoverage(context.Context) (readapi.TrendsCoverage, error)
-	TopSkills(context.Context, readapi.AnalyticsFilter, int) (readapi.TopSkills, error)
+	TopSkills(context.Context, readapi.AnalyticsFilter, readapi.Page) (readapi.TopSkills, error)
 	ListVacancies(context.Context, readapi.VacancyFilter) (readapi.VacancyPage, error)
 }
 
@@ -204,7 +204,7 @@ func (h *ReadHandler) topSkills(w http.ResponseWriter, r *http.Request) {
 		h.validationError(w, r, err)
 		return
 	}
-	limit, err := parseInt(r.URL.Query(), "limit", 20, 1, 100)
+	page, err := parseTopSkillsPage(r.URL.Query())
 	if err != nil {
 		h.validationError(w, r, err)
 		return
@@ -212,7 +212,7 @@ func (h *ReadHandler) topSkills(w http.ResponseWriter, r *http.Request) {
 	if h.requireService(w, r) {
 		return
 	}
-	result, err := h.service.TopSkills(r.Context(), filter, limit)
+	result, err := h.service.TopSkills(r.Context(), filter, page)
 	h.respond(w, r, result, err)
 }
 
@@ -446,6 +446,20 @@ func parsePage(values url.Values) (readapi.Page, error) {
 		return readapi.Page{}, fieldError{"page", "is too large"}
 	}
 	return readapi.Page{Number: number, Size: size}, nil
+}
+
+func parseTopSkillsPage(values url.Values) (readapi.Page, error) {
+	if strings.TrimSpace(values.Get("limit")) == "" {
+		return parsePage(values)
+	}
+	if strings.TrimSpace(values.Get("page")) != "" || strings.TrimSpace(values.Get("page_size")) != "" {
+		return readapi.Page{}, fieldError{"limit", "must not be combined with page or page_size"}
+	}
+	limit, err := parseInt(values, "limit", 20, 1, 100)
+	if err != nil {
+		return readapi.Page{}, err
+	}
+	return readapi.Page{Number: 1, Size: limit}, nil
 }
 
 func parseInt(values url.Values, field string, fallback, minimum, maximum int) (int, error) {

@@ -41,7 +41,7 @@ func TestPostgresReadQueries(t *testing.T) {
 	_, err = tx.Exec(ctx, `INSERT INTO sources (code, name) VALUES ($1, 'BFF integration source')`, source)
 	require.NoError(t, err)
 
-	var roleID, regionID, skillID string
+	var roleID, regionID, skillID, alphaSkillID, betaSkillID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO roles (slug, title, family)
 		VALUES ($1, 'Synthetic Backend Role', 'software_development')
@@ -59,6 +59,18 @@ func TestPostgresReadQueries(t *testing.T) {
 		VALUES ($1, 'Synthetic Skill')
 		RETURNING id::text
 	`, fmt.Sprintf("bff-skill-%d", suffix)).Scan(&skillID)
+	require.NoError(t, err)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO skills (slug, name)
+		VALUES ($1, 'Alpha Synthetic Skill')
+		RETURNING id::text
+	`, fmt.Sprintf("bff-alpha-skill-%d", suffix)).Scan(&alphaSkillID)
+	require.NoError(t, err)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO skills (slug, name)
+		VALUES ($1, 'Beta Synthetic Skill')
+		RETURNING id::text
+	`, fmt.Sprintf("bff-beta-skill-%d", suffix)).Scan(&betaSkillID)
 	require.NoError(t, err)
 
 	published := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
@@ -84,11 +96,23 @@ func TestPostgresReadQueries(t *testing.T) {
 	)
 	require.NoError(t, err)
 	_, err = tx.Exec(ctx, `
+		INSERT INTO vacancy_skills (vacancy_id, skill_id)
+		VALUES ($1::uuid, $2::uuid), ($1::uuid, $3::uuid)
+	`, vacancyID, alphaSkillID, betaSkillID)
+	require.NoError(t, err)
+	var secondVacancyID string
+	err = tx.QueryRow(ctx, `
 		INSERT INTO vacancies (
 			source, external_id, title, role_id, region_id,
 			published_at, collected_at, is_active
 		) VALUES ($1, $2, 'Synthetic Missing Salary', $3::uuid, $4::uuid, $5, $5, true)
-	`, source, fmt.Sprintf("missing-salary-%d", suffix), roleID, regionID, published)
+		RETURNING id::text
+	`, source, fmt.Sprintf("missing-salary-%d", suffix), roleID, regionID, published).Scan(&secondVacancyID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO vacancy_skills (vacancy_id, skill_id)
+		VALUES ($1::uuid, $2::uuid), ($1::uuid, $3::uuid)
+	`, secondVacancyID, alphaSkillID, betaSkillID)
 	require.NoError(t, err)
 
 	var cycleID, analyticsRunID string
@@ -143,7 +167,11 @@ func TestPostgresReadQueries(t *testing.T) {
 	require.EqualValues(t, 1, page.Total)
 	require.Len(t, page.Data, 1)
 	require.Equal(t, vacancyID, page.Data[0].ID)
-	require.Equal(t, []string{"Synthetic Skill"}, page.Data[0].Skills)
+	require.Equal(
+		t,
+		[]string{"Alpha Synthetic Skill", "Beta Synthetic Skill", "Synthetic Skill"},
+		page.Data[0].Skills,
+	)
 
 	allRoleRows, err := repository.ListVacancies(ctx, readapi.VacancyFilter{
 		RoleIDs: []string{roleID},
@@ -221,11 +249,24 @@ func TestPostgresReadQueries(t *testing.T) {
 	require.NotEmpty(t, demand.Points)
 	require.EqualValues(t, 2, demand.Points[0].PublishedCount)
 
-	skills, err := repository.TopSkills(ctx, dimensionFilter, 10)
+	skills, err := repository.TopSkills(ctx, dimensionFilter, readapi.Page{Number: 1, Size: 1})
 	require.NoError(t, err)
 	require.Len(t, skills.Data, 1)
-	require.Equal(t, skillID, skills.Data[0].SkillID)
-	require.Equal(t, 0.5, skills.Data[0].Share)
+	require.EqualValues(t, 3, skills.Total)
+	require.Equal(t, alphaSkillID, skills.Data[0].SkillID)
+	require.EqualValues(t, 2, skills.Data[0].Count)
+	require.Equal(t, 1.0, skills.Data[0].Share)
+
+	nextSkills, err := repository.TopSkills(ctx, dimensionFilter, readapi.Page{Number: 2, Size: 1})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, nextSkills.Total)
+	require.Len(t, nextSkills.Data, 1)
+	require.Equal(t, betaSkillID, nextSkills.Data[0].SkillID)
+
+	endSkills, err := repository.TopSkills(ctx, dimensionFilter, readapi.Page{Number: 4, Size: 1})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, endSkills.Total)
+	require.Empty(t, endSkills.Data)
 }
 
 func floatPointer(value float64) *float64 { return &value }

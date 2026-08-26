@@ -7,6 +7,7 @@ import type {
   RolePage,
   RoleStat,
   SalaryTrends,
+  SkillStat,
   TopSkills,
   TrendsCoverage,
   VacancyPage,
@@ -126,6 +127,29 @@ async function getAllRoles(
   }
 }
 
+async function getAllSkills(
+  params: Pick<AnalyticsParams, 'from' | 'to'>,
+  signal?: AbortSignal,
+): Promise<TopSkills> {
+  const skills: SkillStat[] = []
+  let page = 1
+  let total = 0
+
+  while (page === 1 || skills.length < total) {
+    const response = await get<TopSkills>(
+      '/skills/top',
+      { ...params, page, page_size: DICTIONARY_PAGE_SIZE },
+      signal,
+    )
+    total = response.total
+    skills.push(...response.data)
+    if (response.data.length === 0) break
+    page += 1
+  }
+
+  return { data: skills, page: 1, page_size: DICTIONARY_PAGE_SIZE, total }
+}
+
 export const api = {
   dashboard: (params: AnalyticsParams, signal?: AbortSignal) =>
     get<DashboardSummary>('/dashboard/summary', params, signal),
@@ -137,12 +161,15 @@ export const api = {
     get<TrendsCoverage>('/trends/coverage', {}, signal),
   marketDemand: (params: MarketParams, signal?: AbortSignal) =>
     get<DemandTrends>('/trends/demand', params, signal),
-  topSkills: (params: AnalyticsParams, signal?: AbortSignal) =>
-    get<TopSkills>('/skills/top', { ...params, limit: 10 }, signal),
+  topSkills: (
+    params: AnalyticsParams,
+    page: number,
+    pageSize: number,
+    signal?: AbortSignal,
+  ) => get<TopSkills>('/skills/top', { ...params, page, page_size: pageSize }, signal),
   regions: getAllRegions,
   roles: getAllRoles,
-  vacancySkills: (params: Pick<AnalyticsParams, 'from' | 'to'>, signal?: AbortSignal) =>
-    get<TopSkills>('/skills/top', { ...params, limit: 100 }, signal),
+  vacancySkills: getAllSkills,
   vacancies: (
     params: {
       q?: string

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/Chuchoss/it-labor-pulse/apps/bff/internal/readapi"
 )
@@ -591,9 +592,9 @@ func (p *Postgres) TrendsCoverage(ctx context.Context) (readapi.TrendsCoverage, 
 func (p *Postgres) TopSkills(
 	ctx context.Context,
 	filter readapi.AnalyticsFilter,
-	limit int,
+	page readapi.Page,
 ) (readapi.TopSkills, error) {
-	args := append(analyticsArgs(filter), limit)
+	args := append(analyticsArgs(filter), page.Size, (page.Number-1)*page.Size)
 	rows, err := p.db.Query(ctx, `
 		WITH base AS (
 			SELECT v.id
@@ -607,28 +608,58 @@ func (p *Postgres) TopSkills(
 				AND ($5 = '' OR v.source = $5)
 		), total AS (
 			SELECT count(*)::float8 AS value FROM base
+		), ranked AS (
+			SELECT
+				s.id::text AS skill_id,
+				s.name,
+				count(*)::bigint AS vacancy_count,
+				coalesce(count(*) / nullif(total.value, 0), 0)::float8 AS share
+			FROM base
+			JOIN vacancy_skills vs ON vs.vacancy_id = base.id
+			JOIN skills s ON s.id = vs.skill_id AND s.is_active
+			CROSS JOIN total
+			GROUP BY s.id, s.name, total.value
+		), page_data AS (
+			SELECT skill_id, name, vacancy_count, share
+			FROM ranked
+			ORDER BY vacancy_count DESC, name, skill_id
+			LIMIT $6 OFFSET $7
 		)
-		SELECT s.id::text, s.name, count(*), coalesce(count(*) / nullif(total.value, 0), 0)::float8
-		FROM base
-		JOIN vacancy_skills vs ON vs.vacancy_id = base.id
-		JOIN skills s ON s.id = vs.skill_id AND s.is_active
-		CROSS JOIN total
-		GROUP BY s.id, s.name, total.value
-		ORDER BY count(*) DESC, s.name, s.id
-		LIMIT $6
+		SELECT
+			page_data.skill_id,
+			page_data.name,
+			page_data.vacancy_count,
+			page_data.share,
+			metadata.total
+		FROM (SELECT count(*)::bigint AS total FROM ranked) metadata
+		LEFT JOIN page_data ON true
+		ORDER BY page_data.vacancy_count DESC NULLS LAST, page_data.name, page_data.skill_id
 	`, args...)
 	if err != nil {
 		return readapi.TopSkills{}, fmt.Errorf("query top skills: %w", err)
 	}
 	defer rows.Close()
 
-	result := readapi.TopSkills{Data: []readapi.SkillStat{}}
+	result := readapi.TopSkills{
+		Data:     []readapi.SkillStat{},
+		Page:     page.Number,
+		PageSize: page.Size,
+	}
 	for rows.Next() {
-		var item readapi.SkillStat
-		if err := rows.Scan(&item.SkillID, &item.Name, &item.Count, &item.Share); err != nil {
+		var skillID, name pgtype.Text
+		var count pgtype.Int8
+		var share pgtype.Float8
+		if err := rows.Scan(&skillID, &name, &count, &share, &result.Total); err != nil {
 			return readapi.TopSkills{}, fmt.Errorf("scan top skill: %w", err)
 		}
-		result.Data = append(result.Data, item)
+		if skillID.Valid {
+			result.Data = append(result.Data, readapi.SkillStat{
+				SkillID: skillID.String,
+				Name:    name.String,
+				Count:   count.Int64,
+				Share:   share.Float64,
+			})
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return readapi.TopSkills{}, fmt.Errorf("iterate top skills: %w", err)

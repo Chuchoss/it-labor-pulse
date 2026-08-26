@@ -70,7 +70,10 @@ export interface SkillStat {
 }
 
 export interface TopSkills {
-  data?: SkillStat[]
+  data: SkillStat[]
+  page: number
+  page_size: number
+  total: number
 }
 
 export interface Vacancy {

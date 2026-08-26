@@ -68,6 +68,9 @@ export const handlers = [
   http.get('*/api/v1/skills/top', () =>
     HttpResponse.json({
       data: [{ skill_id: 'go', name: 'Go', count: 10, share: 0.45 }],
+      page: 1,
+      page_size: 10,
+      total: 1,
     }),
   ),
   http.get('*/api/v1/regions', () =>

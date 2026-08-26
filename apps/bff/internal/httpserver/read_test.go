@@ -18,6 +18,7 @@ import (
 type stubReadService struct {
 	listVacancies func(context.Context, readapi.VacancyFilter) (readapi.VacancyPage, error)
 	getRole       func(context.Context, string, readapi.AnalyticsFilter) (readapi.RoleStat, error)
+	topSkills     func(context.Context, readapi.AnalyticsFilter, readapi.Page) (readapi.TopSkills, error)
 }
 
 func (s stubReadService) Dashboard(context.Context, readapi.AnalyticsFilter) (readapi.DashboardSummary, error) {
@@ -84,11 +85,14 @@ func (s stubReadService) TrendsCoverage(context.Context) (readapi.TrendsCoverage
 }
 
 func (s stubReadService) TopSkills(
-	context.Context,
-	readapi.AnalyticsFilter,
-	int,
+	ctx context.Context,
+	filter readapi.AnalyticsFilter,
+	page readapi.Page,
 ) (readapi.TopSkills, error) {
-	return readapi.TopSkills{Data: []readapi.SkillStat{}}, nil
+	if s.topSkills != nil {
+		return s.topSkills(ctx, filter, page)
+	}
+	return readapi.TopSkills{Data: []readapi.SkillStat{}, Page: page.Number, PageSize: page.Size}, nil
 }
 
 func (s stubReadService) ListVacancies(
@@ -99,6 +103,43 @@ func (s stubReadService) ListVacancies(
 		return s.listVacancies(ctx, filter)
 	}
 	return readapi.VacancyPage{Data: []readapi.Vacancy{}}, nil
+}
+
+func TestTopSkillsPagination(t *testing.T) {
+	t.Parallel()
+
+	var receivedPages []readapi.Page
+	service := stubReadService{
+		topSkills: func(
+			_ context.Context,
+			_ readapi.AnalyticsFilter,
+			page readapi.Page,
+		) (readapi.TopSkills, error) {
+			receivedPages = append(receivedPages, page)
+			return readapi.TopSkills{
+				Data: []readapi.SkillStat{{
+					SkillID: "00000000-0000-4000-8000-000000000002",
+					Name:    "Go",
+					Count:   9,
+					Share:   0.45,
+				}},
+				Page: page.Number, PageSize: page.Size, Total: 21,
+			}, nil
+		},
+	}
+	server := New(Options{Addr: ":0", ReadService: service})
+
+	for _, path := range []string{
+		"/api/v1/skills/top?from=2026-08-01&to=2026-08-26&page=2&page_size=10",
+		"/api/v1/skills/top?from=2026-08-01&to=2026-08-26&limit=7",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		recorder := httptest.NewRecorder()
+		server.Handler.ServeHTTP(recorder, request)
+		require.Equal(t, http.StatusOK, recorder.Code)
+	}
+
+	require.Equal(t, []readapi.Page{{Number: 2, Size: 10}, {Number: 1, Size: 7}}, receivedPages)
 }
 
 func TestReadHandlerValidation(t *testing.T) {
@@ -124,6 +165,7 @@ func TestReadHandlerValidation(t *testing.T) {
 		{name: "invalid_demand_grain", path: "/api/v1/trends/demand?from=2026-08-01&to=2026-08-26&grain=month"},
 		{name: "invalid_role_group", path: "/api/v1/trends/demand?from=2026-08-01&to=2026-08-26&role_group=ai"},
 		{name: "invalid_limit", path: "/api/v1/skills/top?from=2026-08-01&to=2026-08-26&limit=0"},
+		{name: "invalid_skills_page_size", path: "/api/v1/skills/top?from=2026-08-01&to=2026-08-26&page_size=101"},
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

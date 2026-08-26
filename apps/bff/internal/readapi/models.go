@@ -149,7 +149,10 @@ type SkillStat struct {
 }
 
 type TopSkills struct {
-	Data []SkillStat `json:"data"`
+	Data     []SkillStat `json:"data"`
+	Page     int         `json:"page"`
+	PageSize int         `json:"page_size"`
+	Total    int64       `json:"total"`
 }
 
 type VacancyFilter struct {
@@ -196,6 +199,6 @@ type Repository interface {
 	SalaryTrends(context.Context, AnalyticsFilter, string) (SalaryTrends, error)
 	DemandTrends(context.Context, AnalyticsFilter, string) (DemandTrends, error)
 	TrendsCoverage(context.Context) (TrendsCoverage, error)
-	TopSkills(context.Context, AnalyticsFilter, int) (TopSkills, error)
+	TopSkills(context.Context, AnalyticsFilter, Page) (TopSkills, error)
 	ListVacancies(context.Context, VacancyFilter) (VacancyPage, error)
 }

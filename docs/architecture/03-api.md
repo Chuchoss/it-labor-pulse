@@ -229,13 +229,22 @@ OpenAPI: `x-lifecycle: target`.
 
 #### `GET /api/v1/skills/top`
 
-**Query:** filters + `limit` (default 20)
+**Query:** filters + `page` (default 1) + `page_size` (default 20, max 100).
+`limit` сохранён как deprecated alias `page_size` первой страницы и не
+сочетается с новыми параметрами.
+
+Сортировка стабильна: `count DESC, name ASC, skill_id ASC`. `total` содержит
+число всех навыков для текущих периода и фильтров; UI загружает следующие
+страницы небольшими батчами, поэтому выдача не обрывается на top-100.
 
 ```json
 {
   "data": [
     { "skill_id": "sk_kubernetes", "name": "Kubernetes", "count": 980, "share": 0.18 }
-  ]
+  ],
+  "page": 1,
+  "page_size": 10,
+  "total": 47
 }
 ```
 

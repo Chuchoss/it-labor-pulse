@@ -180,7 +180,8 @@ message GetTopSkillsRequest {
   lma.common.v1.Period period = 1;
   string role_id = 2;
   string region_id = 3;
-  int32 limit = 4;
+  int32 limit = 4 [deprecated = true];
+  lma.common.v1.PageRequest page = 5;
 }
 
 message SkillStat {
@@ -192,6 +193,7 @@ message SkillStat {
 
 message TopSkillsResponse {
   repeated SkillStat skills = 1;
+  lma.common.v1.PageResponse page = 2;
 }
 
 message ListVacanciesRequest {

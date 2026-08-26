@@ -64,9 +64,9 @@ func (s *Service) TrendsCoverage(ctx context.Context) (TrendsCoverage, error) {
 	})
 }
 
-func (s *Service) TopSkills(ctx context.Context, filter AnalyticsFilter, limit int) (TopSkills, error) {
+func (s *Service) TopSkills(ctx context.Context, filter AnalyticsFilter, page Page) (TopSkills, error) {
 	return withTimeout(ctx, s.timeout, func(ctx context.Context) (TopSkills, error) {
-		return s.repository.TopSkills(ctx, filter, limit)
+		return s.repository.TopSkills(ctx, filter, page)
 	})
 }
 

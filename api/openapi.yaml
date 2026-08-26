@@ -314,8 +314,12 @@ paths:
         - $ref: "#/components/parameters/To"
         - $ref: "#/components/parameters/RoleIdOptional"
         - $ref: "#/components/parameters/RegionIdOptional"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
         - name: limit
           in: query
+          deprecated: true
+          description: Совместимый alias `page_size` для первой страницы; не сочетать с `page` или `page_size`.
           schema:
             type: integer
             default: 20
@@ -328,6 +332,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TopSkillsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /api/v1/vacancies:
     get:
@@ -928,11 +934,15 @@ components:
 
     TopSkillsResponse:
       type: object
+      required: [data, page, page_size, total]
       properties:
         data:
           type: array
           items:
             $ref: "#/components/schemas/SkillStat"
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
 
     Vacancy:
       type: object

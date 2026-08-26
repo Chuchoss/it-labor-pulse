@@ -49,6 +49,12 @@ Perspectives ([ADR 007](./adr/007-multi-source-trend-signals.md)).
 | KPI (active, new, median) | `GET /api/v1/dashboard/summary` |
 | Top roles (mini) | из `summary.top_roles` или `GET /api/v1/roles?page_size=5` |
 | Top regions (mini) | из `summary.top_regions` |
+| Top skills | `GET /api/v1/skills/top?page_size=10` |
+
+Top skills сначала показывает 10 строк и по кнопке «Показать ещё» добавляет
+следующие страницы до `total`. Смена периода/фильтров начинает с первой
+страницы; ошибка следующей страницы не скрывает уже показанные строки.
+Масштаб полос фиксируется по первой (максимальной) строке.
 
 ### 2. Roles `/roles`
 
@@ -97,8 +103,8 @@ Perspectives ([ADR 007](./adr/007-multi-source-trend-signals.md)).
 
 Фильтры экрана: поиск, несколько регионов, несколько канонических ролей,
 зарплата от/до, несколько навыков (ANY), source и active. Справочники
-загружаются ограниченно из `/regions`, `/roles`, `/skills/top?limit=100`; сбой
-одного справочника не скрывает уже полученный список. Состояние хранится в URL
+загружаются постранично из `/regions`, `/roles`, `/skills/top`; сбой одного
+справочника не скрывает уже полученный список. Состояние хранится в URL
 (`role_id`, `region_id`, `skill_id` — CSV), текстовый поиск debounce 400 ms.
 Смена/сброс фильтра сбрасывает infinite pages; UI показывает число активных
 фильтров и действие «Сбросить все».
