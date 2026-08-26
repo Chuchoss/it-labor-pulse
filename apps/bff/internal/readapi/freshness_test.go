@@ -12,12 +12,12 @@ func TestIsFresh(t *testing.T) {
 		at   *time.Time
 		want bool
 	}{
-		{name: "inside", at: timePointer(now.Add(-23 * time.Hour)), want: true},
+		{name: "inside", at: timePointer(now.Add(-4 * time.Hour)), want: true},
 		{name: "exact boundary", at: timePointer(now.Add(-FreshnessWindow)), want: true},
 		{name: "outside", at: timePointer(now.Add(-FreshnessWindow - time.Second)), want: false},
 		{name: "now", at: timePointer(now), want: true},
 		{name: "future clock skew", at: timePointer(now.Add(time.Second)), want: false},
-		{name: "timezone offset", at: timePointer(now.Add(-23 * time.Hour).In(time.FixedZone("MSK", 3*60*60))), want: true},
+		{name: "timezone offset", at: timePointer(now.Add(-4 * time.Hour).In(time.FixedZone("MSK", 3*60*60))), want: true},
 		{name: "missing", want: false},
 	}
 	for _, test := range tests {
@@ -32,7 +32,7 @@ func TestIsFresh(t *testing.T) {
 func TestVacancyStatus(t *testing.T) {
 	tests := []struct {
 		name, reason, want string
-		active       bool
+		active             bool
 	}{
 		{name: "active vacancy", active: true, want: "active"},
 		{name: "missing from complete cycle", reason: "missing_from_complete_cycle", want: "missing_from_last_complete_cycle"},

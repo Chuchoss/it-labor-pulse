@@ -190,10 +190,11 @@ describe('VacanciesPage', () => {
             { id: 'fresh', title: 'Fresh vacancy', is_fresh: true, is_active: true },
             { id: 'stale', title: 'Stale vacancy', is_fresh: false, is_active: true },
             { id: 'missing', title: 'Missing freshness', is_active: true },
+            { id: 'malformed', title: 'Malformed freshness', is_fresh: 'true', is_active: true },
           ],
           page: 1,
           page_size: 20,
-          total: 3,
+          total: 4,
         }),
       ),
     )
@@ -205,6 +206,7 @@ describe('VacanciesPage', () => {
     expect(screen.getAllByText('Новая')).toHaveLength(2)
     expect(screen.getAllByText('Stale vacancy')).toHaveLength(2)
     expect(screen.getAllByText('Missing freshness')).toHaveLength(2)
+    expect(screen.getAllByText('Malformed freshness')).toHaveLength(2)
   })
 
   it('renders inactive lifecycle statuses from the API instead of assuming active', async () => {
