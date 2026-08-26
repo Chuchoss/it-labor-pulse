@@ -265,6 +265,47 @@ func (s *PG) GetCheckpoint(ctx context.Context, source, scopeHash string) (strin
 	return *cursor, true, nil
 }
 
+// SyncRoles persists official source role ids as canonical roles plus source aliases.
+func (s *PG) SyncRoles(ctx context.Context, source string, roles []SourceRole) (map[string]string, error) {
+	result := make(map[string]string, len(roles))
+	err := retryTransientWithTimeout(ctx, 3, 0, func(ctx context.Context) error {
+		tx, err := s.pool.Begin(ctx)
+		if err != nil {
+			return atDBStage("begin role sync", err)
+		}
+		defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+		for _, role := range roles {
+			if role.ExternalID == "" || role.Title == "" {
+				continue
+			}
+			slug := source + "-" + role.Family + "-" + role.ExternalID
+			var id string
+			if err := tx.QueryRow(ctx, `
+				INSERT INTO roles (slug, title, family, is_active)
+				VALUES ($1, $2, NULLIF($3, ''), true)
+				ON CONFLICT (slug) DO UPDATE
+				SET title = EXCLUDED.title, family = EXCLUDED.family, is_active = true
+				RETURNING id::text
+			`, slug, truncate(role.Title, 500), role.Family).Scan(&id); err != nil {
+				return atDBStage("upsert role", err)
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO role_aliases (role_id, pattern, source)
+				VALUES ($1::uuid, $2, $3)
+				ON CONFLICT (source, pattern) DO UPDATE SET role_id = EXCLUDED.role_id
+			`, id, role.ExternalID, source); err != nil {
+				return atDBStage("upsert role alias", err)
+			}
+			result[role.ExternalID] = id
+		}
+		return tx.Commit(ctx)
+	})
+	if err != nil {
+		return nil, sanitizeDBError("sync roles", err)
+	}
+	return result, nil
+}
+
 // SavePage upserts vacancies and advances checkpoint atomically.
 func (s *PG) SavePage(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
 	var upserted, unchanged int

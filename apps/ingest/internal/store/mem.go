@@ -76,6 +76,14 @@ func (m *Memory) GetCheckpoint(_ context.Context, source, scopeHash string) (str
 	return cur, ok, nil
 }
 
+func (m *Memory) SyncRoles(_ context.Context, source string, roles []SourceRole) (map[string]string, error) {
+	result := make(map[string]string, len(roles))
+	for _, role := range roles {
+		result[role.ExternalID] = source + "-role-" + role.ExternalID
+	}
+	return result, nil
+}
+
 func (m *Memory) SavePage(_ context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

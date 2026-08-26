@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -24,12 +25,15 @@ type Source interface {
 
 // Params configures one ingest run.
 type Params struct {
-	Area        string
-	Text        string
-	Mode        string
-	MaxPages    int
-	PerPage     int
-	RequestedBy string
+	Area             string
+	Text             string
+	ProfessionalRole string
+	DateFrom         time.Time
+	DateTo           time.Time
+	Mode             string
+	MaxPages         int
+	PerPage          int
+	RequestedBy      string
 }
 
 // Runner orchestrates HH → draft → normalize → UPSERT with checkpoints.
@@ -43,9 +47,10 @@ type Runner struct {
 
 // Result is the outcome of Run.
 type Result struct {
-	RunID  string
-	Status string
-	Stats  store.Stats
+	RunID     string
+	Status    string
+	Stats     store.Stats
+	Completed bool
 }
 
 // ResolvePageLimit returns the bounded number of pages this run may request.
@@ -92,7 +97,10 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 
 	runID := newRunID()
 	started := nowFn().UTC()
-	scope := checkpoint.ScopeHash(hh.SourceCode, mode, p.Area, p.Text, perPage)
+	scope := checkpoint.ScopeHash(
+		hh.SourceCode, mode, p.Area, p.Text, perPage,
+		p.ProfessionalRole, formatScopeTime(p.DateFrom), formatScopeTime(p.DateTo),
+	)
 
 	if err := r.Store.CreateRun(ctx, store.Run{
 		ID:     runID,
@@ -100,7 +108,9 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 		Mode:   mode,
 		Status: store.StatusRunning,
 		Params: map[string]any{
-			"area": p.Area, "text": p.Text, "max_pages": p.MaxPages, "per_page": perPage,
+			"area": p.Area, "text": p.Text, "professional_role": p.ProfessionalRole,
+			"date_from": formatScopeTime(p.DateFrom), "date_to": formatScopeTime(p.DateTo),
+			"max_pages": p.MaxPages, "per_page": perPage,
 		},
 		RequestedBy: p.RequestedBy,
 		StartedAt:   &started,
@@ -114,6 +124,7 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 		"mode", mode,
 		"area", p.Area,
 		"text", p.Text,
+		"professional_role", p.ProfessionalRole,
 		"max_pages", p.MaxPages,
 		"per_page", perPage,
 	)
@@ -132,13 +143,17 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 
 	status := store.StatusSuccess
 	var fatal error
+	completed := false
 
 	for pagesDone := 0; pagesDone < pageLimit && pageIdx < ResolvePageLimit(0, perPage); pagesDone++ {
 		search, err := r.Source.SearchVacancies(ctx, hh.SearchQuery{
-			Text:    p.Text,
-			Area:    p.Area,
-			Page:    pageIdx,
-			PerPage: perPage,
+			Text:             p.Text,
+			Area:             p.Area,
+			ProfessionalRole: p.ProfessionalRole,
+			DateFrom:         p.DateFrom,
+			DateTo:           p.DateTo,
+			Page:             pageIdx,
+			PerPage:          perPage,
 		})
 		if err != nil {
 			stats.Errors++
@@ -165,12 +180,15 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 			raw, err := r.Source.GetVacancyRaw(ctx, item.ID)
 			if err != nil {
 				stats.Errors++
-				pageOK = false
+				disappeared := errors.Is(err, hh.ErrNotFound)
+				if !disappeared {
+					pageOK = false
+				}
 				_ = r.Store.RecordError(ctx, runID, item.ID, "fetch", err.Error())
 				log.Warn("ingest_vacancy_fetch_failed",
 					"ingest_run_id", runID,
 					"source", hh.SourceCode,
-					"vacancy_external_id", item.ID,
+					"disappeared", disappeared,
 					"err", err.Error(),
 				)
 				continue
@@ -237,6 +255,7 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 		)
 
 		if dec.Terminal {
+			completed = true
 			break
 		}
 	}
@@ -267,11 +286,18 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 		"upserted", stats.Upserted,
 		"errors", stats.Errors,
 	)
-	out := Result{RunID: runID, Status: status, Stats: stats}
+	out := Result{RunID: runID, Status: status, Stats: stats, Completed: completed}
 	if fatal != nil {
 		return out, fatal
 	}
 	return out, nil
+}
+
+func formatScopeTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Truncate(time.Second).Format(time.RFC3339)
 }
 
 func newRunID() string {

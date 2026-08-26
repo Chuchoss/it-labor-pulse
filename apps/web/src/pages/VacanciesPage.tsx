@@ -22,7 +22,7 @@ import {
   FormControlLabel,
   Button,
 } from '@mui/material'
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
@@ -56,6 +56,7 @@ function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
 const FIRST_PAGE = 1
 
 export function VacanciesPage() {
+  const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const query = searchParams.get('q') || ''
   const source = searchParams.get('source') || ''
@@ -64,8 +65,12 @@ export function VacanciesPage() {
   const [draftQuery, setDraftQuery] = useState(query)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
 
+  const vacancyQueryKey = useMemo(
+    () => ['vacancies', { query, source, onlyActive, pageSize }] as const,
+    [onlyActive, pageSize, query, source],
+  )
   const vacancies = useInfiniteQuery({
-    queryKey: ['vacancies', { query, source, onlyActive, pageSize }],
+    queryKey: vacancyQueryKey,
     initialPageParam: FIRST_PAGE,
     queryFn: ({ pageParam, signal }) =>
       api.vacancies(
@@ -143,9 +148,18 @@ export function VacanciesPage() {
   return (
     <Stack spacing={3}>
       <Box>
-        <Typography variant="h4" component="h1" sx={{ fontWeight: 800 }}>
-          Вакансии
-        </Typography>
+        <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
+          <Typography variant="h4" component="h1" sx={{ fontWeight: 800 }}>
+            Вакансии
+          </Typography>
+          <Button
+            variant="outlined"
+            disabled={vacancies.isFetching}
+            onClick={() => void queryClient.resetQueries({ queryKey: vacancyQueryKey, exact: true })}
+          >
+            Обновить
+          </Button>
+        </Stack>
         <Typography color="text.secondary" sx={{ mt: 0.5 }}>
           Drill-down по нормализованным данным из PostgreSQL
         </Typography>

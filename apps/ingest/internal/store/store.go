@@ -38,6 +38,13 @@ type VacancyWrite struct {
 	RawPayload json.RawMessage
 }
 
+// SourceRole is one canonical role derived from an official source taxonomy.
+type SourceRole struct {
+	ExternalID string
+	Title      string
+	Family     string
+}
+
 // Stats accumulates run counters.
 type Stats struct {
 	Fetched   int `json:"fetched"`
@@ -53,6 +60,7 @@ type Store interface {
 	FinishRun(ctx context.Context, id, status string, stats Stats, errMsg string) error
 	RecordError(ctx context.Context, runID, externalID, stage, message string) error
 	GetCheckpoint(ctx context.Context, source, scopeHash string) (cursor string, ok bool, err error)
+	SyncRoles(ctx context.Context, source string, roles []SourceRole) (map[string]string, error)
 	// SavePage upserts all vacancies and advances checkpoint in one transaction.
 	SavePage(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (upserted, unchanged int, err error)
 	Close() error

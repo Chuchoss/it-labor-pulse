@@ -2,6 +2,7 @@ package hh_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -125,4 +126,65 @@ func TestClient_UsesRetryAfterAndCapsPageSize(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "100", perPage)
 	require.Contains(t, sleeps, 2*time.Second)
+}
+
+func TestClient_ProfessionalRolesAndPartitionParameters(t *testing.T) {
+	var queryValues string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/professional_roles":
+			_, _ = w.Write([]byte(`{"categories":[{"id":"11","name":"IT","roles":[{"id":"96","name":"Developer","search_deprecated":false},{"id":"old","name":"Old","search_deprecated":true}]}]}`))
+		case "/vacancies":
+			queryValues = r.URL.RawQuery
+			_, _ = w.Write([]byte(`{"found":0,"page":0,"pages":0,"per_page":1,"items":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c, err := hh.NewClient(hh.ClientOptions{
+		BaseURL: srv.URL, UserAgent: "LMATest/0.1 (+test@example.com)",
+	})
+	require.NoError(t, err)
+	roles, err := c.ProfessionalRoles(context.Background(), "11")
+	require.NoError(t, err)
+	require.Equal(t, []hh.ProfessionalRole{{ID: "96", Name: "Developer"}}, roles)
+
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	_, err = c.SearchVacancies(context.Background(), hh.SearchQuery{
+		Area: "113", ProfessionalRole: "96", DateFrom: from, DateTo: to, PerPage: 1,
+	})
+	require.NoError(t, err)
+	require.Contains(t, queryValues, "area=113")
+	require.Contains(t, queryValues, "professional_role=96")
+	require.Contains(t, queryValues, "date_from=")
+	require.Contains(t, queryValues, "date_to=")
+}
+
+func TestClient_DetailNotFoundIsClassified(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	c, err := hh.NewClient(hh.ClientOptions{
+		BaseURL: srv.URL, UserAgent: "LMATest/0.1 (+test@example.com)",
+	})
+	require.NoError(t, err)
+	_, err = c.GetVacancyRaw(context.Background(), "gone")
+	require.True(t, errors.Is(err, hh.ErrNotFound))
+}
+
+func TestClient_EnforcesRequestSafetyCeiling(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"found":0,"page":0,"pages":0,"per_page":1,"items":[]}`))
+	}))
+	defer srv.Close()
+	c, err := hh.NewClient(hh.ClientOptions{
+		BaseURL: srv.URL, UserAgent: "LMATest/0.1 (+test@example.com)", MaxRequests: 1,
+	})
+	require.NoError(t, err)
+	_, err = c.SearchVacancies(context.Background(), hh.SearchQuery{PerPage: 1})
+	require.NoError(t, err)
+	_, err = c.SearchVacancies(context.Background(), hh.SearchQuery{PerPage: 1})
+	require.ErrorContains(t, err, "request safety ceiling")
 }

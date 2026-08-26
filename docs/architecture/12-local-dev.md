@@ -219,6 +219,10 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `INGEST_PER_PAGE` | нет | `100` | Размер страницы HH, `1..100`; `100` минимизирует число search-запросов |
 | `INGEST_PAGE_DELAY_MS` | нет | `350` | Пауза между запросами HH; дополнительно действуют `Retry-After` и backoff |
 | `INGEST_RUN_TIMEOUT_SEC` | нет | `1800` | Максимальная длительность bounded one-shot ingest run |
+| `INGEST_SCOPE` | нет | `query` | `query` — целевой text/area; `it` — все официальные IT-роли HH |
+| `INGEST_IT_AREA` | нет | `113` | Россия; менять только при явной смене продуктового гео |
+| `INGEST_IT_MAX_PARTITIONS` | нет | `512` | Hard ceiling leaf-partitions плана |
+| `INGEST_IT_MAX_REQUESTS` | нет | `500` | Hard budget probe + search/detail запросов одного запуска |
 
 Секреты только в `.env` (gitignored), не в Compose YAML и не в документации как реальные значения.
 
@@ -226,8 +230,12 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 которые официальный API сообщает для комбинации `INGEST_DEFAULT_AREA` +
 `INGEST_DEFAULT_TEXT`. Глубина одной поисковой выдачи HH ограничена 2000
 результатами: при `INGEST_PER_PAGE=100` доступно не более 20 страниц. В коде
-также остаётся hard ceiling 100 страниц. Разбиение рынка на множество ролей,
-регионов или временных окон в Phase 1 не выполняется.
+также остаётся hard ceiling 100 страниц.
+
+Для полного текущего IT-среза используется отдельный `INGEST_SCOPE=it`: официальный
+каталог `/professional_roles`, категория `11`, Россия (`area=113`), затем
+partition по одной роли и времени. Обычный старт остаётся безопасным `query` и
+никогда неожиданно не запускает полный crawl.
 
 ---
 
@@ -253,6 +261,8 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `make up-full` | `--profile full` | позже (Phase 2+) |
 | `make up-obs` | Compose `--profile observability` (Loki/Tempo/Grafana) | **есть** (stub) |
 | `make ingest-hh` / `ingest-hh-fixture` | one-shot HH → normalize → PG (`apps/ingest`); fixture без live HH | Phase 1 |
+| `make ingest-hh-it-plan` | live aggregate-only planning, без vacancy content/записи | Phase 1 |
+| `make ingest-hh-it` | bounded/resumable IT crawl; при budget продолжить следующим запуском | Phase 1 |
 | `make test` | `go test ./...` + Vitest web | **есть** |
 | `make proto` / `openapi-lint` / `smoke` / `fmt` / `lint` | по мере появления tooling | planned |
 
@@ -268,6 +278,9 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile local-redis --profile local-pg ps
 docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile local-redis logs -f
 docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile local-redis --profile local-pg down
+# aggregate-only план, затем явный bounded crawl:
+go run ./apps/ingest/cmd/ingest -scope it -dry-run
+go run ./apps/ingest/cmd/ingest -scope it
 ```
 
 ---

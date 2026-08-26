@@ -2,12 +2,15 @@ package hh
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,15 +21,20 @@ const (
 	MaxPerPage = 100
 )
 
+// ErrNotFound means a vacancy disappeared between search and detail fetch.
+var ErrNotFound = errors.New("hh vacancy not found")
+
 // Client is an official HH API HTTP client (no scraping).
 type Client struct {
-	baseURL    string
-	userAgent  string
-	appToken   string
-	httpClient *http.Client
-	sleep      func(context.Context, time.Duration) error
-	maxRetries int
-	pageDelay  time.Duration
+	baseURL     string
+	userAgent   string
+	appToken    string
+	httpClient  *http.Client
+	sleep       func(context.Context, time.Duration) error
+	maxRetries  int
+	pageDelay   time.Duration
+	maxRequests int64
+	requests    atomic.Int64
 }
 
 // ClientOptions configures the HH client.
@@ -39,6 +47,8 @@ type ClientOptions struct {
 	Sleep      func(context.Context, time.Duration) error
 	MaxRetries int
 	PageDelay  time.Duration
+	// MaxRequests is a hard per-client HTTP-attempt ceiling; zero is unlimited.
+	MaxRequests int
 }
 
 // NewClient builds a Client. UserAgent must be non-empty (HH ToS).
@@ -73,22 +83,26 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		retries = 5
 	}
 	return &Client{
-		baseURL:    base,
-		userAgent:  ua,
-		appToken:   strings.TrimSpace(opts.AppToken),
-		httpClient: hc,
-		sleep:      sleep,
-		maxRetries: retries,
-		pageDelay:  opts.PageDelay,
+		baseURL:     base,
+		userAgent:   ua,
+		appToken:    strings.TrimSpace(opts.AppToken),
+		httpClient:  hc,
+		sleep:       sleep,
+		maxRetries:  retries,
+		pageDelay:   opts.PageDelay,
+		maxRequests: int64(opts.MaxRequests),
 	}, nil
 }
 
 // SearchQuery is HH vacancies search params.
 type SearchQuery struct {
-	Text    string
-	Area    string
-	Page    int
-	PerPage int
+	Text             string
+	Area             string
+	ProfessionalRole string
+	DateFrom         time.Time
+	DateTo           time.Time
+	Page             int
+	PerPage          int
 }
 
 // SearchVacancies calls GET /vacancies.
@@ -119,6 +133,15 @@ func (c *Client) SearchVacancies(ctx context.Context, q SearchQuery) (SearchPage
 	if q.Area != "" {
 		vals.Set("area", q.Area)
 	}
+	if q.ProfessionalRole != "" {
+		vals.Set("professional_role", q.ProfessionalRole)
+	}
+	if !q.DateFrom.IsZero() {
+		vals.Set("date_from", q.DateFrom.Format(time.RFC3339))
+	}
+	if !q.DateTo.IsZero() {
+		vals.Set("date_to", q.DateTo.Format(time.RFC3339))
+	}
 	vals.Set("page", strconv.Itoa(q.Page))
 	vals.Set("per_page", strconv.Itoa(perPage))
 	u.RawQuery = vals.Encode()
@@ -128,6 +151,46 @@ func (c *Client) SearchVacancies(ctx context.Context, q SearchQuery) (SearchPage
 		return SearchPage{}, err
 	}
 	return ParseSearchPage(raw)
+}
+
+// ProfessionalRole is one item from HH's official role taxonomy.
+type ProfessionalRole struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	SearchDeprecated bool   `json:"search_deprecated"`
+}
+
+type professionalRoleCatalog struct {
+	Categories []struct {
+		ID    string             `json:"id"`
+		Name  string             `json:"name"`
+		Roles []ProfessionalRole `json:"roles"`
+	} `json:"categories"`
+}
+
+// ProfessionalRoles returns non-deprecated roles in the requested official category.
+func (c *Client) ProfessionalRoles(ctx context.Context, categoryID string) ([]ProfessionalRole, error) {
+	raw, err := c.get(ctx, c.baseURL+"/professional_roles")
+	if err != nil {
+		return nil, err
+	}
+	var catalog professionalRoleCatalog
+	if err := json.Unmarshal(raw, &catalog); err != nil {
+		return nil, fmt.Errorf("hh professional roles: %w", err)
+	}
+	for _, category := range catalog.Categories {
+		if category.ID != categoryID {
+			continue
+		}
+		roles := make([]ProfessionalRole, 0, len(category.Roles))
+		for _, role := range category.Roles {
+			if role.ID != "" && !role.SearchDeprecated {
+				roles = append(roles, role)
+			}
+		}
+		return roles, nil
+	}
+	return nil, fmt.Errorf("hh professional roles: category %q not found", categoryID)
 }
 
 // GetVacancyRaw calls GET /vacancies/{id}.
@@ -146,6 +209,9 @@ func (c *Client) GetVacancyRaw(ctx context.Context, id string) ([]byte, error) {
 func (c *Client) get(ctx context.Context, rawURL string) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if c.maxRequests > 0 && c.requests.Add(1) > c.maxRequests {
+			return nil, fmt.Errorf("hh request safety ceiling %d reached", c.maxRequests)
+		}
 		if attempt > 0 {
 			delay := backoffDelay(attempt, 0)
 			if err := c.sleep(ctx, delay); err != nil {
@@ -188,6 +254,8 @@ func (c *Client) get(ctx context.Context, rawURL string) ([]byte, error) {
 			continue
 		case res.StatusCode == http.StatusForbidden:
 			return nil, fmt.Errorf("hh api forbidden (check HH_USER_AGENT)")
+		case res.StatusCode == http.StatusNotFound:
+			return nil, ErrNotFound
 		default:
 			return nil, fmt.Errorf("hh api status %d", res.StatusCode)
 		}

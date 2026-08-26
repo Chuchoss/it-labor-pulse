@@ -9,14 +9,18 @@ import (
 )
 
 // ScopeHash returns a stable SHA-256 hex of normalized ingest params.
-func ScopeHash(source, mode, area, text string, perPage int) string {
-	norm := strings.Join([]string{
+func ScopeHash(source, mode, area, text string, perPage int, extra ...string) string {
+	parts := []string{
 		strings.ToLower(strings.TrimSpace(source)),
 		strings.ToLower(strings.TrimSpace(mode)),
 		strings.TrimSpace(area),
 		strings.ToLower(strings.TrimSpace(text)),
 		strconv.Itoa(perPage),
-	}, "|")
+	}
+	for _, value := range extra {
+		parts = append(parts, strings.ToLower(strings.TrimSpace(value)))
+	}
+	norm := strings.Join(parts, "|")
 	sum := sha256.Sum256([]byte(norm))
 	return hex.EncodeToString(sum[:])
 }

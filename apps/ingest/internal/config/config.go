@@ -24,6 +24,11 @@ type Config struct {
 	MaxPages    int
 	PerPage     int
 	RunTimeout  time.Duration
+	Scope       string
+	ITArea      string
+	ITMaxDepth  int
+	ITMaxParts  int
+	ITMaxReqs   int
 
 	// FixtureDir when set enables offline fixture mode (testdata/hh).
 	FixtureDir string
@@ -43,6 +48,11 @@ func Load() Config {
 		MaxPages:    envMaxPages("INGEST_MAX_PAGES", 5),
 		PerPage:     envInt("INGEST_PER_PAGE", 100),
 		RunTimeout:  time.Duration(envInt("INGEST_RUN_TIMEOUT_SEC", 1800)) * time.Second,
+		Scope:       envOr("INGEST_SCOPE", "query"),
+		ITArea:      envOr("INGEST_IT_AREA", "113"),
+		ITMaxDepth:  envInt("INGEST_IT_MAX_DEPTH", 32),
+		ITMaxParts:  envInt("INGEST_IT_MAX_PARTITIONS", 512),
+		ITMaxReqs:   envInt("INGEST_IT_MAX_REQUESTS", 500),
 		FixtureDir:  strings.TrimSpace(os.Getenv("INGEST_FIXTURE_DIR")),
 	}
 	delayMS := envInt("INGEST_PAGE_DELAY_MS", 350)
@@ -69,6 +79,12 @@ func (c Config) ValidateLive() error {
 	}
 	if c.PerPage < 1 || c.PerPage > 100 {
 		return fmt.Errorf("INGEST_PER_PAGE must be between 1 and 100")
+	}
+	if c.Scope != "query" && c.Scope != "it" {
+		return fmt.Errorf("INGEST_SCOPE must be query or it")
+	}
+	if c.ITMaxDepth < 1 || c.ITMaxParts < 1 || c.ITMaxReqs < 1 {
+		return fmt.Errorf("INGEST_IT safety ceilings must be positive")
 	}
 	return nil
 }
