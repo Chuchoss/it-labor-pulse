@@ -70,4 +70,8 @@ IT Labor Market Analytics (LMA) — платформа аналитики рын
 - **Target** — целевая архитектура (полный стек)
 - **Phase 5 / Perspectives** — «Тенденции» multi-source; ADR [007](./adr/007-multi-source-trend-signals.md)
 
+Персональный assistant (Phase 4-shaped foundation, не часть публичного market
+snapshot) описан в [ADR 015](./adr/015-personal-assistant-ai-telegram.md) и
+локальном [runbook](../runbooks/personal-assistant.md).
+
 Код приложения (Go/React) в этом пакете не описан как реализация — только архитектура, контракты, фикстуры и runbooks.

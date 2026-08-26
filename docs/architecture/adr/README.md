@@ -18,6 +18,7 @@
 | [012](./012-dashboard-ranking-scopes.md) | Отдельные listing/management scopes и taxonomy языков |
 | [013](./013-daily-discovery-snapshots.md) | Дневной search discovery отдельно от detail hydration |
 | [014](./014-official-fx-and-source-links.md) | Официальные дневные FX и source-neutral ссылки |
+| [015](./015-personal-assistant-ai-telegram.md) | Персональный assistant, optional AI и Telegram |
 
 Новый ADR: скопировать структуру, следующий номер, ссылка в эту таблицу.
 Связь с обзором: [00-overview.md](../00-overview.md).

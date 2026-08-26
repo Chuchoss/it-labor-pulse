@@ -38,6 +38,7 @@ const navigation = [
   { label: 'Обзор', path: '/', icon: <DashboardRoundedIcon /> },
   { label: 'Рынок', path: '/market', icon: <QueryStatsRoundedIcon /> },
   { label: 'Вакансии', path: '/vacancies', icon: <WorkOutlineRoundedIcon /> },
+  { label: 'Мои вакансии', path: '/assistant', icon: <WorkOutlineRoundedIcon /> },
 ]
 
 interface AppShellProps {
@@ -127,7 +128,7 @@ export function AppShell({ children, mode, onToggleMode }: AppShellProps) {
       </List>
       <Box sx={{ mt: 'auto', p: 2.5 }}>
         <Typography variant="caption" color="text.secondary">
-          Phase 1 · данные вакансий
+          Phase 1 · рынок · Phase 4 assistant (dev)
         </Typography>
       </Box>
     </Stack>

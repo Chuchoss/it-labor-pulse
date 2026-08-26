@@ -75,6 +75,20 @@ async function get<T>(
   return response.json() as Promise<T>
 }
 
+async function mutate<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const url = new URL(`${API_BASE_URL}${path}`, window.location.origin)
+  const response = await fetch(url, {
+    method,
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const error = (await response.json().catch(() => ({}))) as ApiErrorBody
+    throw new ApiError(error.error?.message || `API вернул ошибку ${response.status}`, response.status, error.error?.code)
+  }
+  return (response.status === 204 ? undefined : response.json()) as Promise<T>
+}
+
 export interface AnalyticsParams extends Record<string, string | undefined> {
   from: string
   to: string
@@ -219,4 +233,11 @@ export const api = {
     },
     signal?: AbortSignal,
   ) => get<VacancyPage>('/vacancies', params, signal),
+  assistantPreferences: () => get<import('./types').AssistantPreferences>('/assistant/preferences', {}),
+  saveAssistantPreferences: (value: import('./types').AssistantPreferences) =>
+    mutate<import('./types').AssistantPreferences>('/assistant/preferences', 'PUT', value),
+  assistantMatches: () => get<import('./types').AssistantMatch[]>('/assistant/matches', {}),
+  telegramStatus: () => get<import('./types').TelegramStatus>('/assistant/telegram', {}),
+  telegramLink: () => mutate<{ deep_link: string; expires_at: string }>('/assistant/telegram/link', 'POST'),
+  revokeTelegram: () => mutate<void>('/assistant/telegram', 'DELETE'),
 }

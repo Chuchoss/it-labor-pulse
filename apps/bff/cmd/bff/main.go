@@ -71,6 +71,10 @@ func main() {
 		DB:          dbPinger,
 		Redis:       redisPinger,
 		ReadService: readService,
+		Assistant: httpserver.AssistantOptions{
+			Enabled:        cfg.AssistantEnabled,
+			DevAuthEnabled: cfg.AssistantDevAuthEnabled && (cfg.AppEnv == "local" || cfg.AppEnv == "dev"),
+		},
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

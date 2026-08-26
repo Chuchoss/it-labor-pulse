@@ -12,6 +12,7 @@ import {
 import { DashboardPage } from './pages/DashboardPage'
 import { MarketPage } from './pages/MarketPage'
 import { VacanciesPage } from './pages/VacanciesPage'
+import { AssistantPage } from './pages/AssistantPage'
 import {
   COLOR_MODE_STORAGE_KEY,
   createAppTheme,
@@ -66,6 +67,7 @@ export default function App() {
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/market" element={<MarketPage />} />
                 <Route path="/vacancies" element={<VacanciesPage />} />
+                <Route path="/assistant" element={<AssistantPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </AppShell>

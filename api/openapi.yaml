@@ -45,6 +45,8 @@ tags:
     description: Управление ingest
   - name: ai
     description: Будущий асинхронный AI-анализ
+  - name: assistant
+    description: Персональный assistant вакансий (Phase 4-shaped, identity required)
   - name: perspectives
     description: «Тенденции» — multi-source composite scores (Phase 5 Target)
   - name: health
@@ -537,6 +539,114 @@ paths:
                 $ref: "#/components/schemas/AIInsight"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /api/v1/assistant/preferences:
+    get:
+      tags: [assistant]
+      operationId: getAssistantPreferences
+      summary: Получить текущие персональные критерии
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Текущая версия критериев
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssistantPreferences"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      tags: [assistant]
+      operationId: saveAssistantPreferences
+      summary: Сохранить новую версию критериев
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssistantPreferencesRequest"
+      responses:
+        "200":
+          description: Сохранённая версия
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssistantPreferences"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/assistant/matches:
+    get:
+      tags: [assistant]
+      operationId: listAssistantMatches
+      summary: Получить персональные совпадения
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Совпадения
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssistantMatch"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/assistant/telegram/link:
+    post:
+      tags: [assistant]
+      operationId: createTelegramLink
+      summary: Создать одноразовую ссылку Telegram
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Deep-link без bot token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deep_link, expires_at]
+                properties:
+                  deep_link: { type: string, format: uri }
+                  expires_at: { type: string, format: date-time }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/assistant/telegram:
+    get:
+      tags: [assistant]
+      operationId: getTelegramStatus
+      summary: Статус Telegram connection
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Статус
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelegramStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [assistant]
+      operationId: revokeTelegram
+      summary: Отозвать Telegram connection
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Отозвано
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
 components:
   securitySchemes:
@@ -1287,3 +1397,53 @@ components:
         model: { type: string }
         needs_human_review: { type: boolean }
         created_at: { type: string, format: date-time }
+
+    AssistantPreferencesRequest:
+      type: object
+      required: [hard_criteria, soft_criteria, weights]
+      properties:
+        note: { type: string, maxLength: 2000 }
+        hard_criteria:
+          type: object
+          additionalProperties: true
+        soft_criteria:
+          type: object
+          additionalProperties: true
+        weights:
+          type: object
+          additionalProperties:
+            type: number
+            minimum: 0
+
+    AssistantPreferences:
+      allOf:
+        - $ref: "#/components/schemas/AssistantPreferencesRequest"
+        - type: object
+          required: [version, active_from]
+          properties:
+            version: { type: integer, minimum: 1 }
+            active_from: { type: string, format: date-time }
+
+    AssistantMatch:
+      type: object
+      required: [vacancy_id, decision, score, method, reasons, unknowns, conflicts, evidence_ids]
+      properties:
+        vacancy_id: { type: string, format: uuid }
+        title: { type: string }
+        source_url: { type: [string, "null"], format: uri }
+        decision: { type: string, enum: [match, reject, review] }
+        score: { type: number, minimum: 0, maximum: 1 }
+        method: { type: string, enum: [deterministic, ai] }
+        confidence: { type: [string, "null"], enum: [low, medium, high, null] }
+        reasons: { type: array, items: { type: string } }
+        unknowns: { type: array, items: { type: string } }
+        conflicts: { type: array, items: { type: string } }
+        evidence_ids: { type: array, items: { type: string } }
+
+    TelegramStatus:
+      type: object
+      required: [configured, linked, opted_in]
+      properties:
+        configured: { type: boolean }
+        linked: { type: boolean }
+        opted_in: { type: boolean }

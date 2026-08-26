@@ -1,0 +1,114 @@
+package httpserver
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Chuchoss/it-labor-pulse/libs/go-common/assistant"
+)
+
+// AssistantOptions is intentionally an in-memory local adapter. Production must
+// replace it with the PostgreSQL repository and real authentication.
+type AssistantOptions struct {
+	Enabled        bool
+	DevAuthEnabled bool
+}
+
+type assistantPreferencesPayload struct {
+	Version      int                `json:"version"`
+	Note         string             `json:"note"`
+	HardCriteria map[string]any     `json:"hard_criteria"`
+	SoftCriteria map[string]any     `json:"soft_criteria"`
+	Weights      map[string]float64 `json:"weights"`
+}
+
+type assistantHandler struct {
+	opts               AssistantOptions
+	mu                 sync.Mutex
+	currentPreferences assistantPreferencesPayload
+	linker             *assistant.Linker
+}
+
+func newAssistantHandler(opts AssistantOptions) *assistantHandler {
+	return &assistantHandler{opts: opts, linker: assistant.NewLinker(10 * time.Minute)}
+}
+
+func (h *assistantHandler) register(mux *http.ServeMux) {
+	if !h.opts.Enabled {
+		return
+	}
+	mux.HandleFunc("/api/v1/assistant/preferences", h.preferences)
+	mux.HandleFunc("/api/v1/assistant/matches", h.matches)
+	mux.HandleFunc("/api/v1/assistant/telegram/link", h.link)
+	mux.HandleFunc("/api/v1/assistant/telegram", h.telegram)
+}
+
+func (h *assistantHandler) authorized(r *http.Request) bool {
+	if !h.opts.DevAuthEnabled {
+		return false
+	}
+	return strings.TrimSpace(r.Header.Get("X-Dev-User")) != ""
+}
+
+func (h *assistantHandler) guard(w http.ResponseWriter, r *http.Request) bool {
+	if !h.authorized(r) {
+		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		return false
+	}
+	return true
+}
+
+func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, h.currentPreferences)
+		return
+	}
+	if r.Method != http.MethodPut {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var value assistantPreferencesPayload
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&value) != nil {
+		writeAPIError(w, 400, "VALIDATION_ERROR", "Invalid JSON", nil, "")
+		return
+	}
+	value.Version++
+	h.currentPreferences = value
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *assistantHandler) matches(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, []any{})
+}
+func (h *assistantHandler) link(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	token, err := h.linker.Issue(time.Now())
+	if err != nil {
+		writeAPIError(w, 500, "INTERNAL_ERROR", "Could not create link", nil, "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deep_link": "https://t.me/lma_assistant_bot?start=" + token, "expires_at": time.Now().Add(10 * time.Minute)})
+}
+func (h *assistantHandler) telegram(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	if r.Method == http.MethodDelete {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"configured": false, "linked": false, "opted_in": false})
+}

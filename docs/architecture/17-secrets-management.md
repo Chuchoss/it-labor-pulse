@@ -39,7 +39,8 @@
 | `CLICKHOUSE_PASSWORD` / DSN | 2+ | secret | `.env` / Secret | `default` без пароля — только local |
 | `ADMIN_TOKEN` | 1+ | secret → high-risk в prod | `.env` / Secret | Закрывает `/api/v1/admin/**` |
 | JWT signing key / OIDC client secret | 3+ | high-risk | Secret / IdP | Не хардкодить; ротация = logout всех |
-| `AI_API_KEY` | 4 | high-risk | отдельный Secret | Бюджет/квоты; никогда в логах |
+| `DEEPSEEK_API_KEY` | 4 | high-risk | отдельный Secret | Бюджет/квоты; никогда в логах |
+| `TELEGRAM_BOT_TOKEN` | 4 | high-risk | отдельный Secret | Только server-side delivery; никогда в UI |
 | Docker/GHCR push token | 3+ CI | high-risk | GitHub Actions secret / OIDC | Предпочесть OIDC → GHCR |
 | Cloud credentials / `KUBE_CONFIG` | 3+ CI | high-risk | Actions Environment secret | Target: OIDC federated login, не long-lived key |
 | TLS cert + private key | 3+ | high-risk | cert-manager (предпочтительно) | Не коммитить `.pem` / `.key` |

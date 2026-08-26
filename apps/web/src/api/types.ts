@@ -196,3 +196,32 @@ export interface CurrenciesResponse {
   base_currency: 'RUB'
   rates: CurrencyRate[]
 }
+
+export interface AssistantPreferences {
+  version?: number
+  note: string
+  hard_criteria: Record<string, unknown>
+  soft_criteria: Record<string, unknown>
+  weights: Record<string, number>
+  active_from?: string
+}
+
+export interface AssistantMatch {
+  vacancy_id: string
+  title?: string
+  source_url?: string | null
+  decision: 'match' | 'reject' | 'review'
+  score: number
+  method: 'deterministic' | 'ai'
+  confidence?: 'low' | 'medium' | 'high' | null
+  reasons: string[]
+  unknowns: string[]
+  conflicts: string[]
+  evidence_ids: string[]
+}
+
+export interface TelegramStatus {
+  configured: boolean
+  linked: boolean
+  opted_in: boolean
+}
