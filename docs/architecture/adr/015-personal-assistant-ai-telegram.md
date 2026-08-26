@@ -44,9 +44,14 @@ Lifecycle preferences остаётся append-only: UI показывает со
 `published_at` остаётся только показателем свежести HH.
 
 Telegram delivery остаётся at-least-once: уникальный ключ notification,
-provider message id, bounded retries и cooldown защищают от повторных
-уведомлений, но exactly-once внешний Bot API не обещается. При отсутствии
-подтверждённой связи и отдельного opt-in сообщение не ставится в отправку.
+provider message id, bounded retries, lease, advisory lock и cooldown защищают
+от повторных уведомлений, но exactly-once внешний Bot API не обещается.
+Timeout после принятия провайдером имеет ambiguous outcome и может быть
+повторен. При отсутствии подтверждённой неотозванной связи, отдельного opt-in
+или пользовательского automation flag сообщение не ставится в отправку.
+Long-poll linker подтверждает только одноразовый hashed nonce из `/start`;
+произвольный chat_id запрещён. Тестовая отправка требует явного подтверждения
+в UI и не включает automation.
 
 ## Consequences
 
@@ -55,8 +60,9 @@ provider message id, bounded retries и cooldown защищают от повт�
 
 (+) Prompt input минимизирован, PII redacted, vacancy text маркирован DATA.
 
-(-) Production auth, полноценный webhook/polling worker и multi-user tenancy
-остаются следующими задачами; dev identity нельзя использовать публично.
+(-) Production auth и multi-user tenancy остаются следующими задачами; dev
+identity нельзя использовать публично. Long polling для локального linker
+нужно заменить на production webhook/managed worker при развёртывании.
 
 (-) Retention/операционные лимиты очереди должны применяться отдельным
 maintenance job; dead-letter элементы не переотправляются автоматически.

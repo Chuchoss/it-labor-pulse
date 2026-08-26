@@ -13,8 +13,38 @@ import (
 	"time"
 )
 
+type TelegramResponse struct {
+	MessageID int
+}
+
+type TelegramUpdate struct {
+	UpdateID int `json:"update_id"`
+	Message  *struct {
+		Chat struct {
+			ID int64 `json:"id"`
+		} `json:"chat"`
+		Text string `json:"text"`
+	} `json:"message"`
+}
+
+type TelegramError struct {
+	StatusCode int
+	RetryAfter time.Duration
+}
+
+func (e *TelegramError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("telegram status %d retry_after=%s", e.StatusCode, e.RetryAfter)
+	}
+	return fmt.Sprintf("telegram status %d", e.StatusCode)
+}
+
 type TelegramClient interface {
 	SendMessage(context.Context, int64, string) error
+}
+
+type DeliveryTelegramClient interface {
+	SendMessageResult(context.Context, int64, string) (TelegramResponse, error)
 }
 
 type Telegram struct {
@@ -34,24 +64,68 @@ func NewTelegram(token string, client *http.Client) (*Telegram, error) {
 }
 
 func (t *Telegram) SendMessage(ctx context.Context, chatID int64, text string) error {
+	_, err := t.SendMessageResult(ctx, chatID, text)
+	return err
+}
+
+func (t *Telegram) SendMessageResult(ctx context.Context, chatID int64, text string) (TelegramResponse, error) {
 	if chatID == 0 || len([]rune(text)) == 0 || len([]rune(text)) > 4096 {
-		return errors.New("invalid telegram message")
+		return TelegramResponse{}, errors.New("invalid telegram message")
 	}
 	body, _ := json.Marshal(map[string]any{"chat_id": chatID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+"/bot"+url.PathEscape(t.token)+"/sendMessage", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return TelegramResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram request: %w", err)
+		return TelegramResponse{}, fmt.Errorf("telegram request: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("telegram status %d", resp.StatusCode)
+	var payload struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			MessageID int `json:"message_id"`
+		} `json:"result"`
+		Parameters struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
 	}
-	return nil
+	_ = json.NewDecoder(resp.Body).Decode(&payload)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		retryAfter := time.Duration(payload.Parameters.RetryAfter) * time.Second
+		return TelegramResponse{}, &TelegramError{StatusCode: resp.StatusCode, RetryAfter: retryAfter}
+	}
+	if !payload.OK || payload.Result.MessageID == 0 {
+		return TelegramResponse{}, errors.New("telegram response was not successful")
+	}
+	return TelegramResponse{MessageID: payload.Result.MessageID}, nil
+}
+
+func (t *Telegram) GetUpdates(ctx context.Context, offset int) ([]TelegramUpdate, error) {
+	body, _ := json.Marshal(map[string]any{"offset": offset, "timeout": 20, "allowed_updates": []string{"message"}})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+"/bot"+url.PathEscape(t.token)+"/getUpdates", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("telegram updates request: %w", err)
+	}
+	defer resp.Body.Close()
+	var payload struct {
+		OK     bool             `json:"ok"`
+		Result []TelegramUpdate `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !payload.OK {
+		return nil, &TelegramError{StatusCode: resp.StatusCode}
+	}
+	return payload.Result, nil
 }
 
 func TelegramHTML(title, salary, sourceURL string, score float64, confidence string, reasons []string) string {

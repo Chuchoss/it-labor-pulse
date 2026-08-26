@@ -91,7 +91,12 @@ async function mutate<T>(path: string, method: string, body?: unknown): Promise<
   })
   if (!response.ok) {
     const error = (await response.json().catch(() => ({}))) as ApiErrorBody
-    throw new ApiError(error.error?.message || `API вернул ошибку ${response.status}`, response.status, error.error?.code)
+    throw new ApiError(
+      error.error?.message || `API вернул ошибку ${response.status}`,
+      response.status,
+      error.error?.code,
+      error.error?.request_id || response.headers.get('X-Request-ID') || undefined,
+    )
   }
   return (response.status === 204 ? undefined : response.json()) as Promise<T>
 }
@@ -256,4 +261,5 @@ export const api = {
   updateTelegramOptIn: (optedIn: boolean) => mutate<{ opted_in: boolean }>('/assistant/telegram', 'PATCH', { opted_in: optedIn }),
   telegramLink: () => mutate<{ deep_link: string; expires_at: string }>('/assistant/telegram/link', 'POST'),
   revokeTelegram: () => mutate<void>('/assistant/telegram', 'DELETE'),
+  testTelegram: () => mutate<{ provider_message_id: number }>('/assistant/telegram/test', 'POST', { confirm: true }),
 }

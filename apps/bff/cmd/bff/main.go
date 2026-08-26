@@ -76,6 +76,11 @@ func main() {
 	} else {
 		log.Info("redis_not_configured")
 	}
+	var telegramSender assistant.DeliveryTelegramClient
+	if cfg.AssistantTelegramEnabled {
+		telegramConfig := assistant.LoadConfig()
+		telegramSender, _ = assistant.NewTelegram(telegramConfig.TelegramBotToken, nil)
+	}
 
 	srv := httpserver.New(httpserver.Options{
 		Addr:        cfg.HTTPAddr,
@@ -90,6 +95,7 @@ func main() {
 			Repository:         assistantRepository,
 			TelegramConfigured: cfg.AssistantTelegramEnabled,
 			AIConfigured:       cfg.AssistantAIEnabled,
+			TelegramSender:     telegramSender,
 		},
 	})
 

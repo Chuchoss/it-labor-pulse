@@ -71,9 +71,11 @@ type MatchRecord struct {
 }
 
 type TelegramStatus struct {
-	Configured bool
-	Linked     bool
-	OptedIn    bool
+	Configured                          bool
+	Linked                              bool
+	OptedIn                             bool
+	Pending, Sent, Failed, DeadLettered int
+	LastError                           string
 }
 
 type AutomationSettings struct {
@@ -386,7 +388,70 @@ func (r *PostgresRepository) TelegramStatus(ctx context.Context, userID string, 
 	if err != nil {
 		return TelegramStatus{}, fmt.Errorf("get telegram status: %w", err)
 	}
-	return TelegramStatus{Configured: configured, Linked: linked, OptedIn: optedIn}, nil
+	var pending, sent, failed, dead int
+	var lastError *string
+	_ = r.db.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status IN ('pending','failed') AND dead_letter_at IS NULL),
+		count(*) FILTER (WHERE status='sent'), count(*) FILTER (WHERE status='failed' AND dead_letter_at IS NULL),
+		count(*) FILTER (WHERE dead_letter_at IS NOT NULL), (array_agg(last_error ORDER BY updated_at DESC)
+		FILTER (WHERE last_error IS NOT NULL))[1] FROM telegram_deliveries WHERE user_id=$1::uuid`, userID).
+		Scan(&pending, &sent, &failed, &dead, &lastError)
+	return TelegramStatus{Configured: configured, Linked: linked, OptedIn: optedIn,
+		Pending: pending, Sent: sent, Failed: failed, DeadLettered: dead, LastError: sanitizeStatusError(lastError)}, nil
+}
+
+func sanitizeStatusError(value *string) string {
+	if value == nil {
+		return ""
+	}
+	switch {
+	case strings.Contains(*value, "timeout"):
+		return "Telegram request timeout (outcome ambiguous)"
+	case strings.HasPrefix(*value, "telegram status "):
+		return *value
+	default:
+		return "Telegram request failed"
+	}
+}
+
+func (r *PostgresRepository) IssueTelegramLink(ctx context.Context, userID, token string, expires time.Time) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO telegram_link_tokens (token_hash, user_id, expires_at)
+		VALUES ($1, $2::uuid, $3)
+	`, LinkTokenHash(token), userID, expires)
+	return err
+}
+
+func (r *PostgresRepository) ConfirmTelegramLink(ctx context.Context, token string, chatID int64) error {
+	if chatID == 0 {
+		return errors.New("telegram chat id is required")
+	}
+	tag, err := r.db.Exec(ctx, `
+		WITH consumed AS (
+			UPDATE telegram_link_tokens
+			SET used_at = now()
+			WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+			RETURNING user_id
+		)
+		INSERT INTO telegram_connections (user_id, chat_id, linked_at, revoked_at, opted_in, updated_at)
+		SELECT user_id, $2, now(), NULL, false, now() FROM consumed
+		ON CONFLICT (user_id) DO UPDATE SET chat_id=EXCLUDED.chat_id,
+			linked_at=EXCLUDED.linked_at, revoked_at=NULL, opted_in=false, updated_at=now()
+	`, LinkTokenHash(token), chatID)
+	if err != nil {
+		return fmt.Errorf("confirm telegram link: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("invalid or expired telegram link")
+	}
+	return nil
+}
+
+func (r *PostgresRepository) RevokeTelegram(ctx context.Context, userID string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE telegram_connections SET revoked_at=now(), opted_in=false, updated_at=now()
+		WHERE user_id=$1::uuid
+	`, userID)
+	return err
 }
 
 func (r *PostgresRepository) SetTelegramOptIn(ctx context.Context, userID string, optedIn bool) error {
@@ -637,6 +702,155 @@ func (r *PostgresRepository) SaveDelivery(ctx context.Context, delivery WorkerDe
 		return false, fmt.Errorf("save telegram delivery: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+func (r *PostgresRepository) TelegramEligible(ctx context.Context, userID string) (bool, error) {
+	var eligible bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM telegram_connections
+			WHERE user_id = $1::uuid AND linked_at IS NOT NULL
+			  AND revoked_at IS NULL AND opted_in
+		)
+	`, userID).Scan(&eligible)
+	if err != nil {
+		return false, fmt.Errorf("check telegram eligibility: %w", err)
+	}
+	return eligible, nil
+}
+
+func (r *PostgresRepository) VerifiedTelegramChat(ctx context.Context, userID string) (int64, error) {
+	var chatID int64
+	err := r.db.QueryRow(ctx, `SELECT chat_id FROM telegram_connections
+		WHERE user_id=$1::uuid AND chat_id IS NOT NULL AND linked_at IS NOT NULL
+		AND revoked_at IS NULL AND opted_in`, userID).Scan(&chatID)
+	if err != nil {
+		return 0, errors.New("telegram connection is not verified")
+	}
+	return chatID, nil
+}
+
+func (r *PostgresRepository) TryDeliveryLock(ctx context.Context) (func() error, bool, error) {
+	if r.poolConn == nil {
+		return nil, false, errors.New("telegram delivery requires pgxpool")
+	}
+	conn, err := r.poolConn.Acquire(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("telegram delivery acquire connection: %w", err)
+	}
+	var acquired bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(549004803)`).Scan(&acquired); err != nil {
+		conn.Release()
+		return nil, false, fmt.Errorf("telegram delivery lock: %w", err)
+	}
+	if !acquired {
+		conn.Release()
+		return func() error { return nil }, false, nil
+	}
+	return func() error {
+		defer conn.Release()
+		var released bool
+		if err := conn.QueryRow(context.Background(), `SELECT pg_advisory_unlock(549004803)`).Scan(&released); err != nil {
+			return err
+		}
+		return nil
+	}, true, nil
+}
+
+func (r *PostgresRepository) ClaimDeliveries(ctx context.Context, workerID string, limit int, lease time.Duration) ([]Delivery, error) {
+	if limit < 1 || limit > 100 {
+		limit = 25
+	}
+	if lease <= 0 {
+		lease = 2 * time.Minute
+	}
+	rows, err := r.db.Query(ctx, `
+		WITH recovered AS (
+			UPDATE telegram_deliveries SET status = 'pending', lease_until = NULL, claimed_by = NULL
+			WHERE status IN ('pending','failed') AND lease_until < now()
+			RETURNING id
+		), claimed AS (
+			UPDATE telegram_deliveries d
+			SET status = 'failed', lease_until = now() + $3::interval, claimed_by = $1,
+			    attempts = d.attempts + 1
+			FROM telegram_connections c
+			JOIN assistant_automation_settings a ON a.user_id = d.user_id AND a.telegram_enabled
+			JOIN vacancy_match_results m ON m.user_id = d.user_id AND m.vacancy_id = d.vacancy_id
+			    AND m.preference_id = d.preference_id AND m.decision = 'match'
+			WHERE d.user_id = c.user_id AND c.linked_at IS NOT NULL AND c.revoked_at IS NULL AND c.opted_in
+			  AND d.status IN ('pending','failed') AND d.dead_letter_at IS NULL
+			  AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= now())
+			  AND (d.cooldown_until IS NULL OR d.cooldown_until <= now())
+			  AND d.id IN (
+				SELECT id FROM telegram_deliveries
+				WHERE status IN ('pending','failed') AND dead_letter_at IS NULL
+				  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+				ORDER BY created_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
+			  )
+			RETURNING d.id, d.user_id, d.vacancy_id, d.attempts, c.chat_id
+		)
+		SELECT x.id::text, x.user_id::text, x.vacancy_id::text, x.attempts, x.chat_id,
+		       v.title, v.source_url, v.salary_from, v.salary_to, m.score::float8,
+		       m.confidence, m.rationale
+		FROM claimed x
+		JOIN vacancies v ON v.id = x.vacancy_id
+		JOIN vacancy_match_results m ON m.user_id = x.user_id AND m.vacancy_id = x.vacancy_id
+		    AND m.decision = 'match'
+	`, workerID, limit, fmt.Sprintf("%d seconds", int(lease.Seconds())))
+	if err != nil {
+		return nil, fmt.Errorf("claim telegram deliveries: %w", err)
+	}
+	defer rows.Close()
+	result := make([]Delivery, 0, limit)
+	for rows.Next() {
+		var d Delivery
+		var from, to *float64
+		var confidence *string
+		var rationale string
+		if err := rows.Scan(&d.ID, &d.UserID, &d.VacancyID, &d.Attempts, &d.ChatID, &d.Title, &d.SourceURL,
+			&from, &to, &d.Score, &confidence, &rationale); err != nil {
+			return nil, err
+		}
+		if from != nil && to != nil {
+			d.Salary = fmt.Sprintf("%.0f–%.0f ₽", *from, *to)
+		}
+		if confidence != nil {
+			d.Confidence = *confidence
+		}
+		d.Reasons = splitRationale(rationale)
+		result = append(result, d)
+	}
+	return result, rows.Err()
+}
+
+func (r *PostgresRepository) MarkDeliverySent(ctx context.Context, id string, messageID int) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE telegram_deliveries SET status='sent', provider_message_id=$2, sent_at=now(),
+			lease_until=NULL, claimed_by=NULL, last_error=NULL
+		WHERE id=$1::uuid AND dead_letter_at IS NULL
+	`, id, messageID)
+	return err
+}
+
+func (r *PostgresRepository) MarkDeliveryFailed(ctx context.Context, id, lastError string, next time.Time, dead bool) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE telegram_deliveries SET status='failed', last_error=$2, next_attempt_at=$3,
+			dead_letter_at=CASE WHEN $4 THEN now() ELSE dead_letter_at END,
+			lease_until=NULL, claimed_by=NULL
+		WHERE id=$1::uuid
+	`, id, truncate(lastError, 500), next, dead)
+	return err
+}
+
+func truncate(value string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes])
 }
 
 func (r *PostgresRepository) AdvanceCursor(ctx context.Context, source string, observedAt time.Time, externalID string) error {

@@ -27,6 +27,21 @@ Telegram и не сканирует исторические вакансии. �
 чат. Для обычной локальной проверки оставьте `ASSISTANT_ENABLED=false`,
 `ASSISTANT_AI_ENABLED=false`, `ASSISTANT_TELEGRAM_ENABLED=false`.
 
+Для локального экрана `/assistant` явно включите BFF-маршруты в своём `.env`
+(файл не коммитится):
+
+```text
+ASSISTANT_ENABLED=true
+ASSISTANT_DEV_AUTH_ENABLED=true
+ASSISTANT_DEV_SUBJECT=local-dev-user
+```
+
+После изменения флагов перезапустите только BFF на `:8080`; Vite остаётся на
+`:3000` и проксирует `/api` на этот BFF. Без `ASSISTANT_ENABLED=true` маршруты
+assistant намеренно не регистрируются и возвращают 404. В local/dev subject
+берётся из `X-Dev-User` (его отправляет React) или из
+`ASSISTANT_DEV_SUBJECT`; в production dev-auth не включается.
+
 DeepSeek использует официальный OpenAI-compatible endpoint
 `https://api.deepseek.com/chat/completions`, `Authorization: Bearer`,
 `response_format: {"type":"json_object"}` и модель `deepseek-v4-flash` по
@@ -36,7 +51,25 @@ DeepSeek использует официальный OpenAI-compatible endpoint
 
 Telegram использует только официальный Bot API: [sendMessage и
 getUpdates](https://core.telegram.org/bots/api/). Webhook и long polling
-взаимоисключающие; в текущем локальном foundation реальный polling не запускается.
+взаимоисключающие. Команда `go run ./apps/assistant/cmd/telegram-linker`
+использует безопасный long polling только при `ASSISTANT_TELEGRAM_ENABLED=true`,
+`DATABASE_URL` и `TELEGRAM_BOT_TOKEN`; `/start <nonce>` одноразовый и сохраняется
+только в виде hash. Произвольный `chat_id` не принимается.
+
+## Delivery loop
+
+`go run ./apps/assistant/cmd/worker` обрабатывает bounded delivery batch после
+matcher. Для защиты от overlap используется отдельный PostgreSQL advisory lock,
+`FOR UPDATE SKIP LOCKED`, lease и до пяти попыток. 429 уважает `Retry-After`,
+временные ошибки используют backoff, остальные ошибки и исчерпанные попытки
+попадают в dead-letter (`dead_letter_at`). Статусы `pending/sent/failed`,
+`provider_message_id`, counters и безопасная последняя ошибка видны в UI.
+Telegram delivery — at-least-once: timeout после принятия Bot API считается
+неопределённым исходом и может привести к повтору; exactly-once не обещается.
+Вакансия отправляется только при глобальном флаге, пользовательском флаге,
+подтверждённой неотозванной связи, opt-in и deterministic/AI `match`.
+`activation_at` исключает исторический backlog; AI выключенный не блокирует
+deterministic match.
 
 ## Безопасный smoke
 
@@ -60,11 +93,13 @@ npm --prefix apps/web run build
 3. Проверьте лимит расходов и установите `DEEPSEEK_MODEL`; включайте AI только
    после проверки fake-тестов.
 4. Включите flags и перезапустите server-side worker. Для Telegram сначала
-   запросите nonce, откройте bot deep-link и подтвердите opt-in; произвольный
-   `chat_id` из браузера не принимается.
+   запустите linker, запросите nonce, откройте bot deep-link и отправьте
+   `/start <nonce>`; затем отдельно включите opt-in и Telegram automation в UI.
+   Автоматически ничего не включается.
 5. Для отзыва отключите opt-in/ревокируйте connection и при необходимости
    перевыпустите token у BotFather.
 
-В production потребуется полноценная authentication/tenant isolation и
-background polling/webhook worker. Resume tailoring, auto-apply, news и
-Perspectives Phase 5 в этот контур не входят.
+В production потребуется полноценная authentication/tenant isolation. Кнопка
+«Тестовое уведомление» требует отдельного подтверждения и делает ровно один
+реальный вызов Bot API. Resume tailoring, auto-apply, news и Perspectives Phase
+5 в этот контур не входят.

@@ -10,15 +10,18 @@ import (
 	"time"
 
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/assistant"
+	"github.com/Chuchoss/it-labor-pulse/libs/go-common/httpx"
 )
 
 type AssistantOptions struct {
-	Enabled            bool
-	DevAuthEnabled     bool
-	DevSubject         string
-	Repository         AssistantRepository
-	TelegramConfigured bool
-	AIConfigured       bool
+	Enabled             bool
+	DevAuthEnabled      bool
+	DevSubject          string
+	Repository          AssistantRepository
+	TelegramConfigured  bool
+	AIConfigured        bool
+	TelegramBotUsername string
+	TelegramSender      assistant.DeliveryTelegramClient
 }
 
 type AssistantRepository interface {
@@ -34,6 +37,14 @@ type AssistantRepository interface {
 	AutomationSettings(context.Context, string) (assistant.AutomationSettings, error)
 	SaveAutomationSettings(context.Context, string, assistant.AutomationSettings) (assistant.AutomationSettings, error)
 	SetTelegramOptIn(context.Context, string, bool) error
+}
+
+type telegramLinkRepository interface {
+	IssueTelegramLink(context.Context, string, string, time.Time) error
+	RevokeTelegram(context.Context, string) error
+}
+type telegramChatRepository interface {
+	VerifiedTelegramChat(context.Context, string) (int64, error)
 }
 
 type assistantPreferencesPayload struct {
@@ -70,6 +81,7 @@ func (h *assistantHandler) register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/assistant/matches", h.matches)
 	mux.HandleFunc("/api/v1/assistant/telegram/link", h.link)
 	mux.HandleFunc("/api/v1/assistant/telegram", h.telegram)
+	mux.HandleFunc("/api/v1/assistant/telegram/test", h.telegramTest)
 	mux.HandleFunc("/api/v1/assistant/automation", h.automation)
 }
 
@@ -101,10 +113,14 @@ func (h *assistantHandler) user(ctx context.Context, r *http.Request) (string, e
 
 func (h *assistantHandler) guard(w http.ResponseWriter, r *http.Request) bool {
 	if !h.authorized(r) {
-		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		h.error(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil)
 		return false
 	}
 	return true
+}
+
+func (h *assistantHandler) error(w http.ResponseWriter, r *http.Request, status int, code, message string, details map[string]any) {
+	writeAPIError(w, status, code, message, details, httpx.RequestID(r.Context()))
 }
 
 func (h *assistantHandler) preferenceList(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +129,7 @@ func (h *assistantHandler) preferenceList(w http.ResponseWriter, r *http.Request
 	}
 	userID, err := h.user(r.Context(), r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		h.error(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil)
 		return
 	}
 	if h.opts.Repository == nil {
@@ -122,7 +138,7 @@ func (h *assistantHandler) preferenceList(w http.ResponseWriter, r *http.Request
 	}
 	items, err := h.opts.Repository.ListPreferences(r.Context(), userID)
 	if err != nil {
-		writeAPIError(w, 500, "INTERNAL_ERROR", "Could not read preferences", nil, "")
+		h.error(w, r, 500, "INTERNAL_ERROR", "Could not read preferences", nil)
 		return
 	}
 	result := make([]assistantPreferencesPayload, 0, len(items))
@@ -142,19 +158,19 @@ func (h *assistantHandler) archivePreference(w http.ResponseWriter, r *http.Requ
 	}
 	userID, err := h.user(r.Context(), r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		h.error(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil)
 		return
 	}
 	var body struct {
 		ID string `json:"id"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024)).Decode(&body) != nil || strings.TrimSpace(body.ID) == "" {
-		writeAPIError(w, 400, "VALIDATION_ERROR", "Preference id is required", nil, "")
+		h.error(w, r, 400, "VALIDATION_ERROR", "Preference id is required", nil)
 		return
 	}
 	if h.opts.Repository != nil {
 		if err := h.opts.Repository.ArchivePreference(r.Context(), userID, body.ID); err != nil {
-			writeAPIError(w, http.StatusNotFound, "NOT_FOUND", "Preference not found", nil, "")
+			h.error(w, r, http.StatusNotFound, "NOT_FOUND", "Preference not found", nil)
 			return
 		}
 	}
@@ -167,7 +183,7 @@ func (h *assistantHandler) status(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, err := h.user(r.Context(), r)
 	if err != nil {
-		writeAPIError(w, 401, "UNAUTHORIZED", "Authentication is required", nil, "")
+		h.error(w, r, 401, "UNAUTHORIZED", "Authentication is required", nil)
 		return
 	}
 	if h.opts.Repository == nil {
@@ -176,7 +192,7 @@ func (h *assistantHandler) status(w http.ResponseWriter, r *http.Request) {
 	}
 	value, err := h.opts.Repository.AnalysisStatus(r.Context(), userID, h.opts.AIConfigured)
 	if err != nil {
-		writeAPIError(w, 500, "INTERNAL_ERROR", "Could not read analysis status", nil, "")
+		h.error(w, r, 500, "INTERNAL_ERROR", "Could not read analysis status", nil)
 		return
 	}
 	writeJSON(w, 200, value)
@@ -192,16 +208,16 @@ func (h *assistantHandler) analyze(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, err := h.user(r.Context(), r)
 	if err != nil {
-		writeAPIError(w, 401, "UNAUTHORIZED", "Authentication is required", nil, "")
+		h.error(w, r, 401, "UNAUTHORIZED", "Authentication is required", nil)
 		return
 	}
 	if h.opts.Repository == nil {
-		writeAPIError(w, 503, "DEPENDENCY_UNAVAILABLE", "Analysis store is not configured", nil, "")
+		h.error(w, r, 503, "DEPENDENCY_UNAVAILABLE", "Analysis store is not configured", nil)
 		return
 	}
 	runID, err := h.opts.Repository.QueueAnalysis(r.Context(), userID, r.Header.Get("Idempotency-Key"))
 	if err != nil {
-		writeAPIError(w, 409, "CONFLICT", "Анализ уже выполняется", nil, "")
+		h.error(w, r, 409, "CONFLICT", "Анализ уже выполняется", nil)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "status": "queued"})
@@ -213,7 +229,7 @@ func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, err := h.user(r.Context(), r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		h.error(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil)
 		return
 	}
 	h.mu.Lock()
@@ -222,7 +238,7 @@ func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
 		if h.opts.Repository != nil {
 			value, err := h.opts.Repository.CurrentPreferences(r.Context(), userID)
 			if err != nil {
-				writeAPIError(w, 500, "INTERNAL_ERROR", "Could not read preferences", nil, "")
+				h.error(w, r, 500, "INTERNAL_ERROR", "Could not read preferences", nil)
 				return
 			}
 			writeJSON(w, http.StatusOK, preferencePayload(value))
@@ -237,7 +253,7 @@ func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
 	}
 	var value assistantPreferencesPayload
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&value) != nil {
-		writeAPIError(w, 400, "VALIDATION_ERROR", "Invalid JSON", nil, "")
+		h.error(w, r, 400, "VALIDATION_ERROR", "Invalid JSON", nil)
 		return
 	}
 	if h.opts.Repository != nil {
@@ -246,9 +262,9 @@ func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			if errors.Is(err, assistant.ErrInvalidPreferences) {
-				writeAPIError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid preferences", nil, "")
+				h.error(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid preferences", nil)
 			} else {
-				writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not save preferences", nil, "")
+				h.error(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not save preferences", nil)
 			}
 			return
 		}
@@ -266,7 +282,7 @@ func (h *assistantHandler) matches(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, err := h.user(r.Context(), r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		h.error(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil)
 		return
 	}
 	if h.opts.Repository == nil {
@@ -275,7 +291,7 @@ func (h *assistantHandler) matches(w http.ResponseWriter, r *http.Request) {
 	}
 	matches, err := h.opts.Repository.ListMatches(r.Context(), userID, 100)
 	if err != nil {
-		writeAPIError(w, 500, "INTERNAL_ERROR", "Could not read matches", nil, "")
+		h.error(w, r, 500, "INTERNAL_ERROR", "Could not read matches", nil)
 		return
 	}
 	writeJSON(w, http.StatusOK, matches)
@@ -284,24 +300,45 @@ func (h *assistantHandler) link(w http.ResponseWriter, r *http.Request) {
 	if !h.guard(w, r) {
 		return
 	}
-	token, err := h.linker.Issue(time.Now())
+	userID, err := h.user(r.Context(), r)
 	if err != nil {
-		writeAPIError(w, 500, "INTERNAL_ERROR", "Could not create link", nil, "")
+		h.error(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"deep_link": "https://t.me/lma_assistant_bot?start=" + token, "expires_at": time.Now().Add(10 * time.Minute)})
+	token, err := h.linker.Issue(time.Now())
+	if err != nil {
+		h.error(w, r, 500, "INTERNAL_ERROR", "Could not create link", nil)
+		return
+	}
+	expires := time.Now().Add(10 * time.Minute)
+	if repo, ok := h.opts.Repository.(telegramLinkRepository); ok {
+		if err := repo.IssueTelegramLink(r.Context(), userID, token, expires); err != nil {
+			h.error(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not create link", nil)
+			return
+		}
+	}
+	bot := h.opts.TelegramBotUsername
+	if bot == "" {
+		bot = "lma_assistant_bot"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deep_link": "https://t.me/" + bot + "?start=" + token, "expires_at": expires})
 }
 func (h *assistantHandler) telegram(w http.ResponseWriter, r *http.Request) {
 	if !h.guard(w, r) {
 		return
 	}
 	if r.Method == http.MethodDelete {
+		if userID, err := h.user(r.Context(), r); err == nil {
+			if repo, ok := h.opts.Repository.(telegramLinkRepository); ok {
+				_ = repo.RevokeTelegram(r.Context(), userID)
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	userID, err := h.user(r.Context(), r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		h.error(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil)
 		return
 	}
 	if r.Method == http.MethodPatch {
@@ -309,12 +346,12 @@ func (h *assistantHandler) telegram(w http.ResponseWriter, r *http.Request) {
 			OptedIn bool `json:"opted_in"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024)).Decode(&body) != nil {
-			writeAPIError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid JSON", nil, "")
+			h.error(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid JSON", nil)
 			return
 		}
 		if h.opts.Repository != nil {
 			if err := h.opts.Repository.SetTelegramOptIn(r.Context(), userID, body.OptedIn); err != nil {
-				writeAPIError(w, http.StatusConflict, "TELEGRAM_NOT_VERIFIED", "Telegram must be linked and verified first", nil, "")
+				h.error(w, r, http.StatusConflict, "TELEGRAM_NOT_VERIFIED", "Telegram must be linked and verified first", nil)
 				return
 			}
 		}
@@ -331,10 +368,64 @@ func (h *assistantHandler) telegram(w http.ResponseWriter, r *http.Request) {
 	}
 	status, err := h.opts.Repository.TelegramStatus(r.Context(), userID, h.opts.TelegramConfigured)
 	if err != nil {
-		writeAPIError(w, 500, "INTERNAL_ERROR", "Could not read Telegram status", nil, "")
+		h.error(w, r, 500, "INTERNAL_ERROR", "Could not read Telegram status", nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"configured": status.Configured, "linked": status.Linked, "opted_in": status.OptedIn})
+	writeJSON(w, http.StatusOK, map[string]any{"configured": status.Configured, "linked": status.Linked, "opted_in": status.OptedIn,
+		"pending": status.Pending, "sent": status.Sent, "failed": status.Failed,
+		"dead_lettered": status.DeadLettered, "last_error": status.LastError})
+}
+
+func (h *assistantHandler) telegramTest(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Confirm bool `json:"confirm"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body) != nil || !body.Confirm {
+		h.error(w, r, http.StatusBadRequest, "CONFIRMATION_REQUIRED", "Тестовое уведомление требует явного подтверждения", nil)
+		return
+	}
+	userID, err := h.user(r.Context(), r)
+	if err != nil {
+		h.error(w, r, 401, "UNAUTHORIZED", "Authentication is required", nil)
+		return
+	}
+	if h.opts.TelegramSender == nil || !h.opts.TelegramConfigured {
+		h.error(w, r, http.StatusServiceUnavailable, "TELEGRAM_NOT_CONFIGURED", "Telegram sender is not configured", nil)
+		return
+	}
+	status, err := h.opts.Repository.TelegramStatus(r.Context(), userID, h.opts.TelegramConfigured)
+	if err != nil {
+		h.error(w, r, 500, "INTERNAL_ERROR", "Could not read Telegram status", nil)
+		return
+	}
+	if !status.Linked || !status.OptedIn {
+		h.error(w, r, http.StatusConflict, "TELEGRAM_NOT_VERIFIED", "Сначала свяжите Telegram и включите уведомления", nil)
+		return
+	}
+	repo, ok := h.opts.Repository.(telegramChatRepository)
+	if !ok {
+		h.error(w, r, http.StatusServiceUnavailable, "TEST_SEND_UNAVAILABLE", "Тестовая отправка недоступна", nil)
+		return
+	}
+	chatID, err := repo.VerifiedTelegramChat(r.Context(), userID)
+	if err != nil {
+		h.error(w, r, http.StatusConflict, "TELEGRAM_NOT_VERIFIED", "Сначала свяжите Telegram и включите уведомления", nil)
+		return
+	}
+	result, err := h.opts.TelegramSender.SendMessageResult(r.Context(), chatID,
+		"<b>Тестовое уведомление LMA</b>\nСвязь подтверждена; автоматические уведомления не включаются.")
+	if err != nil {
+		h.error(w, r, http.StatusBadGateway, "TELEGRAM_SEND_FAILED", "Не удалось отправить тестовое уведомление", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"provider_message_id": result.MessageID})
 }
 
 func (h *assistantHandler) automation(w http.ResponseWriter, r *http.Request) {
@@ -343,7 +434,7 @@ func (h *assistantHandler) automation(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, err := h.user(r.Context(), r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil, "")
+		h.error(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil)
 		return
 	}
 	if h.opts.Repository == nil {
@@ -353,7 +444,7 @@ func (h *assistantHandler) automation(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		settings, err := h.opts.Repository.AutomationSettings(r.Context(), userID)
 		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not read automation settings", nil, "")
+			h.error(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not read automation settings", nil)
 			return
 		}
 		writeJSON(w, http.StatusOK, settings)
@@ -369,24 +460,24 @@ func (h *assistantHandler) automation(w http.ResponseWriter, r *http.Request) {
 		MaxAICalls      int   `json:"max_ai_calls_per_hour"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024)).Decode(&body) != nil {
-		writeAPIError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid JSON", nil, "")
+		h.error(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid JSON", nil)
 		return
 	}
 	current, err := h.opts.Repository.AutomationSettings(r.Context(), userID)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not read automation settings", nil, "")
+		h.error(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not read automation settings", nil)
 		return
 	}
 	if body.AIEnabled != nil {
 		if *body.AIEnabled && !h.opts.AIConfigured {
-			writeAPIError(w, http.StatusConflict, "AI_NOT_CONFIGURED", "AI provider is not configured on the server", nil, "")
+			h.error(w, r, http.StatusConflict, "AI_NOT_CONFIGURED", "AI provider is not configured on the server", nil)
 			return
 		}
 		current.AIEnabled = *body.AIEnabled
 	}
 	if body.TelegramEnabled != nil {
 		if *body.TelegramEnabled && !h.opts.TelegramConfigured {
-			writeAPIError(w, http.StatusConflict, "TELEGRAM_NOT_CONFIGURED", "Telegram is not configured on the server", nil, "")
+			h.error(w, r, http.StatusConflict, "TELEGRAM_NOT_CONFIGURED", "Telegram is not configured on the server", nil)
 			return
 		}
 		current.TelegramEnabled = *body.TelegramEnabled
@@ -396,7 +487,7 @@ func (h *assistantHandler) automation(w http.ResponseWriter, r *http.Request) {
 	}
 	saved, err := h.opts.Repository.SaveAutomationSettings(r.Context(), userID, current)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid automation settings", nil, "")
+		h.error(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid automation settings", nil)
 		return
 	}
 	writeJSON(w, http.StatusOK, saved)

@@ -1,7 +1,7 @@
 import { Alert, Button, Card, CardContent, Chip, Divider, Stack, Switch, TextField, Typography } from '@mui/material'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '../api/client'
+import { ApiError, api } from '../api/client'
 
 export function AssistantPage() {
   const client = useQueryClient()
@@ -13,7 +13,7 @@ export function AssistantPage() {
   const automation = useQuery({ queryKey: ['assistant-automation'], queryFn: api.assistantAutomation })
   const [note, setNote] = useState<string>()
   const [confirmed, setConfirmed] = useState(false)
-  const [confirmAction, setConfirmAction] = useState<'archive' | 'run' | 'ai' | 'telegram' | null>(null)
+  const [confirmAction, setConfirmAction] = useState<'archive' | 'run' | 'ai' | 'telegram' | 'test' | null>(null)
   const noteValue = note ?? preferences.data?.note ?? ''
   const hardCriteriaValue = preferences.data?.hard_criteria ?? {}
   const softCriteriaValue = preferences.data?.soft_criteria ?? {}
@@ -54,6 +54,10 @@ export function AssistantPage() {
     mutationFn: (value: boolean) => api.updateTelegramOptIn(value),
     onSuccess: () => void client.invalidateQueries({ queryKey: ['telegram-status'] }),
   })
+  const testTelegram = useMutation({ mutationFn: api.testTelegram, onSuccess: () => void telegram.refetch() })
+  const saveError = save.error instanceof ApiError
+    ? `${save.error.message} (${save.error.code ?? 'API_ERROR'}${save.error.requestId ? `, request_id: ${save.error.requestId}` : ''})`
+    : save.error?.message
 
   return (
     <Stack spacing={3}>
@@ -113,7 +117,7 @@ export function AssistantPage() {
           <Button variant="contained" disabled={!noteValue.trim() || save.isPending} onClick={() => void save.mutate()}>
             Сохранить критерии
           </Button>
-          {save.isError && <Alert severity="error">Не удалось сохранить критерии: {save.error.message}</Alert>}
+          {save.isError && <Alert severity="error">Не удалось сохранить критерии: {saveError}</Alert>}
           {confirmed && <Alert severity="success">Критерии сохранены. Версия {save.data?.version ?? preferences.data?.version}.</Alert>}
           {preferences.data?.version && <Chip label={`Версия ${preferences.data.version}${preferences.data.active_from ? ` · ${new Date(preferences.data.active_from).toLocaleString('ru-RU')}` : ''}`} sx={{ width: 'fit-content' }} />}
           <Stack direction="row" spacing={1}>
@@ -149,7 +153,12 @@ export function AssistantPage() {
               {telegram.data?.opted_in ? 'Отозвать согласие' : 'Согласиться на уведомления'}
             </Button>
             <Button color="warning" disabled={!telegram.data?.linked || revoke.isPending} onClick={() => void revoke.mutate()}>Отозвать</Button>
+            <Button color="error" variant="outlined" disabled={!telegram.data?.linked || !telegram.data?.opted_in || testTelegram.isPending}
+              onClick={() => setConfirmAction('test')}>Тестовое уведомление</Button>
           </Stack>
+          <Typography variant="body2">Очередь: {telegram.data?.pending ?? 0} · отправлено: {telegram.data?.sent ?? 0} · ошибки: {telegram.data?.failed ?? 0} · dead-letter: {telegram.data?.dead_lettered ?? 0}</Typography>
+          {telegram.data?.last_error && <Alert severity="warning">Последняя ошибка: {telegram.data.last_error}</Alert>}
+          {testTelegram.isError && <Alert severity="error">Тестовая отправка не удалась: {testTelegram.error.message}</Alert>}
         </Stack>
       </CardContent></Card>
       {confirmAction && <div role="dialog" aria-label="Подтверждение действия">
@@ -159,13 +168,16 @@ export function AssistantPage() {
             ? 'Запустить bounded-анализ? Будет обработано не более 25 новых вакансий; внешний AI выключен без серверного opt-in.'
             : confirmAction === 'ai'
               ? `${automation.data?.ai_enabled ? 'Выключить' : 'Включить'} автоматический AI-анализ? Внешний провайдер может расходовать средства; исторические вакансии не будут обработаны.`
-              : `${automation.data?.telegram_enabled ? 'Выключить' : 'Включить'} отправку совпадений в Telegram? Сначала требуется отдельное согласие на уведомления.`}</Typography>
+              : confirmAction === 'test'
+                ? 'Внимание: будет отправлено одно реальное сообщение в подтверждённый Telegram-чат. Продолжить?'
+                : `${automation.data?.telegram_enabled ? 'Выключить' : 'Включить'} отправку совпадений в Telegram? Сначала требуется отдельное согласие на уведомления.`}</Typography>
         <Button onClick={() => setConfirmAction(null)}>Отмена</Button>
         <Button onClick={() => {
           if (confirmAction === 'archive') void archive.mutate()
           else if (confirmAction === 'run') void run.mutate()
           else if (confirmAction === 'ai') void updateAutomation.mutate({ ai_enabled: !automation.data?.ai_enabled })
           else if (confirmAction === 'telegram') void updateAutomation.mutate({ telegram_enabled: !automation.data?.telegram_enabled })
+          else if (confirmAction === 'test') void testTelegram.mutate()
           setConfirmAction(null)
         }}>Подтвердить</Button>
       </div>}

@@ -22,6 +22,14 @@ describe('AssistantPage', () => {
           active_from: '2026-08-26T12:01:00Z',
         })
       }),
+      http.get('*/api/v1/assistant/preferences/list', () => HttpResponse.json([])),
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        ai_configured: false, state: 'disabled', processed: 0, eligible: 0, matched: 0,
+        ai_calls: 0, skipped: 0, pending_candidates: false,
+      })),
+      http.get('*/api/v1/assistant/automation', () => HttpResponse.json({
+        ai_enabled: false, telegram_enabled: false, max_ai_calls_per_hour: 20,
+      })),
       http.get('*/api/v1/assistant/matches', () => HttpResponse.json([])),
       http.get('*/api/v1/assistant/telegram', () => HttpResponse.json({ configured: false, linked: false, opted_in: false })),
     )
@@ -46,6 +54,14 @@ describe('AssistantPage', () => {
         { error: { code: 'VALIDATION_ERROR', message: 'Invalid preferences', request_id: 'test' } },
         { status: 400 },
       )),
+      http.get('*/api/v1/assistant/preferences/list', () => HttpResponse.json([])),
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        ai_configured: false, state: 'disabled', processed: 0, eligible: 0, matched: 0,
+        ai_calls: 0, skipped: 0, pending_candidates: false,
+      })),
+      http.get('*/api/v1/assistant/automation', () => HttpResponse.json({
+        ai_enabled: false, telegram_enabled: false, max_ai_calls_per_hour: 20,
+      })),
       http.get('*/api/v1/assistant/matches', () => HttpResponse.json([])),
       http.get('*/api/v1/assistant/telegram', () => HttpResponse.json({ configured: false, linked: false, opted_in: false })),
     )
@@ -56,6 +72,7 @@ describe('AssistantPage', () => {
     await user.click(screen.getByRole('button', { name: 'Сохранить критерии' }))
 
     expect(await screen.findByText(/Не удалось сохранить критерии/)).toBeInTheDocument()
+    expect(screen.getByText(/VALIDATION_ERROR, request_id: test/)).toBeInTheDocument()
     expect(screen.queryByText(/Критерии сохранены/)).not.toBeInTheDocument()
   })
 })

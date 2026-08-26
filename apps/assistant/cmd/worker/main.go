@@ -34,6 +34,7 @@ func (localStore) AdvanceCursor(context.Context, string, time.Time, string) erro
 func main() {
 	once := flag.Bool("once", false, "run one bounded scan and exit")
 	allowExternal := flag.Bool("allow-external", false, "allow explicitly enabled external AI validation")
+	allowTelegram := flag.Bool("allow-telegram", false, "allow explicitly enabled Telegram delivery")
 	flag.Parse()
 	_ = godotenv.Load()
 	log := logging.New(logging.Options{Service: "assistant-worker", Env: envOr("APP_ENV", "local"), Level: envOr("LOG_LEVEL", "info")})
@@ -41,11 +42,12 @@ func main() {
 	defer stop()
 
 	opts := assistant.WorkerOptions{
-		Source:    envOr("ASSISTANT_SOURCE", "hh"),
-		BatchSize: intEnv("ASSISTANT_BATCH_SIZE", 25),
-		Log:       log,
-		Cutoff:    time.Now().UTC().Add(-24 * time.Hour),
-		AIBudget:  intEnv("ASSISTANT_MAX_AI_CALLS_PER_RUN", 20),
+		Source:          envOr("ASSISTANT_SOURCE", "hh"),
+		BatchSize:       intEnv("ASSISTANT_BATCH_SIZE", 25),
+		Log:             log,
+		Cutoff:          time.Now().UTC().Add(-24 * time.Hour),
+		AIBudget:        intEnv("ASSISTANT_MAX_AI_CALLS_PER_RUN", 20),
+		TelegramEnabled: envBool("ASSISTANT_TELEGRAM_ENABLED", false) && *allowTelegram,
 	}
 	var store assistant.WorkerStore = localStore{}
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -75,7 +77,7 @@ func main() {
 		log.Error("assistant_worker_external_gate_denied", "kind", "requires_ai_enabled_and_live_test")
 		os.Exit(1)
 	}
-	if envBool("ASSISTANT_AI_ENABLED", false) {
+	if envBool("ASSISTANT_AI_ENABLED", false) && *allowExternal {
 		cfg := assistant.LoadConfig()
 		provider, err := assistant.NewDeepSeek(assistant.DeepSeekConfig{
 			APIKey: cfg.DeepSeekAPIKey, BaseURL: cfg.DeepSeekBaseURL,
@@ -95,6 +97,25 @@ func main() {
 		stats, err := assistant.RunOnce(runCtx, store, opts)
 		if err == nil {
 			log.Info("assistant_worker_summary", "stats", stats)
+		}
+		if err == nil && opts.TelegramEnabled {
+			deliveryStore, ok := store.(assistant.DeliveryStore)
+			if !ok {
+				return fmt.Errorf("telegram delivery store is not configured")
+			}
+			cfg := assistant.LoadConfig()
+			client, clientErr := assistant.NewTelegram(cfg.TelegramBotToken, nil)
+			if clientErr != nil {
+				return clientErr
+			}
+			deliveryCtx, deliveryCancel := context.WithTimeout(ctx, 30*time.Second)
+			defer deliveryCancel()
+			deliveryStats, deliveryErr := assistant.RunDeliveryOnce(deliveryCtx, deliveryStore, client,
+				assistant.DeliveryOptions{BatchSize: opts.BatchSize, Log: log})
+			if deliveryErr == nil {
+				log.Info("assistant_delivery_summary", "stats", deliveryStats)
+			}
+			return deliveryErr
 		}
 		return err
 	}

@@ -745,6 +745,28 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/v1/assistant/telegram/test:
+    post:
+      tags: [assistant]
+      operationId: sendTelegramTestNotification
+      summary: Отправить явно подтверждённое тестовое уведомление
+      description: Реальная отправка возможна только после verified link и opt-in; chat_id из клиента не принимается.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm: { type: boolean, const: true }
+      responses:
+        "200": { description: Отправлено }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Telegram не подтверждён }
+        "503": { description: Telegram sender не настроен }
   /api/v1/assistant/automation:
     get:
       tags: [assistant]
@@ -1609,11 +1631,16 @@ components:
 
     TelegramStatus:
       type: object
-      required: [configured, linked, opted_in]
+      required: [configured, linked, opted_in, pending, sent, failed, dead_lettered, last_error]
       properties:
         configured: { type: boolean }
         linked: { type: boolean }
         opted_in: { type: boolean }
+        pending: { type: integer, minimum: 0 }
+        sent: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        dead_lettered: { type: integer, minimum: 0 }
+        last_error: { type: string }
 
     AssistantAutomationSettings:
       type: object

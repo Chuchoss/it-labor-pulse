@@ -47,6 +47,10 @@ type AutomationStore interface {
 	AutomationSettings(context.Context, string) (AutomationSettings, error)
 }
 
+type TelegramEligibilityStore interface {
+	TelegramEligible(context.Context, string) (bool, error)
+}
+
 type WorkItemStore interface {
 	CompleteWorkItem(context.Context, string, string) error
 }
@@ -57,14 +61,15 @@ type WorkerDelivery struct {
 }
 
 type WorkerOptions struct {
-	Source      string
-	Cutoff      time.Time
-	BatchSize   int
-	Now         time.Time
-	Log         *slog.Logger
-	AIProvider  AIProvider
-	AIThreshold float64
-	AIBudget    int
+	Source          string
+	Cutoff          time.Time
+	BatchSize       int
+	Now             time.Time
+	Log             *slog.Logger
+	AIProvider      AIProvider
+	AIThreshold     float64
+	AIBudget        int
+	TelegramEnabled bool
 }
 
 type WorkerStats struct {
@@ -147,6 +152,27 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (Worker
 				continue
 			}
 			stats.Matched++
+			if opts.TelegramEnabled && settings.TelegramEnabled {
+				eligible := true
+				if eligibility, ok := store.(TelegramEligibilityStore); ok {
+					eligible, err = eligibility.TelegramEligible(ctx, user.ID)
+					if err != nil {
+						return stats, err
+					}
+				}
+				if eligible {
+					created, err := store.SaveDelivery(ctx, WorkerDelivery{
+						UserID: user.ID, VacancyID: candidate.ID,
+						PreferenceVersion: user.Preference.Version,
+					})
+					if err != nil {
+						return stats, err
+					}
+					if created {
+						stats.Notified++
+					}
+				}
+			}
 			if settings.AIEnabled && opts.AIProvider != nil && aiCalls < opts.AIBudget &&
 				(settings.MaxAICallsPerHour <= 0 || aiCalls < settings.MaxAICallsPerHour) &&
 				(opts.AIThreshold <= 0 || result.Score >= opts.AIThreshold) {
@@ -173,8 +199,6 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (Worker
 				aiCalls++
 				stats.AICalls++
 			}
-			// Delivery creation is intentionally separate: a disabled notifier
-			// simply never calls this method.
 		}
 		if workItems, ok := store.(WorkItemStore); ok {
 			if err := workItems.CompleteWorkItem(ctx, candidate.Source, candidate.ExternalID); err != nil {

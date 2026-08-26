@@ -119,3 +119,19 @@ func TestAssistantLifecycleEndpointsAreDevGatedAndBounded(t *testing.T) {
 	srv.Handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 }
+
+func TestAssistantErrorsIncludeRequestIDAndCategory(t *testing.T) {
+	srv := New(Options{Assistant: AssistantOptions{
+		Enabled: true, DevAuthEnabled: true, DevSubject: "synthetic",
+		Repository: &assistantRepositoryFake{},
+	}})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/assistant/preferences", strings.NewReader("{"))
+	req.Header.Set("X-Request-ID", "smoke-request")
+	rec := httptest.NewRecorder()
+
+	srv.Handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), `"code":"VALIDATION_ERROR"`)
+	require.Contains(t, rec.Body.String(), `"request_id":"smoke-request"`)
+}

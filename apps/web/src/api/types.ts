@@ -247,6 +247,11 @@ export interface TelegramStatus {
   configured: boolean
   linked: boolean
   opted_in: boolean
+  pending?: number
+  sent?: number
+  failed?: number
+  dead_lettered?: number
+  last_error?: string
 }
 
 export interface AssistantAutomationSettings {

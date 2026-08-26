@@ -2,11 +2,17 @@ package assistant
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"sync"
 	"time"
 )
+
+func LinkTokenHash(token string) []byte {
+	sum := sha256.Sum256([]byte(token))
+	return sum[:]
+}
 
 type Linker struct {
 	mu     sync.Mutex
