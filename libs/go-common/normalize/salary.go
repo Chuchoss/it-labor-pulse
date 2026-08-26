@@ -1,5 +1,7 @@
 package normalize
 
+import "time"
+
 // SalaryNorm is the result of salary policy application (before / with FX).
 type SalaryNorm struct {
 	From                 *float64
@@ -8,6 +10,8 @@ type SalaryNorm struct {
 	Gross                *bool
 	Mid                  *float64 // source currency, after gross→net
 	MidRub               *float64
+	RateDate             *time.Time
+	RateProvider         string
 	ExcludeFromSalaryAgg bool
 	Invalid              bool
 	GrossUnknown         bool
@@ -119,7 +123,11 @@ func normalizeSalary(d Draft, opts Options) SalaryNorm {
 		return out
 	}
 
-	rate, miss := resolveFX(opts, out.Currency, d.CollectedAt)
+	rateDate := d.PublishedAt
+	if rateDate.IsZero() {
+		rateDate = d.CollectedAt
+	}
+	rate, usedDate, provider, miss := resolveFX(opts, out.Currency, rateDate)
 	if miss {
 		out.FXMiss = true
 		out.ExcludeFromSalaryAgg = true
@@ -127,6 +135,8 @@ func normalizeSalary(d Draft, opts Options) SalaryNorm {
 	}
 	midRub := *midNet * rate
 	out.MidRub = &midRub
+	out.RateDate = &usedDate
+	out.RateProvider = provider
 
 	minR := opts.OutlierMinRub
 	if minR <= 0 {

@@ -9,18 +9,24 @@ import {
   Box,
   Container,
   Drawer,
+  FormControl,
   IconButton,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  MenuItem,
+  Select,
   Stack,
   Toolbar,
   Tooltip,
   Typography,
 } from '@mui/material'
 import { useState, type ReactNode } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation } from 'react-router-dom'
+import { api } from '../api/client'
+import { useCurrency, type DisplayCurrency } from './CurrencyContext'
 
 const drawerWidth = 236
 const navigation = [
@@ -38,6 +44,19 @@ interface AppShellProps {
 export function AppShell({ children, mode, onToggleMode }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const location = useLocation()
+  const { currency, setCurrency } = useCurrency()
+  const currencies = useQuery({
+    queryKey: ['currencies'],
+    queryFn: ({ signal }) => api.currencies(signal),
+    staleTime: 30 * 60 * 1000,
+  })
+  const selectedRate = currencies.data?.rates.find((item) => item.code === currency)
+  const rateLabel =
+    currency === 'RUB'
+      ? 'Каноническая валюта'
+      : selectedRate?.rate_date
+        ? `Курс ЦБ на ${selectedRate.rate_date}`
+        : 'Курс ЦБ недоступен'
 
   const drawer = (
     <Stack sx={{ height: '100%' }}>
@@ -115,6 +134,21 @@ export function AppShell({ children, mode, onToggleMode }: AppShellProps) {
           <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
             Рынок IT в России
           </Typography>
+          <Tooltip title={rateLabel}>
+            <FormControl size="small" sx={{ minWidth: 88, mr: 1 }}>
+              <Select
+                value={currency}
+                aria-label="Валюта отображения зарплат"
+                onChange={(event) => setCurrency(event.target.value as DisplayCurrency)}
+              >
+                {(['RUB', 'USD', 'EUR', 'CNY'] as const).map((code) => (
+                  <MenuItem key={code} value={code}>
+                    {code}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Tooltip>
           <Tooltip title={mode === 'light' ? 'Тёмная тема' : 'Светлая тема'}>
             <IconButton aria-label="Переключить тему" onClick={onToggleMode}>
               {mode === 'light' ? <DarkModeOutlinedIcon /> : <LightModeOutlinedIcon />}

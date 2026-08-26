@@ -188,3 +188,13 @@ Nav: пункт «Тенденции» не добавлять в MVP shell до
 - `request_id` из error body — в UI error state.
 - OpenAPI → опциональная генерация типов (`openapi-typescript`) в Phase 1.
 - Auth MVP отсутствует; admin token только если появится admin UI.
+
+### Валюта и ссылки источника
+
+- Global MUI selector: RUB/USD/EUR/CNY; выбор хранится в
+  `localStorage` (`lma-display-currency`) и входит только в salary query keys.
+- Форматирование — `Intl.NumberFormat`; рядом показывается «Курс ЦБ на DATE».
+  Это официальный дневной справочный курс, не realtime и не финансовый совет.
+- Исторический график использует rate metadata каждого point.
+- Vacancy link берётся только из API, открывается с
+  `target="_blank"` и `rel="noopener noreferrer nofollow"`.

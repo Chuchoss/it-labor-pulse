@@ -24,19 +24,22 @@ type AnalyticsFilter struct {
 	RoleGroup string
 	RegionID  string
 	Source    string
+	Currency  string
 }
 
 type DashboardSummary struct {
-	Period          PeriodResponse `json:"period"`
-	VacanciesActive int64          `json:"vacancies_active"`
-	VacanciesNew    int64          `json:"vacancies_new"`
-	MedianSalary    float64        `json:"median_salary"`
-	SalaryCurrency  string         `json:"salary_currency"`
-	SalarySample    int64          `json:"salary_sample_size"`
-	TopRoles        []RoleCount    `json:"top_roles"`
-	TopRegions      []RegionCount  `json:"top_regions"`
-	GeneratedAt     time.Time      `json:"generated_at"`
-	Cache           string         `json:"cache"`
+	Period             PeriodResponse `json:"period"`
+	VacanciesActive    int64          `json:"vacancies_active"`
+	VacanciesNew       int64          `json:"vacancies_new"`
+	MedianSalary       float64        `json:"median_salary"`
+	SalaryCurrency     string         `json:"salary_currency"`
+	SalaryRateDate     *string        `json:"salary_rate_date"`
+	SalaryRateProvider string         `json:"salary_rate_provider,omitempty"`
+	SalarySample       int64          `json:"salary_sample_size"`
+	TopRoles           []RoleCount    `json:"top_roles"`
+	TopRegions         []RegionCount  `json:"top_regions"`
+	GeneratedAt        time.Time      `json:"generated_at"`
+	Cache              string         `json:"cache"`
 }
 
 type PeriodResponse struct {
@@ -64,6 +67,8 @@ type DimensionStat struct {
 	P25Salary      float64 `json:"p25_salary"`
 	P75Salary      float64 `json:"p75_salary"`
 	Currency       string  `json:"currency"`
+	RateDate       *string `json:"rate_date"`
+	RateProvider   string  `json:"rate_provider,omitempty"`
 }
 
 type RoleStat struct {
@@ -91,11 +96,14 @@ type RegionPage struct {
 }
 
 type SalaryPoint struct {
-	PeriodStart string  `json:"period_start"`
-	Median      float64 `json:"median"`
-	P25         float64 `json:"p25"`
-	P75         float64 `json:"p75"`
-	SampleSize  int64   `json:"sample_size"`
+	PeriodStart     string   `json:"period_start"`
+	Median          *float64 `json:"median"`
+	P25             *float64 `json:"p25"`
+	P75             *float64 `json:"p75"`
+	SampleSize      int64    `json:"sample_size"`
+	RateDate        *string  `json:"rate_date"`
+	RateProvider    string   `json:"rate_provider,omitempty"`
+	CoverageWarning string   `json:"coverage_warning,omitempty"`
 }
 
 type SalaryTrends struct {
@@ -104,13 +112,33 @@ type SalaryTrends struct {
 	Points   []SalaryPoint `json:"points"`
 }
 
+type CurrencyRate struct {
+	Code      string  `json:"code"`
+	Label     string  `json:"label"`
+	Symbol    string  `json:"symbol"`
+	RateDate  *string `json:"rate_date"`
+	Provider  string  `json:"provider,omitempty"`
+	StaleDays *int    `json:"stale_days"`
+	Available bool    `json:"available"`
+}
+
+type CurrenciesResponse struct {
+	BaseCurrency string         `json:"base_currency"`
+	Rates        []CurrencyRate `json:"rates"`
+}
+
 type DemandPoint struct {
-	PeriodStart    string `json:"period_start"`
-	ActiveCount    int64  `json:"active_count"`
-	PublishedCount int64  `json:"published_count"`
-	NewCount       int64  `json:"new_count"`
-	Complete       bool   `json:"complete"`
-	SourceDayCount int    `json:"source_day_count"`
+	PeriodStart     string   `json:"period_start"`
+	ActiveCount     int64    `json:"active_count"`
+	PublishedCount  int64    `json:"published_count"`
+	NewCount        int64    `json:"new_count"`
+	Complete        bool     `json:"complete"`
+	SourceDayCount  int      `json:"source_day_count"`
+	MedianSalary    *float64 `json:"median_salary"`
+	Currency        string   `json:"currency,omitempty"`
+	RateDate        *string  `json:"rate_date"`
+	RateProvider    string   `json:"rate_provider,omitempty"`
+	CoverageWarning string   `json:"coverage_warning,omitempty"`
 }
 
 type DemandTrends struct {
@@ -174,6 +202,7 @@ type RankingItem struct {
 	VacancyCount     int64    `json:"vacancy_count"`
 	Share            float64  `json:"share"`
 	MedianSalaryRUB  *float64 `json:"median_salary_rub"`
+	MedianSalary     *float64 `json:"median_salary"`
 	SalarySampleSize int64    `json:"salary_sample_size"`
 }
 
@@ -185,6 +214,9 @@ type RankingPage struct {
 	Page                int           `json:"page"`
 	PageSize            int           `json:"page_size"`
 	Total               int64         `json:"total"`
+	Currency            string        `json:"currency"`
+	RateDate            *string       `json:"rate_date"`
+	RateProvider        string        `json:"rate_provider,omitempty"`
 }
 
 type VacancyFilter struct {
@@ -197,22 +229,29 @@ type VacancyFilter struct {
 	SalaryMin  *float64
 	SalaryMax  *float64
 	Page       Page
+	Currency   string
 }
 
 type Vacancy struct {
-	ID             string     `json:"id"`
-	Source         string     `json:"source"`
-	ExternalID     string     `json:"external_id"`
-	Title          string     `json:"title"`
-	RoleID         *string    `json:"role_id"`
-	RegionID       *string    `json:"region_id"`
-	SalaryFrom     *float64   `json:"salary_from"`
-	SalaryTo       *float64   `json:"salary_to"`
-	SalaryCurrency *string    `json:"salary_currency"`
-	SalaryGross    *bool      `json:"salary_gross"`
-	PublishedAt    *time.Time `json:"published_at"`
-	IsActive       bool       `json:"is_active"`
-	Skills         []string   `json:"skills"`
+	ID                 string     `json:"id"`
+	Source             string     `json:"source"`
+	SourceName         string     `json:"source_name"`
+	SourceURL          *string    `json:"source_url"`
+	ExternalID         string     `json:"external_id"`
+	Title              string     `json:"title"`
+	RoleID             *string    `json:"role_id"`
+	RegionID           *string    `json:"region_id"`
+	SalaryFrom         *float64   `json:"salary_from"`
+	SalaryTo           *float64   `json:"salary_to"`
+	SalaryCurrency     *string    `json:"salary_currency"`
+	SalaryGross        *bool      `json:"salary_gross"`
+	SalaryFromRUBNet   *float64   `json:"salary_from_rub_net"`
+	SalaryToRUBNet     *float64   `json:"salary_to_rub_net"`
+	SalaryRateDate     *string    `json:"salary_rate_date"`
+	SalaryRateProvider string     `json:"salary_rate_provider,omitempty"`
+	PublishedAt        *time.Time `json:"published_at"`
+	IsActive           bool       `json:"is_active"`
+	Skills             []string   `json:"skills"`
 }
 
 type VacancyPage struct {
@@ -235,4 +274,5 @@ type Repository interface {
 	ProgrammingLanguages(context.Context, AnalyticsFilter, Page, RankingMetric) (RankingPage, error)
 	ManagementRoles(context.Context, AnalyticsFilter, Page, RankingMetric) (RankingPage, error)
 	ListVacancies(context.Context, VacancyFilter) (VacancyPage, error)
+	Currencies(context.Context) (CurrenciesResponse, error)
 }

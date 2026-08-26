@@ -215,3 +215,30 @@ func TestNormalizeCurrency(t *testing.T) {
 	require.Equal(t, "RUB", normalize.NormalizeCurrency("rur"))
 	require.Equal(t, "USD", normalize.NormalizeCurrency("USD"))
 }
+
+func TestFXUsesPublicationDateWithPreviousDayFallback(t *testing.T) {
+	t.Parallel()
+	published := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	opts := normalize.DefaultOptions()
+	opts.FX = normalize.RateTable{
+		"USD": {
+			"2026-08-21": {
+				RubPerUnit: 80,
+				RateDate:   time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC),
+				Provider:   "cbr",
+			},
+		},
+	}
+	result, err := normalize.Normalize(normalize.Draft{
+		SchemaVersion: normalize.SchemaVersionV1,
+		Source:        "hh", ExternalID: "123", Title: "Fixture",
+		SalaryFrom: f64(1_000), SalaryCurrencyRaw: "USD",
+		PublishedAt: published,
+		CollectedAt: published.AddDate(0, 0, 3),
+	}, opts)
+	require.NoError(t, err)
+	require.NotNil(t, result.Vacancy.SalaryMidRub)
+	require.Equal(t, 80_000.0, *result.Vacancy.SalaryMidRub)
+	require.Equal(t, "cbr", result.Vacancy.SalaryRateProvider)
+	require.Equal(t, "2026-08-21", result.Vacancy.SalaryRateDate.Format(time.DateOnly))
+}

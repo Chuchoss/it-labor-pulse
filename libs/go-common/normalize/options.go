@@ -18,6 +18,11 @@ type FXProvider interface {
 	RateToRUB(currency string, date time.Time) (rate float64, ok bool)
 }
 
+// DetailedFXProvider optionally exposes provenance for the exact returned rate.
+type DetailedFXProvider interface {
+	RateToRUBDetailed(currency string, date time.Time) (rate float64, rateDate time.Time, provider string, ok bool)
+}
+
 // RoleMatcher maps HH professional role ids / normalized titles to role_id.
 type RoleMatcher interface {
 	MatchRole(source string, professionalRoleIDs []string, title string) (roleID string, ok bool)

@@ -1,4 +1,5 @@
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
+import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded'
 import {
   Box,
   Autocomplete,
@@ -22,6 +23,8 @@ import {
   Typography,
   FormControlLabel,
   Button,
+  Link,
+  Tooltip,
   useMediaQuery,
 } from '@mui/material'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -32,6 +35,7 @@ import type { Vacancy } from '../api/types'
 import { EmptyState, ErrorState } from '../components/DataState'
 import { formatDate, formatSalaryRange } from '../utils/format'
 import { getRegionLabel } from '../utils/regions'
+import { useCurrency } from '../components/CurrencyContext'
 import {
   dedupeVacancies,
   getNextVacancyPageParam,
@@ -52,11 +56,29 @@ function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
         )}
         {vacancy.salary_gross === true ? ' · до вычета налогов' : ''}
       </Typography>
+      {vacancy.salary_rate_date && (
+        <Typography variant="caption" color="text.secondary">
+          Курс ЦБ на {vacancy.salary_rate_date}
+        </Typography>
+      )}
       <Stack direction="row" useFlexGap sx={{ gap: 0.75, flexWrap: 'wrap' }}>
         {(vacancy.skills ?? []).slice(0, 5).map((skill) => (
           <Chip key={skill} label={skill} size="small" variant="outlined" />
         ))}
       </Stack>
+      {vacancy.source_url && (
+        <Link
+          href={vacancy.source_url}
+          target="_blank"
+          rel="noopener noreferrer nofollow"
+          aria-label={`Открыть вакансию на ${vacancy.source_name || vacancy.source}`}
+          onClick={(event) => event.stopPropagation()}
+          sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, width: 'fit-content' }}
+        >
+          Открыть на {vacancy.source === 'hh' ? 'hh.ru' : vacancy.source_name || vacancy.source}
+          <OpenInNewRoundedIcon fontSize="small" />
+        </Link>
+      )}
     </Stack>
   )
 }
@@ -81,6 +103,7 @@ export function VacanciesPage({
   pollIntervalMs?: number
   highlightDurationMs?: number
 }) {
+  const { currency } = useCurrency()
   const queryClient = useQueryClient()
   const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const [searchParams, setSearchParams] = useSearchParams()
@@ -114,8 +137,8 @@ export function VacanciesPage({
 
   const vacancyQueryKey = useMemo(
     () =>
-      ['vacancies', { query, source, onlyActive, pageSize, roleIDs, regionIDs, skillIDs, salaryMin, salaryMax }] as const,
-    [onlyActive, pageSize, query, regionIDs, roleIDs, salaryMax, salaryMin, skillIDs, source],
+      ['vacancies', { query, source, onlyActive, pageSize, roleIDs, regionIDs, skillIDs, salaryMin, salaryMax, currency }] as const,
+    [currency, onlyActive, pageSize, query, regionIDs, roleIDs, salaryMax, salaryMin, skillIDs, source],
   )
   const vacancies = useInfiniteQuery({
     queryKey: vacancyQueryKey,
@@ -133,6 +156,7 @@ export function VacanciesPage({
           only_active: onlyActive,
           page: pageParam,
           page_size: pageSize,
+          currency,
         },
         signal,
       ),
@@ -182,6 +206,7 @@ export function VacanciesPage({
           only_active: onlyActive,
           page: FIRST_PAGE,
           page_size: FRESHNESS_PAGE_SIZE,
+          currency,
         },
         signal,
       ),
@@ -515,9 +540,11 @@ export function VacanciesPage({
             {regions.isError && <Chip size="small" color="warning" label="Справочник регионов недоступен" />}
             {roles.isError && <Chip size="small" color="warning" label="Справочник ролей недоступен" />}
             {skills.isError && <Chip size="small" color="warning" label="Справочник навыков недоступен" />}
-            <Typography variant="caption" color="text.secondary">
-              Зарплата: каноническая середина диапазона в RUB, оценка net; без указанной зарплаты не совпадает.
-            </Typography>
+            <Tooltip title="Фильтр пересчитывается сервером по последнему доступному официальному курсу">
+              <Typography variant="caption" color="text.secondary">
+                Зарплата: {currency}, оценка net. Для валюты используется дневной курс ЦБ, не биржевой realtime.
+              </Typography>
+            </Tooltip>
           </Stack>
         </CardContent>
       </Card>

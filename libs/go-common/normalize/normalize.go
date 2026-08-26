@@ -36,6 +36,7 @@ func Normalize(d Draft, opts Options) (NormalizeResult, error) {
 	v := CanonicalVacancy{
 		Source:               d.Source,
 		ExternalID:           d.ExternalID,
+		SourceURL:            d.SourceURL,
 		Title:                d.Title,
 		EmployerExternalID:   d.EmployerExternalID,
 		EmployerName:         d.EmployerName,
@@ -47,6 +48,8 @@ func Normalize(d Draft, opts Options) (NormalizeResult, error) {
 		SalaryGross:          sal.Gross,
 		SalaryMid:            sal.Mid,
 		SalaryMidRub:         sal.MidRub,
+		SalaryRateDate:       sal.RateDate,
+		SalaryRateProvider:   sal.RateProvider,
 		ExcludeFromSalaryAgg: sal.ExcludeFromSalaryAgg,
 		Skills:               skills,
 		IsRemote:             isRemote,

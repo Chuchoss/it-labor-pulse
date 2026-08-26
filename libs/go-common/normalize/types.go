@@ -16,6 +16,7 @@ type Draft struct {
 	SchemaVersion       string          `json:"schema_version"`
 	Source              string          `json:"source"`
 	ExternalID          string          `json:"external_id"`
+	SourceURL           string          `json:"source_url,omitempty"`
 	Title               string          `json:"title"`
 	EmployerExternalID  string          `json:"employer_external_id"`
 	EmployerName        string          `json:"employer_name,omitempty"`
@@ -47,6 +48,7 @@ type SkillRef struct {
 type CanonicalVacancy struct {
 	Source               string     `json:"source"`
 	ExternalID           string     `json:"external_id"`
+	SourceURL            string     `json:"source_url,omitempty"`
 	Title                string     `json:"title"`
 	EmployerExternalID   string     `json:"employer_external_id"`
 	EmployerName         string     `json:"employer_name,omitempty"`
@@ -59,6 +61,8 @@ type CanonicalVacancy struct {
 	SalaryGross          *bool      `json:"salary_gross"`
 	SalaryMid            *float64   `json:"salary_mid"`
 	SalaryMidRub         *float64   `json:"salary_mid_rub"`
+	SalaryRateDate       *time.Time `json:"salary_rate_date,omitempty"`
+	SalaryRateProvider   string     `json:"salary_rate_provider,omitempty"`
 	ExcludeFromSalaryAgg bool       `json:"exclude_from_salary_agg"`
 	Skills               []SkillRef `json:"skills"`
 	IsRemote             bool       `json:"is_remote"`

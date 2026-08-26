@@ -18,6 +18,7 @@ import (
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/pipeline"
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/store"
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/logging"
+	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 )
 
 func main() {
@@ -84,11 +85,22 @@ func main() {
 		if err != nil {
 			return err
 		}
+		rates, err := st.LoadFXRates(
+			runCtx,
+			time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+			now,
+		)
+		if err != nil {
+			return err
+		}
+		normalizeOpts := normalize.DefaultOptions()
+		normalizeOpts.FX = rates
 		result, err := pipeline.RunDailyDiscovery(runCtx, client, st, log, pipeline.DiscoveryOptions{
 			Area: cfg.ITArea, PerPage: cfg.PerPage,
 			MaxDepth: cfg.ITMaxDepth, MaxPartitions: cfg.ITMaxParts,
 			MaxRequests: cfg.Discovery.MaxRequests,
 			CycleDate:   cycleDate, CutoffAt: cutoff, ObservedAt: now,
+			Normalize: normalizeOpts,
 		})
 		if err != nil {
 			return err

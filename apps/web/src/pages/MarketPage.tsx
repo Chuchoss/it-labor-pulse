@@ -19,6 +19,8 @@ import {
 import { useState } from 'react'
 import { api } from '../api/client'
 import { ErrorState } from '../components/DataState'
+import { useCurrency } from '../components/CurrencyContext'
+import { formatCompact } from '../utils/format'
 
 const roleGroups = [
   { value: 'software_development', label: 'Разработка и руководители' },
@@ -32,6 +34,7 @@ function formatDate(value: string | null | undefined) {
 }
 
 export function MarketPage() {
+  const { currency } = useCurrency()
   const [roleGroup, setRoleGroup] = useState('software_development')
   const [selectedYear, setSelectedYear] = useState<number>()
   const [regionID, setRegionID] = useState('')
@@ -46,7 +49,7 @@ export function MarketPage() {
   const from = year ? `${year}-01-01` : ''
   const to = year ? `${year}-12-31` : ''
   const demand = useQuery({
-    queryKey: ['market-demand', { from, to, roleGroup, regionID, grain }],
+    queryKey: ['market-demand', { from, to, roleGroup, regionID, grain, currency }],
     queryFn: ({ signal }) =>
       api.marketDemand(
         {
@@ -55,6 +58,7 @@ export function MarketPage() {
           role_group: roleGroup,
           region_id: regionID || undefined,
           grain,
+          currency,
         },
         signal,
       ),
@@ -178,6 +182,39 @@ export function MarketPage() {
                   </Select>
                 </FormControl>
               </Stack>
+            </CardContent>
+          </Card>
+          <Card variant="outlined">
+            <CardContent>
+              <Typography variant="h6">Медианная зарплата</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Исторические снимки пересчитаны по курсу ЦБ на дату снимка, {currency} net
+              </Typography>
+              {points.some((point) => point.median_salary != null) ? (
+                <LineChart
+                  height={320}
+                  xAxis={[{
+                    data: points.map((point) => new Date(`${point.period_start}T00:00:00Z`)),
+                    scaleType: 'time',
+                  }]}
+                  yAxis={[{ valueFormatter: (value: number) => formatCompact(value) }]}
+                  series={[{
+                    data: points.map((point) => point.median_salary ?? null),
+                    label: `Медиана, ${currency}`,
+                    color: '#7c3aed',
+                  }]}
+                  grid={{ horizontal: true }}
+                />
+              ) : (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  Зарплатные данные или исторический курс для выбранного периода недоступны.
+                </Alert>
+              )}
+              {points.find((point) => point.rate_date)?.rate_date && (
+                <Typography variant="caption" color="text.secondary">
+                  Каждый point использует ближайший предыдущий курс ЦБ (не старше 7 дней).
+                </Typography>
+              )}
             </CardContent>
           </Card>
 

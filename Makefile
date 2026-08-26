@@ -7,7 +7,7 @@ COMPOSE      := docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 # Optional local data plane; cloud PG/Redis need no Compose services.
 PROFILES_INFRA := --profile local-redis --profile local-pg
 
-.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff run-web run-ingest-scheduler run-hydrate-scheduler run-discovery-scheduler discovery-once run-analytics-scheduler analytics-daily analytics-weekly analytics-backfill ingest-hh ingest-hh-it-plan ingest-hh-it ingest-hh-fixture test test-go test-web
+.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff run-web run-ingest-scheduler run-hydrate-scheduler run-discovery-scheduler discovery-once run-fx-scheduler fx-sync run-analytics-scheduler analytics-daily analytics-weekly analytics-backfill ingest-hh ingest-hh-it-plan ingest-hh-it ingest-hh-fixture test test-go test-web
 
 help:
 	@echo "LMA local targets:"
@@ -30,6 +30,8 @@ help:
 	@echo "  make analytics-weekly - roll up current ISO week from daily snapshots"
 	@echo "  make analytics-backfill - process eligible complete cycles and weeks"
 	@echo "  make run-analytics-scheduler - poll durable cycle markers and weekly rollups"
+	@echo "  make fx-sync        - sync official CBR daily FX and reconcile salaries"
+	@echo "  make run-fx-scheduler - one daily CBR sync process (06:00 UTC)"
 	@echo "  make ingest-hh-fixture - same path using testdata/hh (no live HH; needs DATABASE_URL)"
 	@echo "  make test           - Go + frontend unit tests"
 	@echo "  make down           - stop compose stack (local-redis + local-pg)"
@@ -217,6 +219,14 @@ analytics-backfill: $(ENV_FILE)
 run-analytics-scheduler: $(ENV_FILE)
 	@set -a; . ./$(ENV_FILE); set +a; \
 	go run ./apps/analytics/cmd/worker -mode scheduler
+
+fx-sync: $(ENV_FILE)
+	@set -a; . ./$(ENV_FILE); set +a; \
+	go run ./apps/fx/cmd/sync
+
+run-fx-scheduler: $(ENV_FILE)
+	@set -a; . ./$(ENV_FILE); set +a; \
+	go run ./apps/fx/cmd/sync -scheduler
 
 # Offline smoke: fixtures from testdata/hh (no live HH call).
 ingest-hh-fixture: $(ENV_FILE)

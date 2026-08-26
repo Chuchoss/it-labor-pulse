@@ -3,6 +3,8 @@ package hh
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
@@ -23,10 +25,11 @@ type SearchPage struct {
 // SearchItem contains only fields documented on the HH vacancy search item.
 // It deliberately excludes employer/title persistence and descriptions.
 type SearchItem struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	PublishedAt string `json:"published_at"`
-	Area        *struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	AlternateURL string `json:"alternate_url"`
+	PublishedAt  string `json:"published_at"`
+	Area         *struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"area"`
@@ -43,9 +46,10 @@ type SearchItem struct {
 }
 
 type vacancyPayload struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Area *struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	AlternateURL string `json:"alternate_url"`
+	Area         *struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"area"`
@@ -102,6 +106,13 @@ func DraftFromSearch(item SearchItem, observedAt time.Time) (normalize.Draft, er
 		Title:         item.Name,
 		CollectedAt:   observedAt.UTC(),
 	}
+	if item.AlternateURL != "" {
+		sourceURL, err := ValidateSourceURL(item.AlternateURL)
+		if err != nil {
+			return normalize.Draft{}, fmt.Errorf("hh parse search item alternate_url: %w", err)
+		}
+		d.SourceURL = sourceURL
+	}
 	if item.PublishedAt == "" {
 		return normalize.Draft{}, fmt.Errorf("hh parse search item: empty published_at")
 	}
@@ -151,6 +162,13 @@ func DraftFromDetail(raw []byte, collectedAt time.Time) (normalize.Draft, error)
 		DescriptionText: StripHTML(v.Description),
 		RawPayload:      append(json.RawMessage(nil), raw...),
 	}
+	if v.AlternateURL != "" {
+		sourceURL, err := ValidateSourceURL(v.AlternateURL)
+		if err != nil {
+			return normalize.Draft{}, fmt.Errorf("hh parse detail alternate_url: %w", err)
+		}
+		d.SourceURL = sourceURL
+	}
 	if v.Area != nil {
 		d.RegionExternalID = v.Area.ID
 		d.RegionName = v.Area.Name
@@ -193,6 +211,25 @@ func DraftFromDetail(raw []byte, collectedAt time.Time) (normalize.Draft, error)
 	active := !v.Archived
 	d.IsActiveHint = &active
 	return d, nil
+}
+
+// ValidateSourceURL enforces HH adapter URL policy before canonical storage.
+func ValidateSourceURL(raw string) (string, error) {
+	if strings.ContainsAny(raw, "\x00\r\n\t") {
+		return "", fmt.Errorf("contains control characters")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || !parsed.IsAbs() || parsed.User != nil {
+		return "", fmt.Errorf("must be an absolute URL without userinfo")
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return "", fmt.Errorf("unsupported URL scheme")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "hh.ru" && !strings.HasSuffix(host, ".hh.ru") {
+		return "", fmt.Errorf("unsupported HH host")
+	}
+	return parsed.String(), nil
 }
 
 func parseHHTime(s string) (time.Time, error) {

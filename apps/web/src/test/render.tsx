@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router-dom'
+import { CurrencyProvider } from '../components/CurrencyContext'
 
 export function renderPage(ui: ReactElement, initialEntry = '/') {
   const queryClient = new QueryClient({
@@ -15,7 +16,9 @@ export function renderPage(ui: ReactElement, initialEntry = '/') {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={createTheme()}>
         <CssBaseline />
-        <MemoryRouter initialEntries={[initialEntry]}>{ui}</MemoryRouter>
+        <CurrencyProvider value={{ currency: 'RUB', setCurrency: () => undefined }}>
+          <MemoryRouter initialEntries={[initialEntry]}>{ui}</MemoryRouter>
+        </CurrencyProvider>
       </ThemeProvider>
     </QueryClientProvider>,
   )

@@ -98,6 +98,12 @@ func (s *Service) ListVacancies(ctx context.Context, filter VacancyFilter) (Vaca
 	})
 }
 
+func (s *Service) Currencies(ctx context.Context) (CurrenciesResponse, error) {
+	return withTimeout(ctx, s.timeout, func(ctx context.Context) (CurrenciesResponse, error) {
+		return s.repository.Currencies(ctx)
+	})
+}
+
 func withTimeout[T any](
 	ctx context.Context,
 	timeout time.Duration,

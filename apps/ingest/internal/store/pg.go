@@ -694,6 +694,39 @@ func (s *PG) SyncRoles(ctx context.Context, source string, roles []SourceRole) (
 	return result, nil
 }
 
+// LoadFXRates loads a bounded immutable snapshot for deterministic normalization.
+func (s *PG) LoadFXRates(ctx context.Context, from, to time.Time) (normalize.RateTable, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT quote_currency, rate_date, rub_per_unit::float8, provider
+		FROM fx_rates
+		WHERE rate_date BETWEEN $1::date AND $2::date
+		ORDER BY quote_currency, rate_date
+	`, from.UTC().Format(time.DateOnly), to.UTC().Format(time.DateOnly))
+	if err != nil {
+		return nil, sanitizeDBError("load FX rates", err)
+	}
+	defer rows.Close()
+	result := normalize.RateTable{}
+	for rows.Next() {
+		var currency, provider string
+		var date time.Time
+		var rate float64
+		if err := rows.Scan(&currency, &date, &rate, &provider); err != nil {
+			return nil, sanitizeDBError("scan FX rate", err)
+		}
+		if result[currency] == nil {
+			result[currency] = map[string]normalize.RateRecord{}
+		}
+		result[currency][date.UTC().Format(time.DateOnly)] = normalize.RateRecord{
+			RubPerUnit: rate, RateDate: date.UTC(), Provider: provider,
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, sanitizeDBError("iterate FX rates", err)
+	}
+	return result, nil
+}
+
 // SavePage upserts vacancies and advances checkpoint atomically.
 func (s *PG) SavePage(ctx context.Context, source, scopeHash, nextCursor string, items []VacancyWrite) (int, int, error) {
 	var upserted, unchanged int
@@ -842,10 +875,11 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			    region_id = $4::uuid,
 			    role_id = $5::uuid,
 			    employer_id = $6::uuid,
+			    source_url = NULLIF($7, ''),
 			    deleted_at = NULL,
 			    updated_at = now()
 			WHERE id = $1::uuid
-		`, vacancyID, v.CollectedAt.UTC(), v.IsActive, regionID, roleID, employerID)
+		`, vacancyID, v.CollectedAt.UTC(), v.IsActive, regionID, roleID, employerID, v.SourceURL)
 		if err != nil {
 			return false, atDBStage("touch vacancy", err)
 		}
@@ -862,17 +896,20 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 
 	err = tx.QueryRow(ctx, `
 		INSERT INTO vacancies (
-			source, external_id, title, employer_id, role_id, region_id,
+			source, external_id, source_url, title, employer_id, role_id, region_id,
 			salary_from, salary_to, salary_currency, salary_gross, salary_mid,
+			salary_from_rub_net, salary_to_rub_net, salary_rate_date, salary_rate_provider,
 			description_text, published_at, collected_at, is_active, deleted_at,
 			content_hash, raw_payload, updated_at
 		) VALUES (
-			$1, $2, $3, $4::uuid, $5::uuid, $6::uuid,
-			$7, $8, NULLIF($9, ''), $10, $11,
-			NULLIF($12, ''), $13, $14, $15, NULL,
-			$16, $17::jsonb, now()
+			$1, $2, NULLIF($3, ''), $4, $5::uuid, $6::uuid, $7::uuid,
+			$8, $9, NULLIF($10, ''), $11, $12,
+			$13, $14, $15, NULLIF($16, ''),
+			NULLIF($17, ''), $18, $19, $20, NULL,
+			$21, $22::jsonb, now()
 		)
 		ON CONFLICT (source, external_id) DO UPDATE SET
+			source_url = EXCLUDED.source_url,
 			title = EXCLUDED.title,
 			employer_id = EXCLUDED.employer_id,
 			role_id = EXCLUDED.role_id,
@@ -882,6 +919,10 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			salary_currency = EXCLUDED.salary_currency,
 			salary_gross = EXCLUDED.salary_gross,
 			salary_mid = EXCLUDED.salary_mid,
+			salary_from_rub_net = EXCLUDED.salary_from_rub_net,
+			salary_to_rub_net = EXCLUDED.salary_to_rub_net,
+			salary_rate_date = EXCLUDED.salary_rate_date,
+			salary_rate_provider = EXCLUDED.salary_rate_provider,
 			description_text = EXCLUDED.description_text,
 			published_at = EXCLUDED.published_at,
 			collected_at = EXCLUDED.collected_at,
@@ -892,8 +933,10 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			updated_at = now()
 		RETURNING id::text
 	`,
-		v.Source, v.ExternalID, v.Title, employerID, roleID, regionID,
+		v.Source, v.ExternalID, v.SourceURL, v.Title, employerID, roleID, regionID,
 		v.SalaryFrom, v.SalaryTo, v.SalaryCurrency, v.SalaryGross, salaryMidForStore(v),
+		salaryBoundRub(v, v.SalaryFrom), salaryBoundRub(v, v.SalaryTo),
+		nullTimePointer(v.SalaryRateDate), v.SalaryRateProvider,
 		truncate(v.DescriptionText, 20000), nullTime(v.PublishedAt), v.CollectedAt.UTC(), v.IsActive,
 		hashBytes, raw,
 	).Scan(&vacancyID)
@@ -954,6 +997,21 @@ func salaryMidForStore(v normalize.CanonicalVacancy) *float64 {
 		return v.SalaryMidRub
 	}
 	return v.SalaryMid
+}
+
+func salaryBoundRub(v normalize.CanonicalVacancy, bound *float64) *float64 {
+	if bound == nil || v.SalaryMid == nil || v.SalaryMidRub == nil || *v.SalaryMid <= 0 {
+		return nil
+	}
+	value := *bound * (*v.SalaryMidRub / *v.SalaryMid)
+	return &value
+}
+
+func nullTimePointer(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.UTC()
 }
 
 func upsertEmployer(ctx context.Context, tx DBTX, source, externalID, name string) (string, error) {

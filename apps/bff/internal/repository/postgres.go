@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,6 +14,12 @@ import (
 )
 
 const marketMethodVersion = "vacancy_demand_v2"
+
+type displayRate struct {
+	factor   float64
+	date     *string
+	provider string
+}
 
 type DBTX interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -35,10 +42,9 @@ func (p *Postgres) Dashboard(ctx context.Context, filter readapi.AnalyticsFilter
 			count(*) FILTER (WHERE v.is_active AND v.published_at < ($2::date + interval '1 day')),
 			count(*) FILTER (WHERE v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')),
 			coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)
-				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000
+				FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000
 					AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')), 0)::float8,
-			count(v.salary_mid) FILTER (WHERE v.salary_currency = 'RUB'
-				AND v.salary_mid BETWEEN 10000 AND 2000000
+			count(v.salary_mid) FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000
 				AND v.published_at >= $1::date AND v.published_at < ($2::date + interval '1 day')),
 			current_timestamp
 		FROM vacancies v
@@ -60,7 +66,14 @@ func (p *Postgres) Dashboard(ctx context.Context, filter readapi.AnalyticsFilter
 	}
 
 	result.Period = periodResponse(filter.Period)
-	result.SalaryCurrency = "RUB"
+	rate, err := p.currentDisplayRate(ctx, filter.Currency)
+	if err != nil {
+		return readapi.DashboardSummary{}, err
+	}
+	result.MedianSalary = convertMoney(result.MedianSalary, rate)
+	result.SalaryCurrency = displayCurrency(filter.Currency)
+	result.SalaryRateDate = rate.date
+	result.SalaryRateProvider = rate.provider
 	result.Cache = "MISS"
 	result.TopRoles = []readapi.RoleCount{}
 	result.TopRegions = []readapi.RegionCount{}
@@ -149,11 +162,11 @@ func (p *Postgres) ListRoles(
 			SELECT r.id, r.title,
 				count(*) AS vacancies_count,
 				coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)
-					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS median_salary,
+					FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS median_salary,
 				coalesce(percentile_cont(0.25) WITHIN GROUP (ORDER BY v.salary_mid)
-					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p25_salary,
+					FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p25_salary,
 				coalesce(percentile_cont(0.75) WITHIN GROUP (ORDER BY v.salary_mid)
-					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p75_salary
+					FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p75_salary
 			FROM roles r
 			JOIN vacancies v ON v.role_id = r.id
 			WHERE r.is_active AND v.deleted_at IS NULL AND v.is_active
@@ -187,11 +200,22 @@ func (p *Postgres) ListRoles(
 		); err != nil {
 			return readapi.RolePage{}, fmt.Errorf("scan role: %w", err)
 		}
-		item.Currency = "RUB"
 		result.Data = append(result.Data, item)
 	}
 	if err := rows.Err(); err != nil {
 		return readapi.RolePage{}, fmt.Errorf("iterate roles: %w", err)
+	}
+	rate, err := p.currentDisplayRate(ctx, filter.Currency)
+	if err != nil {
+		return readapi.RolePage{}, err
+	}
+	for index := range result.Data {
+		result.Data[index].MedianSalary = convertMoney(result.Data[index].MedianSalary, rate)
+		result.Data[index].P25Salary = convertMoney(result.Data[index].P25Salary, rate)
+		result.Data[index].P75Salary = convertMoney(result.Data[index].P75Salary, rate)
+		result.Data[index].Currency = displayCurrency(filter.Currency)
+		result.Data[index].RateDate = rate.date
+		result.Data[index].RateProvider = rate.provider
 	}
 	return result, nil
 }
@@ -212,11 +236,11 @@ func (p *Postgres) GetRole(
 		SELECT r.id::text, r.title,
 			count(v.id),
 			coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)
-				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
+				FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
 			coalesce(percentile_cont(0.25) WITHIN GROUP (ORDER BY v.salary_mid)
-				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
+				FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
 			coalesce(percentile_cont(0.75) WITHIN GROUP (ORDER BY v.salary_mid)
-				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8
+				FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8
 		FROM roles r
 		LEFT JOIN vacancies v ON v.role_id = r.id
 			AND v.deleted_at IS NULL
@@ -240,7 +264,16 @@ func (p *Postgres) GetRole(
 	if err != nil {
 		return readapi.RoleStat{}, fmt.Errorf("query role: %w", err)
 	}
-	item.Currency = "RUB"
+	rate, err := p.currentDisplayRate(ctx, filter.Currency)
+	if err != nil {
+		return readapi.RoleStat{}, err
+	}
+	item.MedianSalary = convertMoney(item.MedianSalary, rate)
+	item.P25Salary = convertMoney(item.P25Salary, rate)
+	item.P75Salary = convertMoney(item.P75Salary, rate)
+	item.Currency = displayCurrency(filter.Currency)
+	item.RateDate = rate.date
+	item.RateProvider = rate.provider
 	return item, nil
 }
 
@@ -261,11 +294,11 @@ func (p *Postgres) ListRegions(
 			SELECT r.id, r.name,
 				count(*) AS vacancies_count,
 				coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)
-					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS median_salary,
+					FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS median_salary,
 				coalesce(percentile_cont(0.25) WITHIN GROUP (ORDER BY v.salary_mid)
-					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p25_salary,
+					FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p25_salary,
 				coalesce(percentile_cont(0.75) WITHIN GROUP (ORDER BY v.salary_mid)
-					FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p75_salary
+					FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8 AS p75_salary
 			FROM regions r
 			JOIN vacancies v ON v.region_id = r.id
 			WHERE r.is_active AND v.deleted_at IS NULL AND v.is_active
@@ -299,11 +332,22 @@ func (p *Postgres) ListRegions(
 		); err != nil {
 			return readapi.RegionPage{}, fmt.Errorf("scan region: %w", err)
 		}
-		item.Currency = "RUB"
 		result.Data = append(result.Data, item)
 	}
 	if err := rows.Err(); err != nil {
 		return readapi.RegionPage{}, fmt.Errorf("iterate regions: %w", err)
+	}
+	rate, err := p.currentDisplayRate(ctx, filter.Currency)
+	if err != nil {
+		return readapi.RegionPage{}, err
+	}
+	for index := range result.Data {
+		result.Data[index].MedianSalary = convertMoney(result.Data[index].MedianSalary, rate)
+		result.Data[index].P25Salary = convertMoney(result.Data[index].P25Salary, rate)
+		result.Data[index].P75Salary = convertMoney(result.Data[index].P75Salary, rate)
+		result.Data[index].Currency = displayCurrency(filter.Currency)
+		result.Data[index].RateDate = rate.date
+		result.Data[index].RateProvider = rate.provider
 	}
 	return result, nil
 }
@@ -324,11 +368,11 @@ func (p *Postgres) GetRegion(
 		SELECT r.id::text, r.name,
 			count(v.id),
 			coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY v.salary_mid)
-				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
+				FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
 			coalesce(percentile_cont(0.25) WITHIN GROUP (ORDER BY v.salary_mid)
-				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
+				FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8,
 			coalesce(percentile_cont(0.75) WITHIN GROUP (ORDER BY v.salary_mid)
-				FILTER (WHERE v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8
+				FILTER (WHERE v.salary_mid BETWEEN 10000 AND 2000000), 0)::float8
 		FROM regions r
 		LEFT JOIN vacancies v ON v.region_id = r.id
 			AND v.deleted_at IS NULL
@@ -353,7 +397,16 @@ func (p *Postgres) GetRegion(
 	if err != nil {
 		return readapi.RegionStat{}, fmt.Errorf("query region: %w", err)
 	}
-	item.Currency = "RUB"
+	rate, err := p.currentDisplayRate(ctx, filter.Currency)
+	if err != nil {
+		return readapi.RegionStat{}, err
+	}
+	item.MedianSalary = convertMoney(item.MedianSalary, rate)
+	item.P25Salary = convertMoney(item.P25Salary, rate)
+	item.P75Salary = convertMoney(item.P75Salary, rate)
+	item.Currency = displayCurrency(filter.Currency)
+	item.RateDate = rate.date
+	item.RateProvider = rate.provider
 	return item, nil
 }
 
@@ -362,6 +415,10 @@ func (p *Postgres) SalaryTrends(
 	filter readapi.AnalyticsFilter,
 	grain string,
 ) (readapi.SalaryTrends, error) {
+	rateTable, err := p.displayRateTable(ctx, filter.Currency, filter.Period.From, filter.Period.To)
+	if err != nil {
+		return readapi.SalaryTrends{}, err
+	}
 	args := append(analyticsArgs(filter), grain)
 	rows, err := p.db.Query(ctx, `
 		SELECT to_char(date_trunc($6, v.published_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'),
@@ -377,7 +434,7 @@ func (p *Postgres) SalaryTrends(
 			AND ($3 = '' OR v.role_id = $3::uuid)
 			AND ($4 = '' OR v.region_id = $4::uuid)
 			AND ($5 = '' OR v.source = $5)
-			AND v.salary_currency = 'RUB' AND v.salary_mid BETWEEN 10000 AND 2000000
+			AND v.salary_mid BETWEEN 10000 AND 2000000
 		GROUP BY date_trunc($6, v.published_at AT TIME ZONE 'UTC')
 		ORDER BY date_trunc($6, v.published_at AT TIME ZONE 'UTC')
 	`, args...)
@@ -386,11 +443,26 @@ func (p *Postgres) SalaryTrends(
 	}
 	defer rows.Close()
 
-	result := readapi.SalaryTrends{Grain: grain, Currency: "RUB", Points: []readapi.SalaryPoint{}}
+	result := readapi.SalaryTrends{
+		Grain: grain, Currency: displayCurrency(filter.Currency),
+		Points: []readapi.SalaryPoint{},
+	}
 	for rows.Next() {
 		var point readapi.SalaryPoint
 		if err := rows.Scan(&point.PeriodStart, &point.Median, &point.P25, &point.P75, &point.SampleSize); err != nil {
 			return readapi.SalaryTrends{}, fmt.Errorf("scan salary trend: %w", err)
+		}
+		target, _ := time.Parse(time.DateOnly, point.PeriodStart)
+		rate := historicalRateFromTable(filter.Currency, target, rateTable)
+		if rate.factor == 0 {
+			point.Median, point.P25, point.P75 = nil, nil, nil
+			point.CoverageWarning = "fx_rate_unavailable"
+		} else {
+			point.Median = convertMoneyPointer(point.Median, rate)
+			point.P25 = convertMoneyPointer(point.P25, rate)
+			point.P75 = convertMoneyPointer(point.P75, rate)
+			point.RateDate = rate.date
+			point.RateProvider = rate.provider
 		}
 		result.Points = append(result.Points, point)
 	}
@@ -405,6 +477,10 @@ func (p *Postgres) DemandTrends(
 	filter readapi.AnalyticsFilter,
 	grain string,
 ) (readapi.DemandTrends, error) {
+	rateTable, err := p.displayRateTable(ctx, filter.Currency, filter.Period.From, filter.Period.To)
+	if err != nil {
+		return readapi.DemandTrends{}, err
+	}
 	source := filter.Source
 	if source == "" {
 		source = "hh"
@@ -421,6 +497,7 @@ func (p *Postgres) DemandTrends(
 		SELECT to_char(snapshot_date, 'YYYY-MM-DD'),
 			sum(active_count)::bigint,
 			sum(published_count)::bigint,
+			max(median_salary_rub_net)::float8,
 			bool_and(cycle_complete),
 			1
 		FROM vacancy_demand_daily
@@ -441,6 +518,7 @@ func (p *Postgres) DemandTrends(
 			SELECT to_char(week_start, 'YYYY-MM-DD'),
 				sum(active_count)::bigint,
 				sum(published_count)::bigint,
+				max(median_salary_rub_net)::float8,
 				bool_and(complete),
 				min(source_daily_count)::integer
 			FROM vacancy_demand_weekly
@@ -474,12 +552,24 @@ func (p *Postgres) DemandTrends(
 			&point.PeriodStart,
 			&point.ActiveCount,
 			&point.PublishedCount,
+			&point.MedianSalary,
 			&point.Complete,
 			&point.SourceDayCount,
 		); err != nil {
 			return readapi.DemandTrends{}, fmt.Errorf("scan demand trend: %w", err)
 		}
 		point.NewCount = point.PublishedCount
+		target, _ := time.Parse(time.DateOnly, point.PeriodStart)
+		rate := historicalRateFromTable(filter.Currency, target, rateTable)
+		point.Currency = displayCurrency(filter.Currency)
+		if rate.factor == 0 {
+			point.MedianSalary = nil
+			point.CoverageWarning = "fx_rate_unavailable"
+		} else {
+			point.MedianSalary = convertMoneyPointer(point.MedianSalary, rate)
+			point.RateDate = rate.date
+			point.RateProvider = rate.provider
+		}
 		result.Points = append(result.Points, point)
 	}
 	if err := rows.Err(); err != nil {
@@ -859,6 +949,19 @@ func (p *Postgres) ranking(
 	if err := rows.Err(); err != nil {
 		return readapi.RankingPage{}, fmt.Errorf("iterate %s ranking: %w", label, err)
 	}
+	rate, err := p.currentDisplayRate(ctx, filter.Currency)
+	if err != nil {
+		return readapi.RankingPage{}, err
+	}
+	result.Currency = displayCurrency(filter.Currency)
+	result.RateDate = rate.date
+	result.RateProvider = rate.provider
+	for index := range result.Data {
+		result.Data[index].MedianSalary = convertMoneyPointer(
+			result.Data[index].MedianSalaryRUB,
+			rate,
+		)
+	}
 	return result, nil
 }
 
@@ -872,9 +975,15 @@ func argsForRanking(args []any, metric readapi.RankingMetric) []any {
 }
 
 func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilter) (readapi.VacancyPage, error) {
+	rate, err := p.currentDisplayRate(ctx, filter.Currency)
+	if err != nil {
+		return readapi.VacancyPage{}, err
+	}
+	salaryMin := toCanonicalRUB(filter.SalaryMin, rate)
+	salaryMax := toCanonicalRUB(filter.SalaryMax, rate)
 	args := []any{
 		filter.Query, nonNilStrings(filter.RoleIDs), nonNilStrings(filter.RegionIDs), filter.Source, filter.OnlyActive,
-		filter.SalaryMin, filter.SalaryMax, nonNilStrings(filter.SkillIDs),
+		salaryMin, salaryMax, nonNilStrings(filter.SkillIDs),
 	}
 	conditions := `
 		v.deleted_at IS NULL
@@ -907,22 +1016,24 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 
 	args = append(args, filter.Page.Size, (filter.Page.Number-1)*filter.Page.Size)
 	rows, err := p.db.Query(ctx, `
-		SELECT v.id::text, v.source, v.external_id, v.title,
+		SELECT v.id::text, v.source, src.name, v.source_url, v.external_id, v.title,
 			v.role_id::text, v.region_id::text,
-			CASE WHEN trim(v.salary_currency) = 'RUB' THEN v.salary_from::float8 END,
-			CASE WHEN trim(v.salary_currency) = 'RUB' THEN v.salary_to::float8 END,
-			CASE WHEN trim(v.salary_currency) = 'RUB' THEN 'RUB' END,
-			CASE WHEN trim(v.salary_currency) = 'RUB' THEN v.salary_gross END,
+			v.salary_from_rub_net::float8,
+			v.salary_to_rub_net::float8,
+			CASE WHEN v.salary_mid IS NOT NULL THEN $11::text END,
+			CASE WHEN v.salary_mid IS NOT NULL THEN false END,
+			v.salary_from_rub_net::float8, v.salary_to_rub_net::float8,
 			v.published_at, v.is_active,
 			coalesce(array_agg(s.name ORDER BY s.name) FILTER (WHERE s.id IS NOT NULL), ARRAY[]::text[])
 		FROM vacancies v
+		JOIN sources src ON src.code = v.source
 		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
 		LEFT JOIN skills s ON s.id = vs.skill_id
 		WHERE `+conditions+`
-		GROUP BY v.id
+		GROUP BY v.id, src.name
 		ORDER BY v.published_at DESC NULLS LAST, v.id
 		LIMIT $9 OFFSET $10
-	`, args...)
+	`, append(args, displayCurrency(filter.Currency))...)
 	if err != nil {
 		return readapi.VacancyPage{}, fmt.Errorf("query vacancies: %w", err)
 	}
@@ -939,6 +1050,8 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 		if err := rows.Scan(
 			&item.ID,
 			&item.Source,
+			&item.SourceName,
+			&item.SourceURL,
 			&item.ExternalID,
 			&item.Title,
 			&item.RoleID,
@@ -947,12 +1060,18 @@ func (p *Postgres) ListVacancies(ctx context.Context, filter readapi.VacancyFilt
 			&item.SalaryTo,
 			&item.SalaryCurrency,
 			&item.SalaryGross,
+			&item.SalaryFromRUBNet,
+			&item.SalaryToRUBNet,
 			&item.PublishedAt,
 			&item.IsActive,
 			&item.Skills,
 		); err != nil {
 			return readapi.VacancyPage{}, fmt.Errorf("scan vacancy: %w", err)
 		}
+		item.SalaryFrom = convertMoneyPointer(item.SalaryFromRUBNet, rate)
+		item.SalaryTo = convertMoneyPointer(item.SalaryToRUBNet, rate)
+		item.SalaryRateDate = rate.date
+		item.SalaryRateProvider = rate.provider
 		result.Data = append(result.Data, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -988,4 +1107,160 @@ func periodResponse(period readapi.Period) readapi.PeriodResponse {
 func datePointer(value time.Time) *string {
 	formatted := value.UTC().Format(time.DateOnly)
 	return &formatted
+}
+
+func (p *Postgres) Currencies(ctx context.Context) (readapi.CurrenciesResponse, error) {
+	result := readapi.CurrenciesResponse{
+		BaseCurrency: "RUB",
+		Rates: []readapi.CurrencyRate{{
+			Code: "RUB", Label: "Российский рубль", Symbol: "₽", Available: true,
+		}},
+	}
+	rows, err := p.db.Query(ctx, `
+		SELECT DISTINCT ON (quote_currency)
+			quote_currency, rate_date, provider,
+			(current_date - rate_date)::integer
+		FROM fx_rates
+		WHERE quote_currency = ANY(ARRAY['USD', 'EUR', 'CNY'])
+		ORDER BY quote_currency, rate_date DESC, provider
+	`)
+	if err != nil {
+		return readapi.CurrenciesResponse{}, fmt.Errorf("query currencies: %w", err)
+	}
+	defer rows.Close()
+	metadata := map[string]readapi.CurrencyRate{
+		"USD": {Code: "USD", Label: "Доллар США", Symbol: "$"},
+		"EUR": {Code: "EUR", Label: "Евро", Symbol: "€"},
+		"CNY": {Code: "CNY", Label: "Китайский юань", Symbol: "¥"},
+	}
+	for rows.Next() {
+		var code, provider string
+		var date time.Time
+		var stale int
+		if err := rows.Scan(&code, &date, &provider, &stale); err != nil {
+			return readapi.CurrenciesResponse{}, fmt.Errorf("scan currency: %w", err)
+		}
+		item := metadata[code]
+		formatted := date.UTC().Format(time.DateOnly)
+		item.RateDate = &formatted
+		item.Provider = provider
+		item.StaleDays = &stale
+		item.Available = stale <= 7
+		metadata[code] = item
+	}
+	if err := rows.Err(); err != nil {
+		return readapi.CurrenciesResponse{}, fmt.Errorf("iterate currencies: %w", err)
+	}
+	for _, code := range []string{"USD", "EUR", "CNY"} {
+		result.Rates = append(result.Rates, metadata[code])
+	}
+	return result, nil
+}
+
+func (p *Postgres) currentDisplayRate(ctx context.Context, currency string) (displayRate, error) {
+	currency = displayCurrency(currency)
+	if currency == "RUB" {
+		return displayRate{factor: 1}, nil
+	}
+	var rate displayRate
+	var date time.Time
+	err := p.db.QueryRow(ctx, `
+		SELECT rub_per_unit::float8, rate_date, provider
+		FROM fx_rates
+		WHERE quote_currency = $1 AND provider = 'cbr'
+		  AND rate_date >= current_date - 7
+		ORDER BY rate_date DESC
+		LIMIT 1
+	`, currency).Scan(&rate.factor, &date, &rate.provider)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return displayRate{}, nil
+	}
+	if err != nil {
+		return displayRate{}, fmt.Errorf("query display FX rate: %w", err)
+	}
+	formatted := date.UTC().Format(time.DateOnly)
+	rate.date = &formatted
+	return rate, nil
+}
+
+func (p *Postgres) displayRateTable(
+	ctx context.Context,
+	currency string,
+	from, to time.Time,
+) (map[string]displayRate, error) {
+	if displayCurrency(currency) == "RUB" {
+		return nil, nil
+	}
+	rows, err := p.db.Query(ctx, `
+		SELECT rate_date, rub_per_unit::float8, provider
+		FROM fx_rates
+		WHERE quote_currency = $1 AND provider = 'cbr'
+		  AND rate_date BETWEEN $2::date - 7 AND $3::date
+		ORDER BY rate_date
+	`, displayCurrency(currency), from, to)
+	if err != nil {
+		return nil, fmt.Errorf("query historical FX rates: %w", err)
+	}
+	defer rows.Close()
+	result := map[string]displayRate{}
+	for rows.Next() {
+		var date time.Time
+		var rate displayRate
+		if err := rows.Scan(&date, &rate.factor, &rate.provider); err != nil {
+			return nil, fmt.Errorf("scan historical FX rate: %w", err)
+		}
+		formatted := date.UTC().Format(time.DateOnly)
+		rate.date = &formatted
+		result[formatted] = rate
+	}
+	return result, rows.Err()
+}
+
+func historicalRateFromTable(
+	currency string,
+	target time.Time,
+	rates map[string]displayRate,
+) displayRate {
+	if displayCurrency(currency) == "RUB" {
+		return displayRate{factor: 1}
+	}
+	for days := 0; days <= 7; days++ {
+		date := target.UTC().AddDate(0, 0, -days).Format(time.DateOnly)
+		if rate, ok := rates[date]; ok {
+			return rate
+		}
+	}
+	return displayRate{}
+}
+
+func displayCurrency(currency string) string {
+	switch currency {
+	case "USD", "EUR", "CNY":
+		return currency
+	default:
+		return "RUB"
+	}
+}
+
+func convertMoney(value float64, rate displayRate) float64 {
+	if rate.factor <= 0 {
+		return 0
+	}
+	return math.Round(value/rate.factor*100) / 100
+}
+
+func convertMoneyPointer(value *float64, rate displayRate) *float64 {
+	if value == nil || rate.factor <= 0 {
+		return nil
+	}
+	converted := convertMoney(*value, rate)
+	return &converted
+}
+
+func toCanonicalRUB(value *float64, rate displayRate) *float64 {
+	if value == nil || rate.factor <= 0 {
+		return nil
+	}
+	converted := math.Round(*value*rate.factor*100) / 100
+	return &converted
 }

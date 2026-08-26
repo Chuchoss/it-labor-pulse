@@ -17,6 +17,7 @@
 | [011](./011-phase1-market-snapshots.md) | Phase 1 market snapshots из полного all-IT cycle |
 | [012](./012-dashboard-ranking-scopes.md) | Отдельные listing/management scopes и taxonomy языков |
 | [013](./013-daily-discovery-snapshots.md) | Дневной search discovery отдельно от detail hydration |
+| [014](./014-official-fx-and-source-links.md) | Официальные дневные FX и source-neutral ссылки |
 
 Новый ADR: скопировать структуру, следующий номер, ссылка в эту таблицу.
 Связь с обзором: [00-overview.md](../00-overview.md).

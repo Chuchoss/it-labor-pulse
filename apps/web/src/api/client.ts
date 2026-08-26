@@ -1,6 +1,7 @@
 import type {
   ApiErrorBody,
   DashboardSummary,
+  CurrenciesResponse,
   DemandTrends,
   RegionPage,
   RankingMetric,
@@ -79,6 +80,7 @@ export interface AnalyticsParams extends Record<string, string | undefined> {
   to: string
   role_id?: string
   region_id?: string
+  currency?: string
 }
 
 export interface MarketParams extends Record<string, string | undefined> {
@@ -87,6 +89,7 @@ export interface MarketParams extends Record<string, string | undefined> {
   role_group?: string
   region_id?: string
   grain?: 'day' | 'week'
+  currency?: string
 }
 
 const DICTIONARY_PAGE_SIZE = 100
@@ -161,6 +164,8 @@ export const api = {
     get<DemandTrends>('/trends/demand', { ...params, grain: 'week' }, signal),
   marketCoverage: (signal?: AbortSignal) =>
     get<TrendsCoverage>('/trends/coverage', {}, signal),
+  currencies: (signal?: AbortSignal) =>
+    get<CurrenciesResponse>('/currencies', {}, signal),
   marketDemand: (params: MarketParams, signal?: AbortSignal) =>
     get<DemandTrends>('/trends/demand', params, signal),
   topSkills: (
@@ -208,6 +213,7 @@ export const api = {
       only_active?: boolean
       page: number
       page_size: number
+      currency?: string
     },
     signal?: AbortSignal,
   ) => get<VacancyPage>('/vacancies', params, signal),

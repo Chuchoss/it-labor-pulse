@@ -397,3 +397,8 @@ flowchart TB
 **Compose:** `env_file`.  
 **K8s (Phase 3):** Opaque Secrets + отдельные GitHub Environment secrets для деплоя; OIDC когда появится облако.  
 **Потом:** External Secrets / SOPS / Vault — по необходимости, не как входной билет.
+
+Банк России `XML_daily.asp` не требует API key. Endpoint и публичная
+rate provenance могут быть в документации/API; `DATABASE_URL` остаётся только
+server-side. BFF и React никогда не вызывают provider напрямую и не получают
+credentials.

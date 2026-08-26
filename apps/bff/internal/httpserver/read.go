@@ -30,6 +30,7 @@ type ReadService interface {
 	ProgrammingLanguages(context.Context, readapi.AnalyticsFilter, readapi.Page, readapi.RankingMetric) (readapi.RankingPage, error)
 	ManagementRoles(context.Context, readapi.AnalyticsFilter, readapi.Page, readapi.RankingMetric) (readapi.RankingPage, error)
 	ListVacancies(context.Context, readapi.VacancyFilter) (readapi.VacancyPage, error)
+	Currencies(context.Context) (readapi.CurrenciesResponse, error)
 }
 
 type ReadHandler struct {
@@ -57,6 +58,7 @@ func (h *ReadHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/rankings/programming-languages", h.programmingLanguages)
 	mux.HandleFunc("GET /api/v1/rankings/managerial-roles", h.managementRoles)
 	mux.HandleFunc("GET /api/v1/vacancies", h.listVacancies)
+	mux.HandleFunc("GET /api/v1/currencies", h.currencies)
 }
 
 func (h *ReadHandler) dashboard(w http.ResponseWriter, r *http.Request) {
@@ -307,6 +309,11 @@ func (h *ReadHandler) listVacancies(w http.ResponseWriter, r *http.Request) {
 		h.validationError(w, r, fieldError{"q", "must be at most 200 characters"})
 		return
 	}
+	currency, err := parseCurrency(values)
+	if err != nil {
+		h.validationError(w, r, err)
+		return
+	}
 	if h.requireService(w, r) {
 		return
 	}
@@ -320,7 +327,16 @@ func (h *ReadHandler) listVacancies(w http.ResponseWriter, r *http.Request) {
 		SalaryMin:  salaryMin,
 		SalaryMax:  salaryMax,
 		Page:       page,
+		Currency:   currency,
 	})
+	h.respond(w, r, result, err)
+}
+
+func (h *ReadHandler) currencies(w http.ResponseWriter, r *http.Request) {
+	if h.requireService(w, r) {
+		return
+	}
+	result, err := h.service.Currencies(r.Context())
 	h.respond(w, r, result, err)
 }
 
@@ -400,7 +416,14 @@ func parseAnalyticsFilter(values url.Values, allowRole, allowSource bool) (reada
 		return readapi.AnalyticsFilter{}, fieldError{"from", "must not be after to"}
 	}
 
-	filter := readapi.AnalyticsFilter{Period: readapi.Period{From: from, To: to}}
+	currency, err := parseCurrency(values)
+	if err != nil {
+		return readapi.AnalyticsFilter{}, err
+	}
+	filter := readapi.AnalyticsFilter{
+		Period:   readapi.Period{From: from, To: to},
+		Currency: currency,
+	}
 	if allowRole {
 		filter.RoleID = strings.TrimSpace(values.Get("role_id"))
 		if filter.RoleID != "" {
@@ -424,6 +447,19 @@ func parseAnalyticsFilter(values url.Values, allowRole, allowSource bool) (reada
 	return filter, nil
 }
 
+func parseCurrency(values url.Values) (string, error) {
+	currency := strings.ToUpper(strings.TrimSpace(values.Get("currency")))
+	if currency == "" {
+		return "RUB", nil
+	}
+	switch currency {
+	case "RUB", "USD", "EUR", "CNY":
+		return currency, nil
+	default:
+		return "", fieldError{"currency", "must be RUB, USD, EUR or CNY"}
+	}
+}
+
 func parseDemandFilter(values url.Values) (readapi.AnalyticsFilter, error) {
 	from, err := parseDate(values, "from")
 	if err != nil {
@@ -441,6 +477,10 @@ func parseDemandFilter(values url.Values) (readapi.AnalyticsFilter, error) {
 		RoleGroup: strings.TrimSpace(values.Get("role_group")),
 		RegionID:  strings.TrimSpace(values.Get("region_id")),
 		Source:    strings.TrimSpace(values.Get("source")),
+	}
+	filter.Currency, err = parseCurrency(values)
+	if err != nil {
+		return readapi.AnalyticsFilter{}, err
 	}
 	switch filter.RoleGroup {
 	case "", "software_development", "analytics", "quality_assurance":

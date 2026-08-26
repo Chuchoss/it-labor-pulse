@@ -18,6 +18,7 @@ import (
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/scheduler"
 	"github.com/Chuchoss/it-labor-pulse/apps/ingest/internal/store"
 	"github.com/Chuchoss/it-labor-pulse/libs/go-common/logging"
+	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 )
 
 func main() {
@@ -79,11 +80,23 @@ func main() {
 			})
 			var result pipeline.ITBatchResult
 			if err == nil {
+				var rates normalize.RateTable
+				rates, err = st.LoadFXRates(
+					runCtx,
+					time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+					time.Now().UTC(),
+				)
+				normalizeOpts := normalize.DefaultOptions()
+				normalizeOpts.FX = rates
+				if err != nil {
+					return scheduler.BatchResult{}, err
+				}
 				result, err = pipeline.RunITBatch(runCtx, client, st, log, pipeline.ITBatchOptions{
 					Area: cfg.ITArea, PerPage: cfg.PerPage,
 					MaxDepth: cfg.ITMaxDepth, MaxPartitions: cfg.ITMaxParts,
 					MaxBatchParts: cfg.Scheduler.MaxPartitions, MaxPagesPerPart: cfg.MaxPages,
 					MaxRequests: cfg.ITMaxReqs, RequestedBy: schedulerRunID,
+					Normalize: normalizeOpts,
 				})
 			}
 			if err == nil && result.CycleComplete {

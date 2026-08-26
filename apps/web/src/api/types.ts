@@ -8,7 +8,9 @@ export interface DashboardSummary {
   vacancies_active: number
   vacancies_new?: number
   median_salary: number
-  salary_currency: 'RUB'
+  salary_currency: 'RUB' | 'USD' | 'EUR' | 'CNY'
+  salary_rate_date?: string | null
+  salary_rate_provider?: string
   salary_sample_size?: number
   top_roles?: Array<{ role_id: string; title: string; count: number }>
   top_regions?: Array<{ region_id: string; title: string; count: number }>
@@ -18,15 +20,18 @@ export interface DashboardSummary {
 
 export interface SalaryPoint {
   period_start: string
-  median: number
-  p25: number
-  p75: number
+  median: number | null
+  p25: number | null
+  p75: number | null
   sample_size: number
+  rate_date?: string | null
+  rate_provider?: string
+  coverage_warning?: string
 }
 
 export interface SalaryTrends {
   grain?: string
-  currency?: 'RUB'
+  currency?: 'RUB' | 'USD' | 'EUR' | 'CNY'
   points?: SalaryPoint[]
 }
 
@@ -37,6 +42,11 @@ export interface DemandPoint {
   new_count: number
   complete: boolean
   source_day_count: number
+  median_salary?: number | null
+  currency?: 'RUB' | 'USD' | 'EUR' | 'CNY'
+  rate_date?: string | null
+  rate_provider?: string
+  coverage_warning?: string
 }
 
 export interface DemandTrends {
@@ -90,6 +100,7 @@ export interface RankingItem {
   vacancy_count: number
   share: number
   median_salary_rub: number | null
+  median_salary: number | null
   salary_sample_size: number
 }
 
@@ -101,11 +112,16 @@ export interface RankingPage {
   page: number
   page_size: number
   total: number
+  currency: 'RUB' | 'USD' | 'EUR' | 'CNY'
+  rate_date?: string | null
+  rate_provider?: string
 }
 
 export interface Vacancy {
   id?: string
   source?: string
+  source_name?: string
+  source_url?: string | null
   external_id?: string
   title?: string
   role_id?: string | null
@@ -114,6 +130,10 @@ export interface Vacancy {
   salary_to?: number | null
   salary_currency?: string | null
   salary_gross?: boolean | null
+  salary_from_rub_net?: number | null
+  salary_to_rub_net?: number | null
+  salary_rate_date?: string | null
+  salary_rate_provider?: string
   published_at?: string | null
   is_active?: boolean
   skills?: string[]
@@ -156,4 +176,19 @@ export interface ApiErrorBody {
     message?: string
     request_id?: string
   }
+}
+
+export interface CurrencyRate {
+  code: 'RUB' | 'USD' | 'EUR' | 'CNY'
+  label: string
+  symbol: string
+  rate_date: string | null
+  provider?: string
+  stale_days: number | null
+  available: boolean
+}
+
+export interface CurrenciesResponse {
+  base_currency: 'RUB'
+  rates: CurrencyRate[]
 }

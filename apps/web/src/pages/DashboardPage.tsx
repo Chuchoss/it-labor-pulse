@@ -28,6 +28,7 @@ import { EmptyState, ErrorState } from '../components/DataState'
 import { formatCompact, formatNumber, formatSalary } from '../utils/format'
 import type { AnalyticsParams } from '../api/client'
 import type { RankingMetric } from '../api/types'
+import { useCurrency } from '../components/CurrencyContext'
 
 const SKILLS_PAGE_SIZE = 10
 
@@ -124,7 +125,9 @@ function RankingCard({
   const maxValue = Math.max(
     metric === 'count'
       ? (ranking.data?.pages[0]?.data[0]?.vacancy_count ?? 0)
-      : (ranking.data?.pages[0]?.data[0]?.median_salary_rub ?? 0),
+      : (ranking.data?.pages[0]?.data[0]?.median_salary
+        ?? ranking.data?.pages[0]?.data[0]?.median_salary_rub
+        ?? 0),
     1,
   )
 
@@ -135,12 +138,12 @@ function RankingCard({
         <Tooltip
           title={
             metric === 'salary'
-              ? `Медиана offered salary, нормализованная в ₽ net. Минимальная выборка: ${minimumSample}.`
+              ? `Медиана offered salary, нормализованная в ${params.currency} net. Минимальная выборка: ${minimumSample}.`
               : 'Доля считается среди активных вакансий соответствующего рейтинга за период.'
           }
         >
           <Typography variant="body2" color="text.secondary" sx={{ display: 'inline-block' }}>
-            {metric === 'count' ? 'Активные вакансии за период' : 'Медианная зарплата, ₽ net'}
+            {metric === 'count' ? 'Активные вакансии за период' : `Медианная зарплата, ${params.currency} net`}
           </Typography>
         </Tooltip>
         <ToggleButtonGroup
@@ -176,7 +179,9 @@ function RankingCard({
         <Stack spacing={2.1} sx={{ mt: 3 }}>
           {items.map((item) => {
             const value =
-              metric === 'count' ? item.vacancy_count : (item.median_salary_rub ?? 0)
+              metric === 'count'
+                ? item.vacancy_count
+                : (item.median_salary ?? item.median_salary_rub ?? 0)
             return (
               <Box key={item.id}>
                 <Stack direction="row" sx={{ justifyContent: 'space-between', gap: 1, mb: 0.6 }}>
@@ -186,7 +191,7 @@ function RankingCard({
                   <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
                     {metric === 'count'
                       ? `${formatCompact(item.vacancy_count)} · ${Math.round(item.share * 100)}%`
-                      : `${formatSalary(item.median_salary_rub)} · n=${formatNumber(item.salary_sample_size)}`}
+                      : `${formatSalary(item.median_salary ?? item.median_salary_rub, params.currency)} · n=${formatNumber(item.salary_sample_size)}`}
                   </Typography>
                 </Stack>
                 <LinearProgress
@@ -237,13 +242,14 @@ function RankingCard({
 }
 
 export function DashboardPage() {
+  const { currency } = useCurrency()
   const fallback = defaultPeriod()
   const [searchParams, setSearchParams] = useSearchParams()
   const from = searchParams.get('from') || fallback.from
   const to = searchParams.get('to') || fallback.to
   const [draftFrom, setDraftFrom] = useState(from)
   const [draftTo, setDraftTo] = useState(to)
-  const params = { from, to }
+  const params = { from, to, currency }
 
   const summary = useQuery({
     queryKey: ['dashboard', params],
@@ -356,8 +362,8 @@ export function DashboardPage() {
         />
         <MetricCard
           label="Медианная зарплата"
-          value={lowSample ? 'Мало данных' : formatSalary(summary.data?.median_salary)}
-          helper={`выборка: ${formatNumber(summary.data?.salary_sample_size)}`}
+          value={lowSample ? 'Мало данных' : formatSalary(summary.data?.median_salary, currency)}
+          helper={`${summary.data?.salary_rate_date ? `Курс ЦБ на ${summary.data.salary_rate_date} · ` : ''}выборка: ${formatNumber(summary.data?.salary_sample_size)}`}
           icon={<CurrencyRubleRoundedIcon />}
           loading={summary.isLoading}
         />
@@ -511,7 +517,7 @@ export function DashboardPage() {
             <Box>
               <Typography variant="h6">Предлагаемые зарплаты</Typography>
               <Typography variant="body2" color="text.secondary">
-                Медиана и диапазон P25–P75, ₽ net
+                Медиана и диапазон P25–P75, {currency} net
               </Typography>
             </Box>
             <Chip size="small" label="offered salary" variant="outlined" />

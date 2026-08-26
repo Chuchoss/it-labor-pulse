@@ -219,7 +219,7 @@ func TestUnchangedVacancyReconcilesCanonicalRegionReference(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, changed)
-	require.Len(t, db.updateArgs, 6)
+	require.Len(t, db.updateArgs, 7)
 	regionID, ok := db.updateArgs[3].(*string)
 	require.True(t, ok)
 	require.Equal(t, "00000000-0000-0000-0000-000000000002", *regionID)

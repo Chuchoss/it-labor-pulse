@@ -123,6 +123,22 @@ func (s stubReadService) ListVacancies(
 	return readapi.VacancyPage{Data: []readapi.Vacancy{}}, nil
 }
 
+func (s stubReadService) Currencies(context.Context) (readapi.CurrenciesResponse, error) {
+	return readapi.CurrenciesResponse{BaseCurrency: "RUB", Rates: []readapi.CurrencyRate{}}, nil
+}
+
+func TestVacanciesRejectUnsupportedCurrency(t *testing.T) {
+	t.Parallel()
+	handler := NewReadHandler(stubReadService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	mux := http.NewServeMux()
+	handler.Register(mux)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/vacancies?currency=GBP", nil)
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Contains(t, response.Body.String(), "VALIDATION_ERROR")
+}
+
 func TestTopSkillsPagination(t *testing.T) {
 	t.Parallel()
 

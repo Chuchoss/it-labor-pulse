@@ -854,3 +854,16 @@ message AIInsight {
 ## Idempotency keys (Target)
 
 Для `POST` admin: заголовок `Idempotency-Key` → повтор вернёт тот же `run_id`/`job_id`.
+
+## Валюта отображения и source links (Phase 1)
+
+- `GET /api/v1/currencies` возвращает RUB/USD/EUR/CNY, дату последнего
+  официального курса ЦБ, provider и stale state.
+- Salary-bearing GET принимают `currency`, default `RUB`. Текущие
+  карточки/рейтинги используют latest rate; исторические points — date-specific
+  rate с fallback назад не более 7 дней. При miss salary point равен `null` и
+  содержит `coverage_warning`.
+- Существующие canonical поля `median_salary_rub` и `salary_*_rub_net`
+  сохраняются для совместимости; display-поля содержат валюту и rate metadata.
+- `/vacancies` возвращает adapter-provided `source_url` и `source_name`.
+  Browser URL не конструирует.

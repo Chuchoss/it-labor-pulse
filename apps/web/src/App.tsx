@@ -3,6 +3,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
+import {
+  CurrencyProvider,
+  readStoredCurrency,
+  storeCurrency,
+  type DisplayCurrency,
+} from './components/CurrencyContext'
 import { DashboardPage } from './pages/DashboardPage'
 import { MarketPage } from './pages/MarketPage'
 import { VacanciesPage } from './pages/VacanciesPage'
@@ -22,6 +28,9 @@ export default function App() {
     const saved = localStorage.getItem('lma-color-mode')
     if (saved === 'light' || saved === 'dark') return saved
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
+  const [currency, setCurrencyState] = useState<DisplayCurrency>(() => {
+    return readStoredCurrency(localStorage)
   })
 
   const theme = useMemo(
@@ -66,21 +75,27 @@ export default function App() {
       return next
     })
   }
+  const setCurrency = (next: DisplayCurrency) => {
+    storeCurrency(localStorage, next)
+    setCurrencyState(next)
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
-        <BrowserRouter>
-          <AppShell mode={mode} onToggleMode={toggleMode}>
-            <Routes>
-              <Route path="/" element={<DashboardPage />} />
-              <Route path="/market" element={<MarketPage />} />
-              <Route path="/vacancies" element={<VacanciesPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </AppShell>
-        </BrowserRouter>
+        <CurrencyProvider value={{ currency, setCurrency }}>
+          <BrowserRouter>
+            <AppShell mode={mode} onToggleMode={toggleMode}>
+              <Routes>
+                <Route path="/" element={<DashboardPage />} />
+                <Route path="/market" element={<MarketPage />} />
+                <Route path="/vacancies" element={<VacanciesPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </AppShell>
+          </BrowserRouter>
+        </CurrencyProvider>
       </ThemeProvider>
     </QueryClientProvider>
   )

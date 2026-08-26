@@ -81,11 +81,20 @@ Target: разные ставки / самозанятость — только 
 
 1. Нормализуем код валюты источника к ISO 4217 перед хранением: HH `RUR` → `RUB`; затем храним `salary_currency` как `RUB`, `USD`, `EUR`, ….
 2. Считаем `salary_mid_rub = salary_mid * fx(currency→RUB, rate_date)`.
-3. `rate_date` = UTC date от `collected_at` (не `published_at`), чтобы ingest был воспроизводим.
-4. Курсы: Redis `dict:fx:rub:{date}` или таблица PG; provider из `.env` (`FX_PROVIDER`).
-5. Нет курса на дату → fallback предыдущий день (до N=7) → иначе `FX_*_FALLBACK` только в `local/dev`; в stage/prod — mid_rub null + error metric.
+3. `rate_date` = UTC date от `published_at` (fallback `collected_at`, только если
+   источник не дал публикацию). Берётся ближайшая предыдущая дата, но не старше
+   7 календарных дней.
+4. Production provider — официальный дневной XML Банка России
+   [`XML_daily.asp`](https://www.cbr.ru/development/SXML/); PostgreSQL хранит
+   `rub_per_unit = Value / Nominal`, дату ответа и provenance. Это не realtime.
+5. Нет курса в bounded окне → raw salary/currency сохраняются, canonical RUB/net
+   остаётся null и запись исключается из salary aggregates. Static fallback
+   разрешён только явным deterministic fixture/unit-тестам.
+6. Текущие вакансии/рейтинги конвертируются из canonical RUB по последнему
+   доступному курсу. Исторические points используют дату point, а не сегодняшний
+   курс. UI поддерживает RUB/USD/EUR/CNY и показывает дату курса.
 
-Аналитика и **MVP API работают только в RUB** по `salary_mid_rub`. Исходная валюта сохраняется для аудита и будущего multi-currency API, но не выбирается параметром публичного MVP.
+Решение и ограничения: [ADR 014](./adr/014-official-fx-and-source-links.md).
 
 ---
 

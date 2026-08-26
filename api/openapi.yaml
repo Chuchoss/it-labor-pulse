@@ -4,7 +4,7 @@ info:
   description: |
     Публичный REST контракт BFF для React SPA (IT Labor Market Analytics).
     Это канонический контракт; docs/architecture/03-api.md описывает его семантику и внутреннее отображение.
-    MVP endpoints ниже; все salary-поля и агрегаты MVP возвращаются только в RUB.
+    Salary-поля поддерживают RUB/USD/EUR/CNY; канон хранения остаётся RUB/net.
     AI- и Perspectives («Тенденции»)-маршруты помечены x-lifecycle: target.
   version: 1.0.0
   contact:
@@ -39,6 +39,8 @@ tags:
     description: Текущие рейтинги рынка по количеству и зарплате
   - name: vacancies
     description: OLTP drill-down вакансий
+  - name: currencies
+    description: Метаданные официальных дневных курсов
   - name: admin
     description: Управление ingest
   - name: ai
@@ -88,6 +90,7 @@ paths:
         - $ref: "#/components/parameters/To"
         - $ref: "#/components/parameters/RoleIdOptional"
         - $ref: "#/components/parameters/RegionIdOptional"
+        - $ref: "#/components/parameters/Currency"
       responses:
         "200":
           description: Summary
@@ -197,6 +200,7 @@ paths:
         - $ref: "#/components/parameters/RoleIdOptional"
         - $ref: "#/components/parameters/RegionIdOptional"
         - $ref: "#/components/parameters/Grain"
+        - $ref: "#/components/parameters/Currency"
       responses:
         "200":
           description: Salary series
@@ -220,6 +224,7 @@ paths:
         - $ref: "#/components/parameters/RegionIdOptional"
         - $ref: "#/components/parameters/SourceOptional"
         - $ref: "#/components/parameters/DemandGrain"
+        - $ref: "#/components/parameters/Currency"
       responses:
         "200":
           description: Ряд снимков или явный пустой ряд, если полных снимков нет
@@ -350,6 +355,7 @@ paths:
         - $ref: "#/components/parameters/RegionIdOptional"
         - $ref: "#/components/parameters/SourceOptional"
         - $ref: "#/components/parameters/RankingMetric"
+        - $ref: "#/components/parameters/Currency"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
@@ -374,6 +380,7 @@ paths:
         - $ref: "#/components/parameters/RegionIdOptional"
         - $ref: "#/components/parameters/SourceOptional"
         - $ref: "#/components/parameters/RankingMetric"
+        - $ref: "#/components/parameters/Currency"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
@@ -402,6 +409,7 @@ paths:
         - $ref: "#/components/parameters/SalaryMinOptional"
         - $ref: "#/components/parameters/SalaryMaxOptional"
         - $ref: "#/components/parameters/SourceOptional"
+        - $ref: "#/components/parameters/Currency"
         - name: only_active
           in: query
           schema:
@@ -418,6 +426,19 @@ paths:
                 $ref: "#/components/schemas/VacancyPage"
         "400":
           $ref: "#/components/responses/BadRequest"
+
+  /api/v1/currencies:
+    get:
+      tags: [currencies]
+      operationId: listCurrencies
+      summary: Поддерживаемые валюты и свежесть курса ЦБ
+      responses:
+        "200":
+          description: Публичные метаданные дневных официальных курсов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrenciesResponse"
 
   /api/v1/admin/ingest/runs:
     post:
@@ -528,6 +549,14 @@ components:
       bearerFormat: JWT
 
   parameters:
+    Currency:
+      name: currency
+      in: query
+      description: Валюта отображения; конвертация не изменяет канонические RUB/net суммы.
+      schema:
+        type: string
+        enum: [RUB, USD, EUR, CNY]
+        default: RUB
     From:
       name: from
       in: query
@@ -592,7 +621,7 @@ components:
     SalaryMinOptional:
       name: salary_min
       in: query
-      description: Нижняя граница канонической salary_mid в RUB, приведённой к оценке net. Вакансии без salary не совпадают.
+      description: Нижняя граница salary_mid в выбранной валюте отображения; вакансии без canonical RUB/net не совпадают.
       schema:
         type: number
         minimum: 0
@@ -600,7 +629,7 @@ components:
     SalaryMaxOptional:
       name: salary_max
       in: query
-      description: Верхняя граница канонической salary_mid в RUB, приведённой к оценке net. Вакансии без salary не совпадают.
+      description: Верхняя граница salary_mid в выбранной валюте отображения; вакансии без canonical RUB/net не совпадают.
       schema:
         type: number
         minimum: 0
@@ -750,8 +779,9 @@ components:
           description: Медиана offered salaries (net estimate, см. docs/architecture/15-normalization-rules.md)
         salary_currency:
           type: string
-          enum: [RUB]
-          description: MVP всегда RUB; расширение multi-currency потребует новой версии контракта.
+          enum: [RUB, USD, EUR, CNY]
+        salary_rate_date: { type: [string, "null"], format: date }
+        salary_rate_provider: { type: string, enum: [cbr] }
         salary_sample_size:
           type: integer
         top_roles:
@@ -778,7 +808,9 @@ components:
         median_salary: { type: number }
         p25_salary: { type: number }
         p75_salary: { type: number }
-        currency: { type: string, enum: [RUB] }
+        currency: { type: string, enum: [RUB, USD, EUR, CNY] }
+        rate_date: { type: [string, "null"], format: date }
+        rate_provider: { type: string, enum: [cbr] }
 
     RoleStatPage:
       type: object
@@ -801,7 +833,9 @@ components:
         median_salary: { type: number }
         p25_salary: { type: number }
         p75_salary: { type: number }
-        currency: { type: string, enum: [RUB] }
+        currency: { type: string, enum: [RUB, USD, EUR, CNY] }
+        rate_date: { type: [string, "null"], format: date }
+        rate_provider: { type: string, enum: [cbr] }
 
     RegionStatPage:
       type: object
@@ -819,16 +853,19 @@ components:
       type: object
       properties:
         period_start: { type: string, format: date }
-        median: { type: number }
-        p25: { type: number }
-        p75: { type: number }
+        median: { type: [number, "null"] }
+        p25: { type: [number, "null"] }
+        p75: { type: [number, "null"] }
         sample_size: { type: integer }
+        rate_date: { type: [string, "null"], format: date }
+        rate_provider: { type: string, enum: [cbr] }
+        coverage_warning: { type: string, enum: [fx_rate_unavailable] }
 
     SalaryTrendsResponse:
       type: object
       properties:
         grain: { type: string }
-        currency: { type: string, enum: [RUB] }
+        currency: { type: string, enum: [RUB, USD, EUR, CNY] }
         points:
           type: array
           items:
@@ -859,6 +896,11 @@ components:
           type: integer
           minimum: 1
           maximum: 7
+        median_salary: { type: [number, "null"] }
+        currency: { type: string, enum: [RUB, USD, EUR, CNY] }
+        rate_date: { type: [string, "null"], format: date }
+        rate_provider: { type: string, enum: [cbr] }
+        coverage_warning: { type: string, enum: [fx_rate_unavailable] }
 
     DemandTrendsResponse:
       type: object
@@ -1033,6 +1075,7 @@ components:
           minimum: 0
           maximum: 1
         median_salary_rub: { type: [number, "null"] }
+        median_salary: { type: [number, "null"] }
         salary_sample_size: { type: integer, minimum: 0 }
 
     RankingPage:
@@ -1056,12 +1099,17 @@ components:
         page: { type: integer, minimum: 1 }
         page_size: { type: integer, minimum: 1, maximum: 100 }
         total: { type: integer, minimum: 0 }
+        currency: { type: string, enum: [RUB, USD, EUR, CNY] }
+        rate_date: { type: [string, "null"], format: date }
+        rate_provider: { type: string, enum: [cbr] }
 
     Vacancy:
       type: object
       properties:
         id: { type: string, format: uuid }
         source: { type: string }
+        source_name: { type: string }
+        source_url: { type: [string, "null"], format: uri }
         external_id: { type: string }
         title: { type: string }
         role_id: { type: [string, "null"] }
@@ -1070,6 +1118,10 @@ components:
         salary_to: { type: [number, "null"] }
         salary_currency: { type: [string, "null"] }
         salary_gross: { type: [boolean, "null"] }
+        salary_from_rub_net: { type: [number, "null"] }
+        salary_to_rub_net: { type: [number, "null"] }
+        salary_rate_date: { type: [string, "null"], format: date }
+        salary_rate_provider: { type: string, enum: [cbr] }
         published_at: { type: [string, "null"], format: date-time }
         is_active: { type: boolean }
         skills:
@@ -1087,6 +1139,28 @@ components:
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer }
+
+    CurrencyRate:
+      type: object
+      required: [code, label, symbol, rate_date, stale_days, available]
+      properties:
+        code: { type: string, enum: [RUB, USD, EUR, CNY] }
+        label: { type: string }
+        symbol: { type: string }
+        rate_date: { type: [string, "null"], format: date }
+        provider: { type: string, enum: [cbr] }
+        stale_days: { type: [integer, "null"], minimum: 0 }
+        available: { type: boolean }
+
+    CurrenciesResponse:
+      type: object
+      required: [base_currency, rates]
+      properties:
+        base_currency: { type: string, const: RUB }
+        rates:
+          type: array
+          items:
+            $ref: "#/components/schemas/CurrencyRate"
 
     TriggerIngestRequest:
       type: object

@@ -85,7 +85,13 @@ classDiagram
 
 ### Versioned source-neutral draft (граница adapter → normalizer)
 
-`SourceNeutralDraftV1` — контракт на границе: `schema_version`, `source`, `external_id`, `title`, `employer_external_id`, `region_external_id`, `salary_from`, `salary_to`, `salary_currency_raw`, `salary_gross`, `published_at`, `skills_raw[]`, `content_hash`, `is_active_hint` и ограниченный `raw_payload` для диагностики.
+`SourceNeutralDraftV1` — контракт на границе: `schema_version`, `source`,
+`external_id`, `source_url`, `title`, `employer_external_id`,
+`region_external_id`, `salary_from`, `salary_to`, `salary_currency_raw`,
+`salary_gross`, `published_at`, `skills_raw[]`, `content_hash`,
+`is_active_hint` и ограниченный `raw_payload` для диагностики. `source_url`
+приходит из официального adapter payload: абсолютный HTTP(S), без userinfo и
+control chars, с host policy конкретного adapter. Frontend URL не выводит из ID.
 
 Draft сохраняет source facts и не пытается сделать их аналитически одинаковыми. **Только normalizer** применяет правила из [15-normalization-rules.md](./15-normalization-rules.md): `RUR → RUB`, gross/net, FX, outliers, aliases и role matching. Новая версия draft добавляется как `SourceNeutralDraftV2`; V1 не меняется breaking-правками.
 

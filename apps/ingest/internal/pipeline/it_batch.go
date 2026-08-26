@@ -26,6 +26,7 @@ type ITBatchOptions struct {
 	MaxRequests     int
 	Now             time.Time
 	RequestedBy     string
+	Normalize       normalize.Options
 }
 
 // ITBatchResult summarizes one bounded all-IT batch.
@@ -162,7 +163,10 @@ func RunITBatch(
 	if err != nil {
 		return ITBatchResult{}, fmt.Errorf("it batch role sync: %w", err)
 	}
-	normalizeOpts := normalize.DefaultOptions()
+	normalizeOpts := opts.Normalize
+	if normalizeOpts.FX == nil {
+		normalizeOpts = normalize.DefaultOptions()
+	}
 	normalizeOpts.Roles = normalize.MapRoleMatcher{
 		RoleByExternalID: map[string]map[string]string{hh.SourceCode: roleIDs},
 	}

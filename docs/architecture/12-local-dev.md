@@ -617,3 +617,11 @@ make bust-cache   # нужен local-redis
 | Полный k8s | Phase 3 |
 
 Публичный REST (`/api/v1/...`) при этом **не меняется** между фазами — меняется только источник данных за Query.
+
+## FX scheduler (Phase 1)
+
+После migration v9 выполни `make fx-sync`, затем держи ровно один
+`make run-fx-scheduler`. Default 06:00 UTC задаётся `FX_SYNC_UTC_HOUR`.
+Discovery/hydration/analytics остаются отдельными процессами; advisory locks не
+дают запустить duplicate FX reconciliation. Диагностика:
+[runbook](../runbooks/fx-sync.md).

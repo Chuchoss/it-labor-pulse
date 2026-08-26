@@ -76,6 +76,8 @@ describe('VacanciesPage', () => {
                   {
                     id: 'vacancy-1',
                     source: 'hh',
+                    source_name: 'HeadHunter',
+                    source_url: 'https://hh.ru/vacancy/123',
                     external_id: '123',
                     title: url.searchParams.get('q') || 'Senior Go Developer',
                     published_at: '2026-08-25T10:00:00Z',
@@ -116,6 +118,10 @@ describe('VacanciesPage', () => {
     expect(requestedRegionPages).toEqual(['1', '2'])
     expect(requestedRegionUrls.every((url) => url.includes('from=2000-01-01'))).toBe(true)
     expect(screen.getByText('Загружено 1 из 3')).toBeInTheDocument()
+    const sourceLinks = screen.getAllByRole('link', { name: 'Открыть вакансию на HeadHunter' })
+    expect(sourceLinks[0]).toHaveAttribute('target', '_blank')
+    expect(sourceLinks[0]).toHaveAttribute('rel', 'noopener noreferrer nofollow')
+    expect(requestedUrls.every((url) => url.includes('currency=RUB'))).toBe(true)
 
     intersectSentinel()
     expect((await screen.findAllByText('Go Platform Engineer')).length).toBeGreaterThan(0)

@@ -113,3 +113,32 @@ func TestStripHTML_RemovesScript(t *testing.T) {
 	require.Equal(t, "Hello World", out)
 	require.NotContains(t, out, "alert")
 }
+
+func TestValidateSourceURL(t *testing.T) {
+	t.Parallel()
+	valid, err := hh.ValidateSourceURL("https://hh.ru/vacancy/123")
+	require.NoError(t, err)
+	require.Equal(t, "https://hh.ru/vacancy/123", valid)
+
+	for _, value := range []string{
+		"/vacancy/123",
+		"javascript:alert(1)",
+		"https://user@hh.ru/vacancy/123",
+		"https://example.com/vacancy/123",
+		"https://hh.ru/vacancy/123\njavascript:alert(1)",
+	} {
+		_, err := hh.ValidateSourceURL(value)
+		require.Error(t, err, value)
+	}
+}
+
+func TestDraftCarriesOfficialAlternateURL(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{
+		"id":"123","name":"Fixture","alternate_url":"https://hh.ru/vacancy/123",
+		"published_at":"2026-08-25T12:00:00+0300","archived":false
+	}`)
+	draft, err := hh.DraftFromDetail(raw, time.Now().UTC())
+	require.NoError(t, err)
+	require.Equal(t, "https://hh.ru/vacancy/123", draft.SourceURL)
+}

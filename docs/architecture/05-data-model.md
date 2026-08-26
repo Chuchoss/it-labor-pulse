@@ -519,3 +519,16 @@ Normalize: при конфликте unique → `UPSERT` обновляет по
 2. Длинные locks на PG — избегать `REWRITE` больших таблиц без плана  
 3. CH: additive columns предпочтительнее rebuild  
 4. Версия схемы в таблице `schema_migrations`
+
+## FX и source URL (migration v9)
+
+- `fx_rates(provider, rate_date, base_currency, quote_currency)` хранит
+  официальный дневной `rub_per_unit`, исходные `Nominal`/`Value`, `fetched_at`
+  и provenance. Индекс `(quote_currency, provider, rate_date DESC)` обслуживает
+  latest и bounded historical lookup.
+- `fx_sync_runs` хранит только операционные счётчики без vacancy content.
+- `vacancies.source_url` — nullable source-neutral HTTP(S) URL.
+- `salary_*_rub_net`, `salary_rate_date/provider` отделяют canonical RUB/net от
+  исходного диапазона и валюты. Аналогичная provenance добавлена минимально в
+  daily discovery observations.
+- Контракт и fallback: [ADR 014](./adr/014-official-fx-and-source-links.md).

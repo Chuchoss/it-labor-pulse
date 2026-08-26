@@ -138,7 +138,11 @@ func main() {
 		p.PerPage = *perPage
 	}
 
-	runnerOpts := normalize.DefaultOptions()
+	runnerOpts, err := loadFXOptions(ctx, st)
+	if err != nil {
+		log.Error("fx_rates_load_failed", "error_category", "database")
+		os.Exit(1)
+	}
 	if p.ProfessionalRole != "" {
 		sourceRoles := make([]store.SourceRole, 0, len(hh.CollectedRoles()))
 		for _, role := range hh.CollectedRoles() {
@@ -183,7 +187,7 @@ func runIT(
 	ctx context.Context,
 	cfg config.Config,
 	client *hh.Client,
-	st store.Store,
+	st *store.PG,
 	log *slog.Logger,
 	dryRun bool,
 ) error {
@@ -223,7 +227,10 @@ func runIT(
 	if err != nil {
 		return err
 	}
-	opts := normalize.DefaultOptions()
+	opts, err := loadFXOptions(ctx, st)
+	if err != nil {
+		return err
+	}
 	opts.Roles = normalize.MapRoleMatcher{
 		RoleByExternalID: map[string]map[string]string{hh.SourceCode: roleIDs},
 	}
@@ -301,6 +308,17 @@ func runIT(
 		"errors", total.Errors,
 	)
 	return nil
+}
+
+func loadFXOptions(ctx context.Context, st *store.PG) (normalize.Options, error) {
+	opts := normalize.DefaultOptions()
+	rates, err := st.LoadFXRates(ctx, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC())
+	if err != nil {
+		return opts, err
+	}
+	opts.FX = rates
+	opts.AllowStaticFXFallback = false
+	return opts, nil
 }
 
 func min(a, b int) int {

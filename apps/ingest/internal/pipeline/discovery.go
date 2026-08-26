@@ -27,6 +27,7 @@ type DiscoveryOptions struct {
 	CycleDate     time.Time
 	CutoffAt      time.Time
 	ObservedAt    time.Time
+	Normalize     normalize.Options
 }
 
 // DiscoveryResult summarizes one complete or resumable daily cycle.
@@ -129,7 +130,10 @@ func RunDailyDiscovery(
 		"method_version", DiscoveryMethodVersion,
 	)
 
-	normalizeOpts := normalize.DefaultOptions()
+	normalizeOpts := opts.Normalize
+	if normalizeOpts.FX == nil {
+		normalizeOpts = normalize.DefaultOptions()
+	}
 	for {
 		part, found, err := st.NextDiscoveryPartition(ctx, cycleID)
 		if err != nil {

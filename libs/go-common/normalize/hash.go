@@ -26,6 +26,8 @@ func ContentHash(v CanonicalVacancy) string {
 	var b strings.Builder
 	b.WriteString(v.Title)
 	b.WriteByte('|')
+	b.WriteString(v.SourceURL)
+	b.WriteByte('|')
 	writeFloatPtr(&b, v.SalaryFrom)
 	b.WriteByte('|')
 	writeFloatPtr(&b, v.SalaryTo)
@@ -35,6 +37,14 @@ func ContentHash(v CanonicalVacancy) string {
 	writeBoolPtr(&b, v.SalaryGross)
 	b.WriteByte('|')
 	writeFloatPtr(&b, v.SalaryMid)
+	b.WriteByte('|')
+	writeFloatPtr(&b, v.SalaryMidRub)
+	b.WriteByte('|')
+	if v.SalaryRateDate != nil {
+		b.WriteString(v.SalaryRateDate.UTC().Format(time.DateOnly))
+	}
+	b.WriteByte('|')
+	b.WriteString(v.SalaryRateProvider)
 	b.WriteByte('|')
 	b.WriteString(v.RegionExternalID)
 	b.WriteByte('|')

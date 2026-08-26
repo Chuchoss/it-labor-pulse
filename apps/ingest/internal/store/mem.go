@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
+
+	"github.com/Chuchoss/it-labor-pulse/libs/go-common/normalize"
 )
 
 // Memory is an in-memory Store for unit tests (no Postgres).
@@ -36,6 +39,10 @@ func NewMemory() *Memory {
 		DiscoveryPartitions: make(map[string][]DiscoveryPartition),
 		Observations:        make(map[string]DiscoveryObservation),
 	}
+}
+
+func (m *Memory) LoadFXRates(context.Context, time.Time, time.Time) (normalize.RateTable, error) {
+	return normalize.RateTable{}, nil
 }
 
 func (m *Memory) CreateRun(_ context.Context, run Run) error {
