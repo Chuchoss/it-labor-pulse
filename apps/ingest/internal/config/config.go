@@ -32,6 +32,20 @@ type Config struct {
 
 	// FixtureDir when set enables offline fixture mode (testdata/hh).
 	FixtureDir string
+
+	Scheduler SchedulerConfig
+}
+
+// SchedulerConfig contains dedicated scheduler process settings.
+type SchedulerConfig struct {
+	Interval        time.Duration
+	RunOnStart      bool
+	MaxPartitions   int
+	BackoffInitial  time.Duration
+	BackoffMax      time.Duration
+	JitterPercent   float64
+	ShutdownTimeout time.Duration
+	TestMode        bool
 }
 
 // Load reads ingest config from env.
@@ -54,6 +68,16 @@ func Load() Config {
 		ITMaxParts:  envInt("INGEST_IT_MAX_PARTITIONS", 512),
 		ITMaxReqs:   envInt("INGEST_IT_MAX_REQUESTS", 500),
 		FixtureDir:  strings.TrimSpace(os.Getenv("INGEST_FIXTURE_DIR")),
+		Scheduler: SchedulerConfig{
+			Interval:        envDuration("INGEST_SCHEDULER_INTERVAL", 30*time.Minute),
+			RunOnStart:      envBool("INGEST_SCHEDULER_RUN_ON_START", true),
+			MaxPartitions:   envInt("INGEST_SCHEDULER_MAX_PARTITIONS_PER_BATCH", 8),
+			BackoffInitial:  envDuration("INGEST_SCHEDULER_BACKOFF_INITIAL", time.Minute),
+			BackoffMax:      envDuration("INGEST_SCHEDULER_BACKOFF_MAX", 15*time.Minute),
+			JitterPercent:   envFloat("INGEST_SCHEDULER_JITTER_PERCENT", 20),
+			ShutdownTimeout: envDuration("INGEST_SCHEDULER_SHUTDOWN_TIMEOUT", 30*time.Second),
+			TestMode:        envBool("INGEST_SCHEDULER_TEST_MODE", false),
+		},
 	}
 	delayMS := envInt("INGEST_PAGE_DELAY_MS", 350)
 	if delayMS < 0 {
@@ -61,6 +85,42 @@ func Load() Config {
 	}
 	cfg.PageDelay = time.Duration(delayMS) * time.Millisecond
 	return cfg
+}
+
+// ValidateScheduler validates both live ingest and scheduler-specific settings.
+func (c Config) ValidateScheduler() error {
+	if err := c.ValidateLive(); err != nil {
+		return err
+	}
+	if c.Scope != "it" {
+		return fmt.Errorf("scheduler requires INGEST_SCOPE=it")
+	}
+	if c.MaxPages < 1 {
+		return fmt.Errorf("scheduler requires positive INGEST_MAX_PAGES")
+	}
+	minInterval := 10 * time.Minute
+	if c.Scheduler.TestMode {
+		minInterval = time.Millisecond
+	}
+	if c.Scheduler.Interval < minInterval {
+		return fmt.Errorf("INGEST_SCHEDULER_INTERVAL must be at least %s", minInterval)
+	}
+	if c.Scheduler.BackoffInitial <= 0 {
+		return fmt.Errorf("INGEST_SCHEDULER_BACKOFF_INITIAL must be positive")
+	}
+	if c.Scheduler.MaxPartitions < 1 {
+		return fmt.Errorf("INGEST_SCHEDULER_MAX_PARTITIONS_PER_BATCH must be positive")
+	}
+	if c.Scheduler.BackoffMax < c.Scheduler.BackoffInitial {
+		return fmt.Errorf("INGEST_SCHEDULER_BACKOFF_MAX must be at least initial backoff")
+	}
+	if c.Scheduler.JitterPercent < 0 || c.Scheduler.JitterPercent > 100 {
+		return fmt.Errorf("INGEST_SCHEDULER_JITTER_PERCENT must be between 0 and 100")
+	}
+	if c.Scheduler.ShutdownTimeout <= 0 {
+		return fmt.Errorf("INGEST_SCHEDULER_SHUTDOWN_TIMEOUT must be positive")
+	}
+	return nil
 }
 
 // ValidateLive requires UA + DATABASE_URL for live HH ingest.
@@ -114,4 +174,40 @@ func envMaxPages(key string, fallback int) int {
 		return 0
 	}
 	return envInt(key, fallback)
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return -1
+	}
+	return d
+}
+
+func envBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
+}
+
+func envFloat(key string, fallback float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return -1
+	}
+	return n
 }

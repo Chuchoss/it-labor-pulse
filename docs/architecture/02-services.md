@@ -62,8 +62,12 @@
 
 ### Scheduler (`scheduler`)
 
-- Cron: daily full/incremental sync
-- В k8s — предпочтительно `CronJob` → HTTP `POST /internal/v1/ingest/runs`
+- Phase 1: dedicated `apps/ingest/cmd/scheduler` периодически запускает bounded,
+  resumable all-IT batch in-process; one-shot CLI остаётся отдельным.
+- No-overlap в процессе + PostgreSQL session advisory lock на отдельном
+  соединении между процессами; lock key `549004801`, без новой таблицы.
+- В k8s (Phase 3) выбор между long-running process и `CronJob` →
+  `POST /internal/v1/ingest/runs` фиксируется при production deployment.
 - Не содержит бизнес-логики парсинга
 
 ### AI Analyzer (`ai-analyzer`) — Target
@@ -149,7 +153,7 @@ flowchart LR
 | PG unique violation | Duplicate | Treat as success (idempotent upsert) |
 | CH insert fail | Transient | Retry batch; не откатывать PG если уже committed — компенсирующий retry snapshot (at-least-once CH ok) |
 | Redis down | Cache miss path | Query идёт в CH/PG; degrade latency, не 5xx обязательно |
-| Ingest overlap | Два daily run | Redis lock `lock:ingest:{source}` TTL; second run → 409 Conflict |
+| Ingest overlap | Два scheduler process | Phase 1: PostgreSQL advisory try-lock, second tick skipped; Redis lock — Phase 2 |
 | AI provider 429 | Cost/rate | Backoff job; status `retrying` |
 | BFF → gRPC down | Dependency | 502/503 + problem+json |
 

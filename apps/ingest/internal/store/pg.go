@@ -83,9 +83,9 @@ func newPoolConfig(databaseURL string) (*pgxpool.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The ingest pipeline is sequential. One connection prevents a retry from
-	// waiting on locks held by another transaction from this process.
-	cfg.MaxConns = 1
+	// The scheduler reserves one session for its advisory lock while the
+	// sequential ingest pipeline uses the other connection.
+	cfg.MaxConns = 2
 	cfg.MinConns = 0
 	cfg.MaxConnIdleTime = 30 * time.Second
 	cfg.HealthCheckPeriod = 15 * time.Second

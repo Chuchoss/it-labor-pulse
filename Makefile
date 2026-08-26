@@ -7,7 +7,7 @@ COMPOSE      := docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 # Optional local data plane; cloud PG/Redis need no Compose services.
 PROFILES_INFRA := --profile local-redis --profile local-pg
 
-.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff run-web ingest-hh ingest-hh-it-plan ingest-hh-it ingest-hh-fixture test test-go test-web
+.PHONY: help up-cloud up-local-redis up-redis up-mvp up-local-pg up-local up-full up-obs down logs ps wait-ready psql redis-cli migrate-up migrate-down bust-cache run-bff run-web run-ingest-scheduler ingest-hh ingest-hh-it-plan ingest-hh-it ingest-hh-fixture test test-go test-web
 
 help:
 	@echo "LMA local targets:"
@@ -23,6 +23,7 @@ help:
 	@echo "  make ingest-hh      - one-shot HH ingest → normalize → PG (needs DATABASE_URL + HH_USER_AGENT)"
 	@echo "  make ingest-hh-it-plan - aggregate-only plan for all official HH IT roles in Russia"
 	@echo "  make ingest-hh-it   - bounded/resumable all-IT crawl (explicit; may take multiple runs)"
+	@echo "  make run-ingest-scheduler - periodic bounded/resumable all-IT scheduler"
 	@echo "  make ingest-hh-fixture - same path using testdata/hh (no live HH; needs DATABASE_URL)"
 	@echo "  make test           - Go + frontend unit tests"
 	@echo "  make down           - stop compose stack (local-redis + local-pg)"
@@ -180,6 +181,10 @@ ingest-hh-it-plan: $(ENV_FILE)
 ingest-hh-it: $(ENV_FILE)
 	@set -a; . ./$(ENV_FILE); set +a; \
 	go run ./apps/ingest/cmd/ingest -scope it
+
+run-ingest-scheduler: $(ENV_FILE)
+	@set -a; . ./$(ENV_FILE); set +a; \
+	INGEST_SCOPE=it go run ./apps/ingest/cmd/scheduler
 
 # Offline smoke: fixtures from testdata/hh (no live HH call).
 ingest-hh-fixture: $(ENV_FILE)

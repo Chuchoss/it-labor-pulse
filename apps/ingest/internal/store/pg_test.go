@@ -106,7 +106,7 @@ func TestNewPoolConfigBoundsOrphanTransactions(t *testing.T) {
 	cfg, err := newPoolConfig("postgres://user:password@localhost:5432/db?sslmode=disable")
 	require.NoError(t, err)
 
-	require.EqualValues(t, 1, cfg.MaxConns)
+	require.EqualValues(t, 2, cfg.MaxConns) // advisory-lock session + sequential ingest
 	require.Equal(t, "30s", cfg.ConnConfig.RuntimeParams["statement_timeout"])
 	require.Equal(t, "5s", cfg.ConnConfig.RuntimeParams["lock_timeout"])
 	require.Equal(t, "15s", cfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"])

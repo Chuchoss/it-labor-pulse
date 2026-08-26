@@ -205,6 +205,21 @@ Fake redis (`miniredis`) допустим для unit cache layer; **хотя б
 
 Живой HH в CI — **запрещён** для автоматических PR/production gates.
 
+### Scheduler Phase 1
+
+Unit-тесты используют fake timer/clock/random и не ждут реальный interval:
+
+- run-on-start и periodic tick;
+- local no-overlap, cancellation и bounded shutdown;
+- backoff progression/reset и границы jitter;
+- advisory lock: acquired/unavailable/release после success/error/cancel;
+- persisted all-IT cycle checkpoint продолжает partition после ошибки;
+- config отклоняет interval `<10m`, кроме явного test mode.
+
+Integration с тегом `integration` открывает два независимых PG pool: второй
+`pg_try_advisory_lock(549004801)` возвращает `false`, а после release первого —
+`true`. Схема v5 достаточна, отдельная миграция для advisory lock не нужна.
+
 ---
 
 ## 8. Phase 2: Kafka / Redpanda

@@ -279,7 +279,9 @@ func (r *Runner) Run(ctx context.Context, p Params) (Result, error) {
 	if fatal != nil {
 		errMsg = truncate(fatal.Error(), 500)
 	}
-	if err := r.Store.FinishRun(ctx, runID, status, stats, errMsg); err != nil {
+	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancelFinish()
+	if err := r.Store.FinishRun(finishCtx, runID, status, stats, errMsg); err != nil {
 		if fatal != nil {
 			return Result{RunID: runID, Status: status, Stats: stats},
 				fmt.Errorf("pipeline operation failed (%w); finish run: %w", fatal, err)

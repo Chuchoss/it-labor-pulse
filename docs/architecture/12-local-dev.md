@@ -224,13 +224,21 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 | `INGEST_IT_AREA` | нет | `113` | Россия; менять только при явной смене продуктового гео |
 | `INGEST_IT_MAX_PARTITIONS` | нет | `512` | Hard ceiling leaf-partitions плана |
 | `INGEST_IT_MAX_REQUESTS` | нет | `500` | Hard budget probe + search/detail запросов одного запуска |
+| `INGEST_SCHEDULER_INTERVAL` | нет | `30m` | Интервал bounded all-IT batch; минимум `10m` |
+| `INGEST_SCHEDULER_RUN_ON_START` | нет | `true` | Первый batch сразу после старта dedicated scheduler |
+| `INGEST_SCHEDULER_MAX_PARTITIONS_PER_BATCH` | нет | `8` | Дополнительный ceiling role/date partitions одного tick |
+| `INGEST_SCHEDULER_BACKOFF_INITIAL` / `MAX` | нет | `1m` / `15m` | Exponential backoff после failed batch |
+| `INGEST_SCHEDULER_JITTER_PERCENT` | нет | `20` | Симметричный jitter, `0..100` |
+| `INGEST_SCHEDULER_SHUTDOWN_TIMEOUT` | нет | `30s` | Bounded wait после отмены текущего run |
+| `INGEST_SCHEDULER_TEST_MODE` | нет | `false` | Разрешает интервал `<10m` только для явного local smoke/test |
 
 Секреты только в `.env` (gitignored), не в Compose YAML и не в документации как реальные значения.
 
-Polling экрана `/vacancies` запрашивает через BFF только первую страницу
+Polling экрана `/vacancies` каждые 30 секунд запрашивает через BFF только первую страницу
 новейших вакансий с текущими фильтрами. Он показывает строки после записи
-очередным ingest-run в PostgreSQL, но сам не запускает HH ingest. Периодический
-запуск ingest настраивается отдельно; при скрытой вкладке или offline браузер
+очередным ingest-run в PostgreSQL, но сам не запускает HH ingest. Свежесть HH
+задаёт `INGEST_SCHEDULER_INTERVAL` (default 30 минут), а не frontend polling.
+При скрытой вкладке или offline браузер
 приостанавливает polling и повторяет проверку после focus/reconnect.
 
 `INGEST_MAX_PAGES=0` / `all` означает не «все вакансии HH», а все страницы,
@@ -270,6 +278,7 @@ partition по одной роли и времени. Обычный старт 
 | `make ingest-hh` / `ingest-hh-fixture` | one-shot HH → normalize → PG (`apps/ingest`); fixture без live HH | Phase 1 |
 | `make ingest-hh-it-plan` | live aggregate-only planning, без vacancy content/записи | Phase 1 |
 | `make ingest-hh-it` | bounded/resumable IT crawl; при budget продолжить следующим запуском | Phase 1 |
+| `make run-ingest-scheduler` | dedicated scheduler: bounded/resumable all-IT batch по расписанию | Phase 1 |
 | `make test` | `go test ./...` + Vitest web | **есть** |
 | `make proto` / `openapi-lint` / `smoke` / `fmt` / `lint` | по мере появления tooling | planned |
 
@@ -288,7 +297,18 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile lo
 # aggregate-only план, затем явный bounded crawl:
 go run ./apps/ingest/cmd/ingest -scope it -dry-run
 go run ./apps/ingest/cmd/ingest -scope it
+# dedicated scheduler; сам загружает корневой .env через godotenv:
+$env:INGEST_SCOPE = "it"
+go run ./apps/ingest/cmd/scheduler
 ```
+
+Scheduler использует process-local no-overlap и session-level PostgreSQL
+advisory lock `549004801` на отдельном соединении. Второй процесс не ждёт lock,
+а пропускает tick. Checkpoint содержит immutable план текущего cycle и номер
+следующей role/date partition; failed/canceled batch его не стирает. После
+полного cycle следующий tick создаёт новый план. Reconciliation `is_active`
+после полного cycle пока отложен: partial batch никогда не деактивирует
+невстреченные вакансии.
 
 ---
 

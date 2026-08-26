@@ -73,6 +73,13 @@ classDiagram
   дополнительно защищает от дублей при изменении данных во время crawl.
 - `INGEST_IT_MAX_PARTITIONS`, `INGEST_IT_MAX_REQUESTS`, max depth и timeout —
   жёсткие ceilings: превышение завершает run ошибкой, а не тихой обрезкой.
+- Dedicated Phase 1 scheduler сохраняет immutable plan cycle (role/date leaf +
+  `cycle_end`) и следующую partition в `ingest_checkpoints`. Каждый tick
+  выполняет только batch в пределах request budget; ошибка оставляет cursor
+  для безопасного retry.
+- Полный успешный cycle отмечается отдельно. Следующий обычный tick начинает
+  свежий cycle; deactivation невстреченных вакансий по partial batch запрещена,
+  complete-cycle reconciliation пока отложен.
 - Публичный поиск отдаёт текущее активное предложение. Историю снятых/удалённых
   вакансий один crawl не восстанавливает; её формируют регулярные снимки.
 

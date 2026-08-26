@@ -21,6 +21,7 @@
 | partial, errors > 0 | Отдельные страницы/вакансии; см. `ingest_run_errors` |
 | 409 на старте | Lock занят — [cache-and-locks.md](./cache-and-locks.md) |
 | Run повторяет ту же page | Проверить `ingest_checkpoints`: cursor не должен продвигаться после failed page |
+| Scheduler пишет `skipped_locked` | Другой process держит PG advisory lock `549004801`; это штатный skip |
 
 3. Проверить env: `HH_USER_AGENT` непустой, `HH_BASE_URL`.
 4. `curl -I` / тестовый GET к HH с тем же UA (осторожно с лимитами).
@@ -57,6 +58,18 @@
 1. Убедиться `status=success` или приемлемый `partial`.
 2. Cache bust при необходимости: [cache-and-locks.md](./cache-and-locks.md).
 3. Smoke: `GET /api/v1/dashboard/summary`.
+
+### F. Scheduler / checkpoint cycle
+
+1. Проверить JSON-логи `service=scheduler`: `scheduler_run_id`,
+   `ingest_run_id`, `error_category`, `next_run_at`.
+2. После ошибки scheduler применяет bounded exponential backoff с jitter; после
+   успеха возвращается к обычному интервалу.
+3. Не удалять checkpoint ради retry: следующий batch продолжает текущую
+   role/date partition. Failed/canceled page не двигает cursor.
+4. `is_active` не пересчитывается по partial batch. Stale reconciliation после
+   полного cycle пока не реализован и не должен выполняться вручную по
+   неполному срезу.
 
 ## Эскалация / когда копать код
 
