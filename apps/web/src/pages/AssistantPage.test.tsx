@@ -36,4 +36,26 @@ describe('AssistantPage', () => {
     expect(await screen.findByText(/Критерии сохранены/)).toBeInTheDocument()
     expect(screen.getByText(/Версия 2/)).toBeInTheDocument()
   })
+
+  it('shows an error and does not claim success on non-2xx save', async () => {
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        note: 'synthetic profile', hard_criteria: {}, soft_criteria: {}, weights: {},
+      })),
+      http.patch('*/api/v1/assistant/preferences', () => HttpResponse.json(
+        { error: { code: 'VALIDATION_ERROR', message: 'Invalid preferences', request_id: 'test' } },
+        { status: 400 },
+      )),
+      http.get('*/api/v1/assistant/matches', () => HttpResponse.json([])),
+      http.get('*/api/v1/assistant/telegram', () => HttpResponse.json({ configured: false, linked: false, opted_in: false })),
+    )
+
+    const user = userEvent.setup()
+    renderPage(<AssistantPage />)
+    await screen.findByDisplayValue('synthetic profile')
+    await user.click(screen.getByRole('button', { name: 'Сохранить критерии' }))
+
+    expect(await screen.findByText(/Не удалось сохранить критерии/)).toBeInTheDocument()
+    expect(screen.queryByText(/Критерии сохранены/)).not.toBeInTheDocument()
+  })
 })
