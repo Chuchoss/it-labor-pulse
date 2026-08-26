@@ -73,12 +73,13 @@ type WorkerOptions struct {
 }
 
 type WorkerStats struct {
-	Users, Processed, Matched, Notified, Skipped, AICalls int
+	Users, Processed, Eligible, Matched, Notified, Skipped, AICalls int
+	RunID                                                           string
 }
 
 func (s WorkerStats) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.Int("users", s.Users), slog.Int("processed", s.Processed),
+		slog.Int("users", s.Users), slog.Int("processed", s.Processed), slog.Int("eligible", s.Eligible),
 		slog.Int("matched", s.Matched), slog.Int("notified", s.Notified),
 		slog.Int("skipped", s.Skipped), slog.Int("ai_calls", s.AICalls),
 	)
@@ -86,7 +87,7 @@ func (s WorkerStats) LogValue() slog.Value {
 
 // RunOnce processes one bounded cursor window. It never falls back to a
 // historical full-table scan and exits cleanly when no users exist.
-func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (WorkerStats, error) {
+func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats WorkerStats, err error) {
 	if opts.BatchSize < 1 || opts.BatchSize > 100 {
 		opts.BatchSize = 25
 	}
@@ -108,7 +109,38 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (Worker
 	if err != nil {
 		return WorkerStats{}, err
 	}
-	stats := WorkerStats{Users: len(users)}
+	var claimedRunID string
+	defer func() {
+		if claimedRunID == "" {
+			return
+		}
+		runStore, ok := store.(AssistantRunStore)
+		if !ok {
+			return
+		}
+		state, category := "succeeded", ""
+		if err != nil {
+			state, category = "failed", "worker_failed"
+		}
+		_ = runStore.CompleteAssistantRun(context.Background(), claimedRunID, state, stats, category)
+	}()
+	if runStore, ok := store.(AssistantRunStore); ok {
+		run, claimed, claimErr := runStore.ClaimAssistantRun(ctx)
+		if claimErr != nil {
+			return WorkerStats{}, claimErr
+		}
+		if !claimed {
+			return WorkerStats{}, nil
+		}
+		claimedRunID = run.ID
+		if scoped, ok := store.(ScopedWorkerStore); ok {
+			users, err = scoped.UsersForAssistantRun(ctx, run.UserID)
+			if err != nil {
+				return WorkerStats{}, err
+			}
+		}
+	}
+	stats = WorkerStats{Users: len(users), RunID: claimedRunID}
 	aiCalls := 0
 	if len(users) == 0 {
 		return stats, nil
@@ -135,6 +167,7 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (Worker
 				stats.Skipped++
 				continue
 			}
+			stats.Eligible++
 			result := Match(candidate.Vacancy, toPreferences(user.Preference), opts.Now)
 			if result.Decision != DecisionMatch {
 				stats.Skipped++

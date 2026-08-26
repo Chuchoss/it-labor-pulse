@@ -1,5 +1,5 @@
 import { Alert, Button, Card, CardContent, Chip, Divider, Stack, Switch, TextField, Typography } from '@mui/material'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, api } from '../api/client'
 
@@ -12,23 +12,31 @@ export function AssistantPage() {
   const telegram = useQuery({ queryKey: ['telegram-status'], queryFn: api.telegramStatus })
   const automation = useQuery({ queryKey: ['assistant-automation'], queryFn: api.assistantAutomation })
   const [note, setNote] = useState<string>()
+  const [hardCriteriaText, setHardCriteriaText] = useState<string>()
   const [confirmed, setConfirmed] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'archive' | 'run' | 'ai' | 'telegram' | 'test' | null>(null)
   const noteValue = note ?? preferences.data?.note ?? ''
   const hardCriteriaValue = preferences.data?.hard_criteria ?? {}
   const softCriteriaValue = preferences.data?.soft_criteria ?? {}
   const weightsValue = preferences.data?.weights ?? {}
+  useEffect(() => {
+    if (preferences.data && hardCriteriaText === undefined) {
+      setHardCriteriaText(JSON.stringify(preferences.data.hard_criteria ?? {}, null, 2))
+    }
+  }, [preferences.data, hardCriteriaText])
   const save = useMutation({
     mutationFn: () => api.saveAssistantPreferences({
       note: noteValue,
-      hard_criteria: hardCriteriaValue,
+      hard_criteria: JSON.parse(hardCriteriaText || '{}') as Record<string, unknown>,
       soft_criteria: softCriteriaValue,
       weights: weightsValue,
     }),
-    onSuccess: () => {
+    onSuccess: async (saved) => {
       setConfirmed(true)
-      void client.refetchQueries({ queryKey: ['assistant-preferences'] })
-      void client.invalidateQueries({ queryKey: ['assistant-matches'] })
+      setHardCriteriaText(JSON.stringify(saved.hard_criteria ?? {}, null, 2))
+      await client.refetchQueries({ queryKey: ['assistant-preferences'] })
+      await client.invalidateQueries({ queryKey: ['assistant-preference-list'] })
+      await client.invalidateQueries({ queryKey: ['assistant-matches'] })
     },
     onMutate: () => setConfirmed(false),
   })
@@ -45,6 +53,7 @@ export function AssistantPage() {
   const run = useMutation({ mutationFn: api.runAssistantAnalysis, onSuccess: () => {
     setConfirmAction(null)
     void client.invalidateQueries({ queryKey: ['assistant-status'] })
+    void client.invalidateQueries({ queryKey: ['assistant-matches'] })
   } })
   const updateAutomation = useMutation({
     mutationFn: (value: { ai_enabled?: boolean; telegram_enabled?: boolean }) => api.updateAssistantAutomation(value),
@@ -97,9 +106,10 @@ export function AssistantPage() {
           {(status.data?.state === 'queued' || status.data?.state === 'running') && <Typography>Анализ выполняется…</Typography>}
           <Typography>Детерминированный анализ: {status.data?.processed ?? 0} вакансий</Typography>
           <Typography>AI-анализ: {status.data?.ai_calls ?? 0} вакансий · Совпадения: {status.data?.matched ?? 0}</Typography>
-          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключена; внешний провайдер не вызывается.' : status.data?.state === 'never_run' ? 'AI ещё не запускалась.' : status.data?.pending_candidates ? 'Есть кандидаты, ожидающие обработки.' : 'Подходящих кандидатов нет или очередь обработана.'}</Typography>
+          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключена; ручной детерминированный анализ ещё не запускался.' : status.data?.state === 'never_run' ? 'Анализ ещё не запускался.' : status.data?.state === 'queued' ? 'Поставлено в очередь; worker ещё не начал обработку.' : status.data?.state === 'running' ? 'Worker обрабатывает bounded-пакет.' : status.data?.state === 'failed' ? 'Анализ завершился с безопасной ошибкой; повторите запуск.' : status.data?.pending_candidates ? 'Есть кандидаты, ожидающие обработки.' : 'Анализ завершён; подходящих кандидатов нет или очередь обработана.'}</Typography>
           {status.data?.finished_at && <Typography variant="body2">Последний анализ: {new Date(status.data.finished_at).toLocaleString('ru-RU')}</Typography>}
           <Button variant="contained" disabled={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'} onClick={() => setConfirmAction('run')}>Запустить анализ</Button>
+          {run.data && <Alert severity="info">Поставлено в очередь. ID запуска: {run.data.run_id}</Alert>}
           {run.isError && <Alert severity="error">Не удалось запустить анализ: {run.error.message}</Alert>}
         </Stack>
       </CardContent></Card>
@@ -110,10 +120,13 @@ export function AssistantPage() {
             placeholder="Например: Go backend, удалённо, от 180 000 ₽"
             slotProps={{ htmlInput: { maxLength: 2000 } }} />
           <Typography variant="subtitle2">Жёсткие критерии</Typography>
+          <TextField multiline minRows={3} value={hardCriteriaText ?? JSON.stringify(hardCriteriaValue, null, 2)}
+            onChange={(event) => setHardCriteriaText(event.target.value)}
+            helperText="JSON: approved_roles, regions, required_skills, excluded_skills, remote_only, min_salary_rub. Поле role не поддерживается." />
           <Typography variant="body2">{Object.entries(hardCriteriaValue).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(' · ') || 'Не заданы'}</Typography>
           <Typography variant="subtitle2">Мягкие критерии и веса</Typography>
           <Typography variant="body2">{Object.entries(softCriteriaValue).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(' · ') || 'Не заданы'} · {Object.entries(weightsValue).map(([key, value]) => `${key}: ${value}`).join(' · ') || 'Веса не заданы'}</Typography>
-          <Typography variant="body2" color="text.secondary">Детерминированный matcher использует hard-критерии. Сохранение создаёт новую версию; старые версии остаются в истории.</Typography>
+          <Typography variant="body2" color="text.secondary">Детерминированный matcher использует только структурированные hard-критерии. Свободный текст сам по себе не участвует в matcher, пока AI-парсинг не включён и не подтверждён. Сохранение создаёт новую версию; старые версии остаются в истории.</Typography>
           <Button variant="contained" disabled={!noteValue.trim() || save.isPending} onClick={() => void save.mutate()}>
             Сохранить критерии
           </Button>

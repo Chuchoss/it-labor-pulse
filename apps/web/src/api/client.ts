@@ -82,11 +82,15 @@ async function get<T>(
   return response.json() as Promise<T>
 }
 
-async function mutate<T>(path: string, method: string, body?: unknown): Promise<T> {
+async function mutate<T>(path: string, method: string, body?: unknown, idempotencyKey?: string): Promise<T> {
   const url = new URL(`${API_BASE_URL}${path}`, window.location.origin)
   const response = await fetch(url, {
     method,
-    headers: headersFor(path, { Accept: 'application/json', 'Content-Type': 'application/json' }),
+    headers: headersFor(path, {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    }),
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!response.ok) {
@@ -248,11 +252,11 @@ export const api = {
   assistantPreferences: () => get<import('./types').AssistantPreferences>('/assistant/preferences', {}),
   assistantPreferenceList: () => get<import('./types').AssistantPreferences[]>('/assistant/preferences/list', {}),
   saveAssistantPreferences: (value: import('./types').AssistantPreferences) =>
-    mutate<import('./types').AssistantPreferences>('/assistant/preferences', 'PATCH', value),
+    mutate<import('./types').AssistantPreferences>('/assistant/preferences', 'PATCH', value, crypto.randomUUID()),
   archiveAssistantPreference: (id: string) =>
     mutate<void>('/assistant/preferences/archive', 'POST', { id }),
   assistantStatus: () => get<import('./types').AssistantStatus>('/assistant/status', {}),
-  runAssistantAnalysis: () => mutate<{ run_id: string; status: string }>('/assistant/analyze', 'POST'),
+  runAssistantAnalysis: () => mutate<{ run_id: string; status: string }>('/assistant/analyze', 'POST', undefined, crypto.randomUUID()),
   assistantMatches: () => get<import('./types').AssistantMatch[]>('/assistant/matches', {}),
   telegramStatus: () => get<import('./types').TelegramStatus>('/assistant/telegram', {}),
   assistantAutomation: () => get<import('./types').AssistantAutomationSettings>('/assistant/automation', {}),

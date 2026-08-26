@@ -43,13 +43,14 @@ func TestPostgresPreferencesRoundTripAcrossConnections(t *testing.T) {
 
 	want := PreferenceRecord{
 		Note:         "synthetic integration profile",
-		HardCriteria: map[string]any{"role": "backend"},
-		SoftCriteria: map[string]any{"remote": true},
+		HardCriteria: map[string]any{"approved_roles": []any{"backend"}},
+		SoftCriteria: map[string]any{},
 		Weights:      map[string]float64{"salary": 1},
 	}
 	saved, err := repo1.SavePreferences(ctx, userID, "integration-request", want)
 	require.NoError(t, err)
 	require.Equal(t, 1, saved.Version)
+	require.NotEmpty(t, saved.ID)
 
 	loaded, err := NewPostgresRepository(conn2).CurrentPreferences(ctx, userID)
 	require.NoError(t, err)

@@ -262,7 +262,7 @@ func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			if errors.Is(err, assistant.ErrInvalidPreferences) {
-				h.error(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid preferences", nil)
+				h.error(w, r, http.StatusBadRequest, "VALIDATION_ERROR", err.Error(), nil)
 			} else {
 				h.error(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not save preferences", nil)
 			}

@@ -54,6 +54,20 @@ type AnalysisStatus struct {
 	MethodVersion     string     `json:"method_version"`
 }
 
+type AssistantRun struct {
+	ID     string
+	UserID string
+}
+
+type AssistantRunStore interface {
+	ClaimAssistantRun(context.Context) (AssistantRun, bool, error)
+	CompleteAssistantRun(context.Context, string, string, WorkerStats, string) error
+}
+
+type ScopedWorkerStore interface {
+	UsersForAssistantRun(context.Context, string) ([]WorkerUser, error)
+}
+
 var ErrInvalidPreferences = errors.New("invalid assistant preferences")
 
 type MatchRecord struct {
@@ -199,7 +213,7 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 		return AnalysisStatus{}, fmt.Errorf("get assistant status: %w", err)
 	}
 	s.AIConfigured = aiConfigured
-	if !aiConfigured && (s.State == "never_run" || s.State == "queued") {
+	if !aiConfigured && s.State == "never_run" {
 		s.State = "disabled"
 	}
 	s.CursorObservedAt = cursorAt
@@ -222,6 +236,45 @@ func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestI
 	return id, nil
 }
 
+func (r *PostgresRepository) ClaimAssistantRun(ctx context.Context) (AssistantRun, bool, error) {
+	var run AssistantRun
+	err := r.db.QueryRow(ctx, `
+		UPDATE assistant_runs
+		SET state = 'running', started_at = now(), last_checked_at = now()
+		WHERE id = (
+			SELECT id FROM assistant_runs
+			WHERE state = 'queued'
+			ORDER BY created_at, id
+			FOR UPDATE SKIP LOCKED LIMIT 1
+		)
+		RETURNING id::text, user_id::text
+	`).Scan(&run.ID, &run.UserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AssistantRun{}, false, nil
+	}
+	if err != nil {
+		return AssistantRun{}, false, fmt.Errorf("claim assistant run: %w", err)
+	}
+	return run, true, nil
+}
+
+func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, state string, stats WorkerStats, errorCategory string) error {
+	if state != "succeeded" && state != "failed" && state != "disabled" {
+		return errors.New("invalid assistant run state")
+	}
+	_, err := r.db.Exec(ctx, `
+		UPDATE assistant_runs
+		SET state = $2, finished_at = now(), last_checked_at = now(),
+			processed = $3, eligible = $4, matched = $5, ai_calls = $6,
+			skipped = $7, error_category = NULLIF($8, '')
+		WHERE id = $1::uuid
+	`, runID, state, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls, stats.Skipped, errorCategory)
+	if err != nil {
+		return fmt.Errorf("complete assistant run: %w", err)
+	}
+	return nil
+}
+
 func validatePreferences(p PreferenceRecord) ([]byte, []byte, []byte, error) {
 	if len([]rune(p.Note)) > 2000 {
 		return nil, nil, nil, fmt.Errorf("%w: note is too long", ErrInvalidPreferences)
@@ -234,6 +287,23 @@ func validatePreferences(p PreferenceRecord) ([]byte, []byte, []byte, error) {
 	}
 	if p.Weights == nil {
 		p.Weights = map[string]float64{}
+	}
+	for key := range p.HardCriteria {
+		switch key {
+		case "approved_roles", "regions", "required_skills", "excluded_skills", "remote_only", "min_salary_rub":
+		default:
+			return nil, nil, nil, fmt.Errorf("%w: hard_criteria.%s is unsupported; use approved_roles", ErrInvalidPreferences, key)
+		}
+	}
+	for key := range p.Weights {
+		switch key {
+		case "role", "salary", "region", "skills":
+		default:
+			return nil, nil, nil, fmt.Errorf("%w: weights.%s is unsupported", ErrInvalidPreferences, key)
+		}
+	}
+	for key := range p.SoftCriteria {
+		return nil, nil, nil, fmt.Errorf("%w: soft_criteria.%s is not used by deterministic matcher", ErrInvalidPreferences, key)
 	}
 	hard, err := json.Marshal(p.HardCriteria)
 	if err != nil || len(hard) > 32*1024 {
@@ -273,16 +343,16 @@ func (r *PostgresRepository) SavePreferences(ctx context.Context, userID, reques
 				(user_id, version, note, hard_criteria, soft_criteria, weights)
 			SELECT $1::uuid, version, $2, $3::jsonb, $4::jsonb, $5::jsonb
 			FROM next_version
-			RETURNING version, note, hard_criteria, soft_criteria, weights, active_from
+			RETURNING id::text, version, note, hard_criteria, soft_criteria, weights, active_from
 		)
-		SELECT version, note, hard_criteria, soft_criteria, weights, active_from FROM inserted
+		SELECT id::text, version, note, hard_criteria, soft_criteria, weights, active_from FROM inserted
 	`
 	if requestID != "" {
 		query = `
 			WITH locked AS (
 				SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
 			), existing AS (
-				SELECT p.version, p.note, p.hard_criteria, p.soft_criteria, p.weights, p.active_from
+				SELECT p.id::text, p.version, p.note, p.hard_criteria, p.soft_criteria, p.weights, p.active_from
 				FROM assistant_preference_requests q
 				JOIN vacancy_preferences p ON p.id = q.preference_id
 				CROSS JOIN locked
@@ -302,15 +372,15 @@ func (r *PostgresRepository) SavePreferences(ctx context.Context, userID, reques
 				SELECT $1::uuid, $2, id FROM inserted
 				RETURNING preference_id
 			)
-			SELECT version, note, hard_criteria, soft_criteria, weights, active_from FROM existing
+			SELECT id, version, note, hard_criteria, soft_criteria, weights, active_from FROM existing
 			UNION ALL
-			SELECT version, note, hard_criteria, soft_criteria, weights, active_from FROM inserted
+			SELECT id::text, version, note, hard_criteria, soft_criteria, weights, active_from FROM inserted
 		`
 		err = r.db.QueryRow(ctx, query, userID, requestID, p.Note, string(hard), string(soft), string(weights)).
-			Scan(&result.Version, &result.Note, &resultHard, &resultSoft, &resultWeights, &result.ActiveFrom)
+			Scan(&result.ID, &result.Version, &result.Note, &resultHard, &resultSoft, &resultWeights, &result.ActiveFrom)
 	} else {
 		err = r.db.QueryRow(ctx, query, userID, p.Note, string(hard), string(soft), string(weights)).
-			Scan(&result.Version, &result.Note, &resultHard, &resultSoft, &resultWeights, &result.ActiveFrom)
+			Scan(&result.ID, &result.Version, &result.Note, &resultHard, &resultSoft, &resultWeights, &result.ActiveFrom)
 	}
 	if err != nil {
 		return PreferenceRecord{}, fmt.Errorf("save assistant preferences: %w", err)
@@ -551,6 +621,20 @@ func (r *PostgresRepository) Users(ctx context.Context) ([]WorkerUser, error) {
 		users = append(users, user)
 	}
 	return users, rows.Err()
+}
+
+func (r *PostgresRepository) UsersForAssistantRun(ctx context.Context, userID string) ([]WorkerUser, error) {
+	users, err := r.Users(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]WorkerUser, 0, 1)
+	for _, user := range users {
+		if user.ID == userID {
+			result = append(result, user)
+		}
+	}
+	return result, nil
 }
 
 func (r *PostgresRepository) Candidates(ctx context.Context, source string, cutoff time.Time, limit int) ([]WorkerCandidate, error) {

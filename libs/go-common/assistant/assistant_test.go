@@ -126,4 +126,40 @@ func TestWorkerIsBoundedAndIdempotent(t *testing.T) {
 	}
 }
 
+type queuedWorkerFake struct {
+	*workerFake
+	run       AssistantRun
+	completed string
+}
+
+func (f *queuedWorkerFake) ClaimAssistantRun(context.Context) (AssistantRun, bool, error) {
+	if f.run.ID == "" {
+		return AssistantRun{}, false, nil
+	}
+	run := f.run
+	f.run = AssistantRun{}
+	return run, true, nil
+}
+func (f *queuedWorkerFake) CompleteAssistantRun(_ context.Context, _, state string, _ WorkerStats, _ string) error {
+	f.completed = state
+	return nil
+}
+func (f *queuedWorkerFake) UsersForAssistantRun(context.Context, string) ([]WorkerUser, error) {
+	return f.users, nil
+}
+
+func TestWorkerClaimsAndCompletesQueuedRunWithoutAI(t *testing.T) {
+	fake := &queuedWorkerFake{
+		workerFake: &workerFake{
+			users:      []WorkerUser{{ID: "u1", Preference: PreferenceRecord{Version: 1}}},
+			candidates: []WorkerCandidate{{ID: "v1", Source: "hh", ExternalID: "1", Vacancy: Vacancy{ID: "v1"}}},
+		},
+		run: AssistantRun{ID: "run-1", UserID: "u1"},
+	}
+	stats, err := RunOnce(context.Background(), fake, WorkerOptions{BatchSize: 1})
+	if err != nil || stats.RunID != "run-1" || fake.completed != "succeeded" || stats.AICalls != 0 {
+		t.Fatalf("queued run: %+v, completed=%q, err=%v", stats, fake.completed, err)
+	}
+}
+
 func ptr(v float64) *float64 { return &v }

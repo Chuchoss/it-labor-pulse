@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,6 +31,9 @@ func (f *assistantRepositoryFake) ListPreferences(context.Context, string) ([]as
 	return []assistant.PreferenceRecord{f.preference}, nil
 }
 func (f *assistantRepositoryFake) SavePreferences(_ context.Context, _, _ string, p assistant.PreferenceRecord) (assistant.PreferenceRecord, error) {
+	if _, unsupported := p.HardCriteria["role"]; unsupported {
+		return assistant.PreferenceRecord{}, fmt.Errorf("%w: hard_criteria.role is unsupported; use approved_roles", assistant.ErrInvalidPreferences)
+	}
 	f.saves++
 	p.Version = f.saves
 	p.ActiveFrom = time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
@@ -66,7 +70,7 @@ func TestAssistantPreferencesUseStableDevSubjectAndSupportPatch(t *testing.T) {
 	}})
 
 	save := httptest.NewRequest(http.MethodPatch, "/api/v1/assistant/preferences",
-		strings.NewReader(`{"note":"synthetic profile","hard_criteria":{"role":"backend"},"soft_criteria":{},"weights":{"salary":1}}`))
+		strings.NewReader(`{"note":"synthetic profile","hard_criteria":{"approved_roles":["backend"]},"soft_criteria":{},"weights":{"salary":1}}`))
 	save.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(rec, save)
@@ -90,6 +94,19 @@ func TestAssistantPreferencesUseStableDevSubjectAndSupportPatch(t *testing.T) {
 	srv.Handler.ServeHTTP(rec, create)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, 2, repo.saves)
+}
+
+func TestAssistantRejectsUnsupportedCriteriaField(t *testing.T) {
+	srv := New(Options{Assistant: AssistantOptions{
+		Enabled: true, DevAuthEnabled: true, DevSubject: "synthetic",
+		Repository: &assistantRepositoryFake{},
+	}})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/assistant/preferences",
+		strings.NewReader(`{"note":"synthetic","hard_criteria":{"role":"backend"},"soft_criteria":{},"weights":{}}`))
+	rec := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "hard_criteria.role")
 }
 
 func TestAssistantLifecycleEndpointsAreDevGatedAndBounded(t *testing.T) {
