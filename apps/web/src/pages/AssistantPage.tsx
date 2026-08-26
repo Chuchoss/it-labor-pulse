@@ -1,4 +1,25 @@
-import { Alert, Autocomplete, Button, Card, CardContent, Chip, Divider, Stack, Switch, TextField, Typography } from '@mui/material'
+import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Alert,
+  Autocomplete,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  Divider,
+  FormControl,
+  FormControlLabel,
+  FormLabel,
+  Radio,
+  RadioGroup,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
+} from '@mui/material'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, api } from '../api/client'
@@ -27,11 +48,42 @@ function normalizeLegacyAlias(value: string) {
   return legacyRoleAliases[key]
 }
 
-function criteriaWithoutRoles(value: Record<string, unknown>) {
-  const result = { ...value }
-  delete result.role
-  delete result.approved_roles
-  return result
+function stringList(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean))]
+}
+
+function TagsField({
+  label,
+  placeholder,
+  value,
+  onChange,
+}: {
+  label: string
+  placeholder: string
+  value: string[]
+  onChange: (value: string[]) => void
+}) {
+  return (
+    <Autocomplete
+      multiple
+      freeSolo
+      options={[] as string[]}
+      value={value}
+      onChange={(_, values) => onChange(stringList(values))}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label={label}
+          placeholder={value.length === 0 ? placeholder : undefined}
+          helperText="Введите значение и нажмите Enter"
+        />
+      )}
+    />
+  )
 }
 
 function loadedRoleState(hard: Record<string, unknown>, upgraded = false) {
@@ -55,8 +107,12 @@ export function AssistantPage() {
   const telegram = useQuery({ queryKey: ['telegram-status'], queryFn: api.telegramStatus })
   const automation = useQuery({ queryKey: ['assistant-automation'], queryFn: api.assistantAutomation })
   const [note, setNote] = useState<string>()
-  const [hardCriteriaText, setHardCriteriaText] = useState<string>()
   const [approvedRoleIDs, setApprovedRoleIDs] = useState<string[]>()
+  const [regions, setRegions] = useState<string[]>()
+  const [requiredSkills, setRequiredSkills] = useState<string[]>()
+  const [excludedSkills, setExcludedSkills] = useState<string[]>()
+  const [remoteOnly, setRemoteOnly] = useState<boolean>()
+  const [minSalaryRUB, setMinSalaryRUB] = useState<string>()
   const [legacyRoleResolved, setLegacyRoleResolved] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'archive' | 'run' | 'ai' | 'telegram' | 'test' | null>(null)
@@ -66,14 +122,32 @@ export function AssistantPage() {
   const weightsValue = preferences.data?.weights ?? {}
   const loadedRoles = loadedRoleState(hardCriteriaValue, preferences.data?.legacy_role_upgraded)
   const approvedRoleIDsValue = approvedRoleIDs ?? loadedRoles.ids
+  const regionsValue = regions ?? stringList(hardCriteriaValue.regions)
+  const requiredSkillsValue = requiredSkills ?? stringList(hardCriteriaValue.required_skills)
+  const excludedSkillsValue = excludedSkills ?? stringList(hardCriteriaValue.excluded_skills)
+  const remoteOnlyValue = remoteOnly ?? hardCriteriaValue.remote_only === true
+  const savedSalary = typeof hardCriteriaValue.min_salary_rub === 'number' && Number.isFinite(hardCriteriaValue.min_salary_rub)
+    ? String(hardCriteriaValue.min_salary_rub)
+    : ''
+  const minSalaryRUBValue = minSalaryRUB ?? savedSalary
+  const parsedSalary = Number(minSalaryRUBValue)
+  const salaryError = minSalaryRUBValue.trim() !== '' && (!Number.isFinite(parsedSalary) || parsedSalary < 0)
   const legacyRoleState = legacyRoleResolved ? 'mapped' : loadedRoles.legacy
   const save = useMutation({
     mutationFn: () => {
       if (legacyRoleState === 'unknown') throw new Error('Неизвестная устаревшая роль: выберите утверждённую роль')
-      const hard = criteriaWithoutRoles(JSON.parse(hardCriteriaText || '{}') as Record<string, unknown>)
+      if (salaryError) throw new Error('Минимальная зарплата должна быть не меньше 0')
+      const hard: Record<string, unknown> = {
+        approved_roles: approvedRoleIDsValue,
+        remote_only: remoteOnlyValue,
+      }
+      if (regionsValue.length > 0) hard.regions = regionsValue
+      if (requiredSkillsValue.length > 0) hard.required_skills = requiredSkillsValue
+      if (excludedSkillsValue.length > 0) hard.excluded_skills = excludedSkillsValue
+      if (minSalaryRUBValue.trim() !== '') hard.min_salary_rub = parsedSalary
       return api.saveAssistantPreferences({
         note: noteValue,
-        hard_criteria: { ...hard, approved_roles: approvedRoleIDsValue },
+        hard_criteria: hard,
         soft_criteria: softCriteriaValue,
         weights: weightsValue,
       })
@@ -163,11 +237,7 @@ export function AssistantPage() {
       </CardContent></Card>
       <Card variant="outlined"><CardContent>
         <Stack spacing={2}>
-          <Typography variant="h6">Что для меня интересная вакансия</Typography>
-          <TextField multiline minRows={3} value={noteValue} onChange={(event) => setNote(event.target.value)}
-            placeholder="Например: Go backend, удалённо, от 180 000 ₽"
-            slotProps={{ htmlInput: { maxLength: 2000 } }} />
-          <Typography variant="subtitle2">Утверждённые роли</Typography>
+          <Typography variant="h6">Критерии вакансии</Typography>
           <Autocomplete multiple options={approvedRoleOptions} groupBy={(option) => option.group}
             getOptionLabel={(option) => option.label}
             value={approvedRoleOptions.filter((option) => approvedRoleIDsValue.includes(option.id))}
@@ -175,31 +245,99 @@ export function AssistantPage() {
               setApprovedRoleIDs(values.map((value) => value.id))
               if (legacyRoleState === 'unknown' && values.length > 0) setLegacyRoleResolved(true)
             }}
-            renderInput={(params) => <TextField {...params} label="Роли для matcher" placeholder="Выберите одну или несколько" />} />
-          {legacyRoleState === 'mapped' && <Alert severity="info">
-            Устаревший критерий роли сопоставлен с утверждённой ролью. При сохранении будет создана новая нормализованная версия.
-          </Alert>}
+            renderInput={(params) => <TextField {...params} label="Роли" placeholder="Выберите одну или несколько" />} />
           {legacyRoleState === 'unknown' && <Alert severity="warning">
-            Устаревшее значение роли неизвестно. Выберите утверждённую роль; неизвестные aliases автоматически не расширяются.
+            Не удалось распознать сохранённую роль. Выберите подходящую роль из списка.
           </Alert>}
-          <Typography variant="subtitle2">Жёсткие критерии</Typography>
-          <TextField multiline minRows={3} value={hardCriteriaText ?? JSON.stringify(criteriaWithoutRoles(hardCriteriaValue), null, 2)}
-            onChange={(event) => setHardCriteriaText(event.target.value)}
-            helperText="JSON только для regions, required_skills, excluded_skills, remote_only, min_salary_rub. Роли задаются селектором выше." />
-          <Typography variant="body2">{Object.entries(hardCriteriaValue).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(' · ') || 'Не заданы'}</Typography>
-          <Typography variant="subtitle2">Мягкие критерии и веса</Typography>
-          <Typography variant="body2">{Object.entries(softCriteriaValue).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(' · ') || 'Не заданы'} · {Object.entries(weightsValue).map(([key, value]) => `${key}: ${value}`).join(' · ') || 'Веса не заданы'}</Typography>
-          <Typography variant="body2" color="text.secondary">Детерминированный matcher использует только структурированные hard-критерии. Свободный текст сам по себе не участвует в matcher, пока AI-парсинг не включён и не подтверждён. Сохранение создаёт новую версию; старые версии остаются в истории.</Typography>
-          <Button variant="contained" disabled={!noteValue.trim() || save.isPending || legacyRoleState === 'unknown'} onClick={() => void save.mutate()}>
+          <Box sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' },
+            gap: 2,
+          }}>
+            <TagsField
+              label="Регионы"
+              placeholder="Например, Москва"
+              value={regionsValue}
+              onChange={setRegions}
+            />
+            <TextField
+              label="Минимальная зарплата, ₽"
+              type="number"
+              value={minSalaryRUBValue}
+              onChange={(event) => setMinSalaryRUB(event.target.value)}
+              placeholder="Например, 180000"
+              error={salaryError}
+              helperText={salaryError ? 'Введите число не меньше 0' : 'До вычета налогов, в рублях'}
+              slotProps={{ htmlInput: { min: 0, inputMode: 'numeric' } }}
+            />
+          </Box>
+          <FormControl>
+            <FormLabel id="work-format-label">Формат работы</FormLabel>
+            <RadioGroup
+              row
+              aria-labelledby="work-format-label"
+              value={remoteOnlyValue ? 'remote' : 'any'}
+              onChange={(event) => setRemoteOnly(event.target.value === 'remote')}
+            >
+              <FormControlLabel value="any" control={<Radio />} label="Любой" />
+              <FormControlLabel value="remote" control={<Radio />} label="Удалённо" />
+            </RadioGroup>
+          </FormControl>
+          <TagsField
+            label="Обязательные навыки"
+            placeholder="Например, React"
+            value={requiredSkillsValue}
+            onChange={setRequiredSkills}
+          />
+          <Accordion disableGutters>
+            <AccordionSummary aria-controls="additional-criteria-content" id="additional-criteria-header">
+              <Typography>Дополнительные критерии</Typography>
+            </AccordionSummary>
+            <AccordionDetails>
+              <TagsField
+                label="Исключить навыки"
+                placeholder="Например, PHP"
+                value={excludedSkillsValue}
+                onChange={setExcludedSkills}
+              />
+            </AccordionDetails>
+          </Accordion>
+          <Accordion disableGutters>
+            <AccordionSummary aria-controls="additional-wishes-content" id="additional-wishes-header">
+              <Typography>Дополнительные пожелания</Typography>
+            </AccordionSummary>
+            <AccordionDetails>
+              <TextField
+                fullWidth
+                multiline
+                minRows={3}
+                label="Пожелания к вакансии"
+                value={noteValue}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder="Например, продуктовая команда и гибкий график"
+                slotProps={{ htmlInput: { maxLength: 2000 } }}
+              />
+            </AccordionDetails>
+          </Accordion>
+          <Button variant="contained" disabled={save.isPending || salaryError || legacyRoleState === 'unknown'} onClick={() => void save.mutate()}>
             Сохранить критерии
           </Button>
           {save.isError && <Alert severity="error">Не удалось сохранить критерии: {saveError}</Alert>}
-          {confirmed && <Alert severity="success">Критерии сохранены. Версия {save.data?.version ?? preferences.data?.version}.</Alert>}
-          {preferences.data?.version && <Chip label={`Версия ${preferences.data.version}${preferences.data.active_from ? ` · ${new Date(preferences.data.active_from).toLocaleString('ru-RU')}` : ''}`} sx={{ width: 'fit-content' }} />}
-          <Stack direction="row" spacing={1}>
-            <Button color="warning" variant="outlined" disabled={!preferences.data?.id || archive.isPending} onClick={() => setConfirmAction('archive')}>Архивировать</Button>
-            <Typography variant="body2" color="text.secondary" sx={{ alignSelf: 'center' }}>Всего версий: {preferenceList.data?.length ?? 0}</Typography>
-          </Stack>
+          {confirmed && <Typography role="status" color="success.main">Сохранено</Typography>}
+          <Accordion disableGutters>
+            <AccordionSummary aria-controls="preferences-history-content" id="preferences-history-header">
+              <Typography>История настроек</Typography>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Stack spacing={2}>
+                {preferences.data?.version && <Chip label={`Версия ${preferences.data.version}${preferences.data.active_from ? ` · ${new Date(preferences.data.active_from).toLocaleString('ru-RU')}` : ''}`} sx={{ width: 'fit-content' }} />}
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                  <Button color="warning" variant="outlined" disabled={!preferences.data?.id || archive.isPending} onClick={() => setConfirmAction('archive')}>Архивировать</Button>
+                  <Typography variant="body2" color="text.secondary" sx={{ alignSelf: { sm: 'center' } }}>Всего версий: {preferenceList.data?.length ?? 0}</Typography>
+                </Stack>
+              </Stack>
+            </AccordionDetails>
+          </Accordion>
         </Stack>
       </CardContent></Card>
       <Card variant="outlined"><CardContent>
