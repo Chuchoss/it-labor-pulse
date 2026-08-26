@@ -24,12 +24,13 @@ import {
   Button,
 } from '@mui/material'
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import type { Vacancy } from '../api/types'
 import { EmptyState, ErrorState } from '../components/DataState'
 import { formatDate, formatSalaryRange } from '../utils/format'
+import { getRegionLabel } from '../utils/regions'
 
 function VacancyDetails({ vacancy }: { vacancy: Vacancy }) {
   return (
@@ -75,6 +76,31 @@ export function VacanciesPage() {
         signal,
       ),
   })
+  const rows = useMemo(() => vacancies.data?.data ?? [], [vacancies.data?.data])
+  const regionPeriod = useMemo(() => {
+    const dates = rows
+      .map((vacancy) => vacancy.published_at?.slice(0, 10))
+      .filter((date): date is string => Boolean(date && /^\d{4}-\d{2}-\d{2}$/.test(date)))
+      .sort()
+    return dates.length > 0 ? { from: dates[0], to: dates[dates.length - 1] } : undefined
+  }, [rows])
+  const regions = useQuery({
+    queryKey: ['regions', 'dictionary', regionPeriod],
+    queryFn: ({ signal }) =>
+      regionPeriod ? api.regions(regionPeriod, signal) : Promise.resolve([]),
+    enabled: Boolean(regionPeriod),
+    staleTime: 5 * 60 * 1000,
+  })
+  const regionNames = useMemo(
+    () =>
+      new Map(
+        (regions.data ?? []).flatMap((region) => {
+          const title = region.title?.trim()
+          return region.region_id && title ? [[region.region_id, title] as const] : []
+        }),
+      ),
+    [regions.data],
+  )
 
   const updateParams = (updates: Record<string, string | undefined>) => {
     const next = new URLSearchParams(searchParams)
@@ -84,8 +110,6 @@ export function VacanciesPage() {
     })
     setSearchParams(next)
   }
-
-  const rows = vacancies.data?.data ?? []
 
   return (
     <Stack spacing={3}>
@@ -214,7 +238,7 @@ export function VacanciesPage() {
                       <VacancyDetails vacancy={vacancy} />
                     </TableCell>
                     <TableCell>{vacancy.source?.toUpperCase() || '—'}</TableCell>
-                    <TableCell>{vacancy.region_id || 'Не указан'}</TableCell>
+                    <TableCell>{getRegionLabel(vacancy.region_id, regionNames)}</TableCell>
                     <TableCell>{formatDate(vacancy.published_at)}</TableCell>
                     <TableCell>
                       <Chip
@@ -237,6 +261,9 @@ export function VacanciesPage() {
               >
                 <CardContent>
                   <VacancyDetails vacancy={vacancy} />
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+                    {getRegionLabel(vacancy.region_id, regionNames)}
+                  </Typography>
                   <Stack
                     direction="row"
                     sx={{ justifyContent: 'space-between', mt: 2 }}

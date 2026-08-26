@@ -2,6 +2,8 @@ import type {
   ApiErrorBody,
   DashboardSummary,
   DemandTrends,
+  RegionPage,
+  RegionStat,
   SalaryTrends,
   TopSkills,
   VacancyPage,
@@ -73,6 +75,28 @@ export interface AnalyticsParams extends Record<string, string | undefined> {
   region_id?: string
 }
 
+const DICTIONARY_PAGE_SIZE = 100
+
+async function getAllRegions(
+  params: Pick<AnalyticsParams, 'from' | 'to'>,
+  signal?: AbortSignal,
+): Promise<RegionStat[]> {
+  const regions: RegionStat[] = []
+  let page = 1
+
+  while (true) {
+    const response = await get<RegionPage>(
+      '/regions',
+      { ...params, page, page_size: DICTIONARY_PAGE_SIZE },
+      signal,
+    )
+    regions.push(...response.data)
+
+    if (regions.length >= response.total || response.data.length === 0) return regions
+    page += 1
+  }
+}
+
 export const api = {
   dashboard: (params: AnalyticsParams, signal?: AbortSignal) =>
     get<DashboardSummary>('/dashboard/summary', params, signal),
@@ -82,6 +106,7 @@ export const api = {
     get<DemandTrends>('/trends/demand', { ...params, grain: 'week' }, signal),
   topSkills: (params: AnalyticsParams, signal?: AbortSignal) =>
     get<TopSkills>('/skills/top', { ...params, limit: 10 }, signal),
+  regions: getAllRegions,
   vacancies: (
     params: {
       q?: string

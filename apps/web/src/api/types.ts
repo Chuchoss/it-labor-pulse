@@ -75,6 +75,18 @@ export interface VacancyPage {
   total: number
 }
 
+export interface RegionStat {
+  region_id?: string
+  title?: string
+}
+
+export interface RegionPage {
+  data: RegionStat[]
+  page: number
+  page_size: number
+  total: number
+}
+
 export interface ApiErrorBody {
   error?: {
     code?: string

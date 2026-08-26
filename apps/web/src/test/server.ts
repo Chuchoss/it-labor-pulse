@@ -42,6 +42,14 @@ export const handlers = [
       data: [{ skill_id: 'go', name: 'Go', count: 10, share: 0.45 }],
     }),
   ),
+  http.get('*/api/v1/regions', () =>
+    HttpResponse.json({
+      data: [],
+      page: 1,
+      page_size: 100,
+      total: 0,
+    }),
+  ),
   http.get('*/api/v1/vacancies', ({ request }) => {
     const url = new URL(request.url)
     return HttpResponse.json({
