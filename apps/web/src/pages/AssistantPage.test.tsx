@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw'
-import { screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { AssistantPage } from './AssistantPage'
@@ -35,6 +35,8 @@ describe('AssistantPage', () => {
       min_salary_rub: 100000,
     }
     let requestBody: Record<string, unknown> | undefined
+    let requestURL = ''
+    let requestMethod = ''
     useSupportingAssistantHandlers()
     server.use(
       http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
@@ -43,6 +45,8 @@ describe('AssistantPage', () => {
         active_from: '2026-08-26T12:00:00Z',
       })),
       http.patch('*/api/v1/assistant/preferences', async ({ request }) => {
+        requestURL = request.url
+        requestMethod = request.method
         const body = await request.json() as { note: string; hard_criteria: Record<string, unknown> }
         requestBody = body
         savedNote = body.note
@@ -80,6 +84,8 @@ describe('AssistantPage', () => {
 
     expect(await screen.findByRole('status')).toHaveTextContent('Сохранено')
     if (!requestBody) throw new Error('save request was not captured')
+    expect(requestURL).toBe(new URL('/api/v1/assistant/preferences', window.location.origin).toString())
+    expect(requestMethod).toBe('PATCH')
     expect(requestBody.hard_criteria).toEqual({
       approved_roles: ['96'],
       regions: ['Москва', 'Санкт-Петербург'],
@@ -113,6 +119,56 @@ describe('AssistantPage', () => {
     expect(await screen.findByText(/Не удалось сохранить критерии/)).toBeInTheDocument()
     expect(screen.getByText(/VALIDATION_ERROR, request_id: test/)).toBeInTheDocument()
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('keeps edits after a network failure and allows one-request retry', async () => {
+    let attempts = 0
+    let savedBody: Record<string, unknown> | undefined
+    let releaseFailure = () => {}
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        id: 'preference-1', version: 1, note: '', hard_criteria: { regions: ['Москва'] },
+        soft_criteria: {}, weights: {},
+      })),
+      http.patch('*/api/v1/assistant/preferences', async ({ request }) => {
+        attempts += 1
+        if (attempts === 1) {
+          await new Promise<void>((resolve) => { releaseFailure = resolve })
+          return HttpResponse.error()
+        }
+        savedBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({
+          id: 'preference-2', version: 2, ...(savedBody as object),
+        })
+      }),
+    )
+
+    const user = userEvent.setup()
+    renderPage(<AssistantPage />)
+    await screen.findByText('Москва')
+    await user.type(screen.getByRole('combobox', { name: 'Регионы' }), 'Казань{Enter}')
+    const saveButton = screen.getByRole('button', { name: 'Сохранить критерии' })
+
+    await user.click(saveButton)
+    await waitFor(() => expect(attempts).toBe(1))
+    expect(saveButton).toBeDisabled()
+    fireEvent.click(saveButton)
+    expect(attempts).toBe(1)
+    releaseFailure()
+    expect(await screen.findByText(
+      'Не удалось сохранить критерии: API недоступен. Проверьте, запущен ли BFF.',
+    )).toBeInTheDocument()
+    expect(screen.getByText('Казань')).toBeInTheDocument()
+    expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(attempts).toBe(1)
+
+    await user.click(saveButton)
+    expect(await screen.findByRole('status')).toHaveTextContent('Сохранено')
+    expect(attempts).toBe(2)
+    if (!savedBody) throw new Error('retry request was not captured')
+    expect((savedBody.hard_criteria as Record<string, unknown>).regions).toEqual(['Москва', 'Казань'])
   })
 
   it('requires manual role selection for an unknown legacy role and validates salary', async () => {

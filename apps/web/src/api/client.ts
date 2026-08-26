@@ -84,15 +84,20 @@ async function get<T>(
 
 async function mutate<T>(path: string, method: string, body?: unknown, idempotencyKey?: string): Promise<T> {
   const url = new URL(`${API_BASE_URL}${path}`, window.location.origin)
-  const response = await fetch(url, {
-    method,
-    headers: headersFor(path, {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
-    }),
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method,
+      headers: headersFor(path, {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      }),
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+  } catch {
+    throw new ApiError('API недоступен. Проверьте, запущен ли BFF.')
+  }
   if (!response.ok) {
     const error = (await response.json().catch(() => ({}))) as ApiErrorBody
     throw new ApiError(

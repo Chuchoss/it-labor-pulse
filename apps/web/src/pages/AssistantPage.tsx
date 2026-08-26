@@ -186,7 +186,7 @@ export function AssistantPage() {
     onSuccess: () => void client.invalidateQueries({ queryKey: ['telegram-status'] }),
   })
   const testTelegram = useMutation({ mutationFn: api.testTelegram, onSuccess: () => void telegram.refetch() })
-  const saveError = save.error instanceof ApiError
+  const saveError = save.error instanceof ApiError && (save.error.code || save.error.requestId)
     ? `${save.error.message} (${save.error.code ?? 'API_ERROR'}${save.error.requestId ? `, request_id: ${save.error.requestId}` : ''})`
     : save.error?.message
 
