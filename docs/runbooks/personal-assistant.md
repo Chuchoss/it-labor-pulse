@@ -113,6 +113,15 @@ getUpdates](https://core.telegram.org/bots/api/). Webhook и long polling
 
 ## Delivery loop
 
+Continuous worker держит отдельный process advisory lock и каждые 10 секунд
+upsert-ит process heartbeat независимо от активного ручного запуска: idle,
+processing или backoff. BFF считает instance доступным 40 секунд после
+`last_seen_at` по времени PostgreSQL; stopping считается offline сразу.
+Run-level heartbeat и lease остаются отдельными. При штатной остановке worker
+best-effort записывает stopping, при аварийной — строка истекает по TTL.
+Следующий heartbeat удаляет истёкшие instance; наличие старой строки или
+освобождённого короткого run lock не означает online.
+
 `go run ./apps/assistant/cmd/worker` обрабатывает bounded delivery batch после
 matcher. Для защиты от overlap используется отдельный PostgreSQL advisory lock,
 `FOR UPDATE SKIP LOCKED`, lease и до пяти попыток. 429 уважает `Retry-After`,

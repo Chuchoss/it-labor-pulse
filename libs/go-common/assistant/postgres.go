@@ -93,6 +93,13 @@ type AnalysisStatus struct {
 	WorkerConcurrency             int        `json:"worker_concurrency"`
 	WorkerOffline                 bool       `json:"worker_offline"`
 	WorkerStalled                 bool       `json:"worker_stalled"`
+	WorkerInstanceID              string     `json:"worker_instance_id,omitempty"`
+	WorkerStartedAt               *time.Time `json:"worker_started_at,omitempty"`
+	WorkerVersion                 string     `json:"worker_version,omitempty"`
+	WorkerMode                    string     `json:"worker_mode,omitempty"`
+	WorkerState                   string     `json:"worker_state,omitempty"`
+	WorkerLastSeenAt              *time.Time `json:"worker_last_seen_at,omitempty"`
+	ServerTime                    *time.Time `json:"server_time,omitempty"`
 }
 
 type AssistantRun struct {
@@ -325,11 +332,46 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 	}
 	s.CursorObservedAt = cursorAt
 	s.MethodVersion = SpecializationRulesVersion
-	if s.State == "queued" || s.State == "running" {
-		s.WorkerOffline = s.WorkerHeartbeatAt == nil || time.Since(*s.WorkerHeartbeatAt) > 45*time.Second
-		s.WorkerStalled = s.State == "running" && time.Since(s.LastCheckedAt) > 2*time.Minute
+	if err := r.loadWorkerAvailability(ctx, &s); err != nil {
+		return AnalysisStatus{}, err
 	}
+	s.WorkerStalled = s.State == "running" && s.ServerTime != nil &&
+		s.ServerTime.Sub(s.LastCheckedAt) > 2*time.Minute
 	return s, nil
+}
+
+func (r *PostgresRepository) loadWorkerAvailability(ctx context.Context, status *AnalysisStatus) error {
+	ttl := fmt.Sprintf("%f seconds", WorkerAvailabilityTTL.Seconds())
+	var startedAt, lastSeenAt, serverTime time.Time
+	err := r.db.QueryRow(ctx, `
+		SELECT instance_id::text, started_at, version, mode, state, last_seen_at,
+			clock_timestamp(),
+			state = 'stopping' OR last_seen_at < clock_timestamp() - $1::interval
+		FROM assistant_worker_instances
+		ORDER BY
+			(state <> 'stopping' AND last_seen_at >= clock_timestamp() - $1::interval) DESC,
+			last_seen_at DESC
+		LIMIT 1
+	`, ttl).Scan(
+		&status.WorkerInstanceID, &startedAt, &status.WorkerVersion, &status.WorkerMode,
+		&status.WorkerState, &lastSeenAt, &serverTime, &status.WorkerOffline,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		status.WorkerOffline = true
+		status.WorkerState = "offline"
+		if err := r.db.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&serverTime); err != nil {
+			return fmt.Errorf("get assistant worker server time: %w", err)
+		}
+		status.ServerTime = &serverTime
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get assistant worker availability: %w", err)
+	}
+	status.WorkerStartedAt = &startedAt
+	status.WorkerLastSeenAt = &lastSeenAt
+	status.ServerTime = &serverTime
+	return nil
 }
 
 func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestID string, aiConfigured bool) (string, error) {
@@ -564,6 +606,44 @@ func (r *PostgresRepository) HeartbeatAssistantRun(
 	}
 	if tag.RowsAffected() != 1 {
 		return errors.New("assistant run lease is no longer owned")
+	}
+	return nil
+}
+
+func (r *PostgresRepository) UpsertWorkerProcessHeartbeat(
+	ctx context.Context,
+	heartbeat WorkerProcessHeartbeat,
+) error {
+	_, err := r.db.Exec(ctx, `
+		WITH pruned AS (
+			DELETE FROM assistant_worker_instances
+			WHERE instance_id <> $1::uuid
+			  AND last_seen_at < clock_timestamp() - $6::interval
+			RETURNING 1
+		)
+		INSERT INTO assistant_worker_instances
+			(instance_id, started_at, version, mode, state, last_seen_at)
+		SELECT $1::uuid, $2, $3, $4, $5, clock_timestamp()
+		FROM (SELECT count(*) FROM pruned) AS cleanup
+		ON CONFLICT (instance_id) DO UPDATE SET
+			version=EXCLUDED.version, mode=EXCLUDED.mode, state=EXCLUDED.state,
+			last_seen_at=clock_timestamp()
+	`, heartbeat.InstanceID, heartbeat.StartedAt, heartbeat.Version, heartbeat.Mode,
+		heartbeat.State, fmt.Sprintf("%f seconds", WorkerAvailabilityTTL.Seconds()))
+	if err != nil {
+		return fmt.Errorf("upsert assistant worker process heartbeat: %w", err)
+	}
+	return nil
+}
+
+func (r *PostgresRepository) StopWorkerProcess(ctx context.Context, instanceID string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE assistant_worker_instances
+		SET state='stopping', last_seen_at=clock_timestamp()
+		WHERE instance_id=$1::uuid
+	`, instanceID)
+	if err != nil {
+		return fmt.Errorf("stop assistant worker process: %w", err)
 	}
 	return nil
 }
@@ -1602,6 +1682,38 @@ func (r *PostgresRepository) TryLock(ctx context.Context) (func() error, bool, e
 		}
 		if !released {
 			return errors.New("assistant worker lock was not held")
+		}
+		return nil
+	}, true, nil
+}
+
+// TryProcessLock prevents multiple continuous assistant worker processes while
+// leaving the shorter run lock independent for one-shot and operational tools.
+func (r *PostgresRepository) TryProcessLock(ctx context.Context) (func() error, bool, error) {
+	if r.poolConn == nil {
+		return nil, false, errors.New("assistant worker process lock requires pgxpool")
+	}
+	conn, err := r.poolConn.Acquire(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("assistant worker process acquire connection: %w", err)
+	}
+	var acquired bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(549004804)`).Scan(&acquired); err != nil {
+		conn.Release()
+		return nil, false, fmt.Errorf("assistant worker process lock: %w", err)
+	}
+	if !acquired {
+		conn.Release()
+		return func() error { return nil }, false, nil
+	}
+	return func() error {
+		defer conn.Release()
+		var released bool
+		if err := conn.QueryRow(context.Background(), `SELECT pg_advisory_unlock(549004804)`).Scan(&released); err != nil {
+			return err
+		}
+		if !released {
+			return errors.New("assistant worker process lock was not held")
 		}
 		return nil
 	}, true, nil

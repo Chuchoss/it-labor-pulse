@@ -486,11 +486,16 @@ refresh, `processed/total`, deterministic `matched`, а отдельно
 prompt/response content. У исторических singleton-запусков token counters
 равны нулю, а размер пакета читается как 1/unknown.
 
-Liveness worker отделена от пакетного прогресса: `worker_heartbeat_at` обновляется
-во время provider request/backoff и продлевает lease, а `last_checked_at` — только
-после durable-пакета. API вычисляет `worker_offline` после 45 секунд без heartbeat
-и `worker_stalled` после двух минут без пакетного прогресса. `worker_phase`,
-`worker_retry_category` и `worker_retry_until` содержат только безопасный
+Process liveness отделена от lease запуска и пакетного прогресса.
+`worker_last_seen_at` обновляется каждые 10 секунд, пока continuous worker жив
+в состоянии idle, processing или backoff. BFF вычисляет `worker_offline` по
+`clock_timestamp()` PostgreSQL: stopping считается offline сразу, heartbeat
+старше 40 секунд — после TTL. Из нескольких строк выбирается свежий живой
+instance, иначе последняя истёкшая; истёкшие строки удаляются следующими
+upsert. Браузер не сравнивает часы самостоятельно. Run-level
+`worker_heartbeat_at` отдельно продлевает lease во время provider request/backoff,
+а `last_checked_at` меняется после durable-пакета. `worker_stalled` означает две
+минуты без пакетного прогресса. Оба heartbeat содержат только безопасный
 операционный статус, без prompt/response и provider body.
 категории `rate_limit`, `timeout`, `invalid_response`, auth/quota/5xx/network,
 context/content-filter и invalid-request возвращаются отдельными счётчиками.

@@ -1780,7 +1780,27 @@ components:
         worker_retry_until: { type: [string, "null"], format: date-time }
         worker_active_batches: { type: integer, minimum: 0 }
         worker_concurrency: { type: integer, minimum: 0, maximum: 4 }
-        worker_offline: { type: boolean }
+        worker_instance_id:
+          type: [string, "null"]
+          format: uuid
+          description: Идентификатор текущего процесса worker; меняется при перезапуске.
+        worker_started_at: { type: [string, "null"], format: date-time }
+        worker_version: { type: [string, "null"] }
+        worker_mode: { type: [string, "null"] }
+        worker_state:
+          type: [string, "null"]
+          enum: [idle, processing, backoff, stopping, offline, null]
+        worker_last_seen_at:
+          type: [string, "null"]
+          format: date-time
+          description: Process-level heartbeat, независимый от наличия активного run.
+        server_time:
+          type: [string, "null"]
+          format: date-time
+          description: Время PostgreSQL, использованное BFF для оценки TTL.
+        worker_offline:
+          type: boolean
+          description: Истина для stopping или process heartbeat старше 40 секунд по времени PostgreSQL.
         worker_stalled: { type: boolean }
 
     AssistantMatch:

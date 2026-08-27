@@ -220,7 +220,7 @@ describe('AssistantPage', () => {
     expect(hardCriteria.min_salary_rub).toBeUndefined()
   })
 
-  it('shows immediate feedback, submits once, polls progress and stops when finished', async () => {
+  it('shows immediate feedback, submits once and keeps availability polling after completion', async () => {
     let requests = 0
     let runAccepted = false
     let statusAfterRun = 0
@@ -238,7 +238,7 @@ describe('AssistantPage', () => {
           ai_skipped: 25, skipped: 22, pending_candidates: false,
         })
         statusAfterRun += 1
-        if (statusAfterRun === 1) return HttpResponse.json({
+        if (statusAfterRun <= 3) return HttpResponse.json({
           ai_configured: true, ai_status: 'running', state: 'running', processed: 10, total: 22,
           eligible: 10, matched: 1, ai_calls: 4, ai_succeeded: 3, ai_matches: 1, ai_failures: 1,
           ai_http_attempts: 1, ai_batches: 1, ai_retries: 0,
@@ -285,7 +285,7 @@ describe('AssistantPage', () => {
 
     const callsAtCompletion = statusAfterRun
     await new Promise((resolve) => setTimeout(resolve, 150))
-    expect(statusAfterRun).toBe(callsAtCompletion)
+    expect(statusAfterRun).toBeGreaterThan(callsAtCompletion)
   }, 10_000)
 
   it('resumes polling an active run after page refresh', async () => {
@@ -314,7 +314,34 @@ describe('AssistantPage', () => {
     expect(await screen.findByText(/12 из 12/)).toBeInTheDocument()
     const callsAtCompletion = statusCalls
     await new Promise((resolve) => setTimeout(resolve, 150))
-    expect(statusCalls).toBe(callsAtCompletion)
+    expect(statusCalls).toBeGreaterThan(callsAtCompletion)
+  })
+
+  it('shows idle online and stale offline while polling without an active run', async () => {
+    let statusCalls = 0
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        note: '', hard_criteria: {}, soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/status', () => {
+        statusCalls += 1
+        const offline = statusCalls > 1
+        return HttpResponse.json({
+          ai_configured: true, ai_status: 'not_run', state: 'never_run',
+          processed: 0, total: 0, eligible: 0, matched: 0, ai_calls: 0,
+          ai_succeeded: 0, ai_matches: 0, ai_failures: 0, ai_skipped: 0,
+          skipped: 0, pending_candidates: false, worker_offline: offline,
+          worker_stalled: false, worker_state: offline ? 'offline' : 'idle',
+          worker_last_seen_at: '2026-08-27T10:00:00Z',
+        })
+      }),
+    )
+
+    renderPage(<AssistantPage />)
+    expect(await screen.findByText('Сервис обработки: ожидает новые вакансии.')).toBeInTheDocument()
+    expect(await screen.findByText('Сервис обработки недоступен: heartbeat просрочен.')).toBeInTheDocument()
+    expect(statusCalls).toBeGreaterThan(1)
   })
 
   it('explains that saved criteria are required without sending a request', async () => {

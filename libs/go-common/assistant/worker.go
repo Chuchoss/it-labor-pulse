@@ -99,6 +99,7 @@ type WorkerOptions struct {
 	AIThreshold      float64
 	TelegramEnabled  bool
 	MaxSnapshotPages int
+	ProcessState     func(string)
 }
 
 type WorkerStats struct {
@@ -173,7 +174,9 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 		if claimed {
 			claimedRunID = run.ID
 			var stopHeartbeat func()
-			ctx, stopHeartbeat = startRunHeartbeat(ctx, store, run.ID, opts.AIProvider, opts.Log)
+			ctx, stopHeartbeat = startRunHeartbeat(
+				ctx, store, run.ID, opts.AIProvider, opts.ProcessState, opts.Log,
+			)
 			defer stopHeartbeat()
 			if scoped, ok := store.(ScopedWorkerStore); ok {
 				users, err = scoped.UsersForAssistantRun(ctx, run)
@@ -244,6 +247,8 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 			return stats, nil
 		}
 	}
+	stopProcessObserver := observeProcessActivity(opts.AIProvider, opts.ProcessState)
+	defer stopProcessObserver()
 	users, err = store.Users(ctx)
 	if err != nil {
 		return WorkerStats{}, err
@@ -275,11 +280,32 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 	return stats, nil
 }
 
+func observeProcessActivity(provider AIProvider, processState func(string)) func() {
+	if processState == nil {
+		return func() {}
+	}
+	observable, ok := provider.(ObservableAIProvider)
+	if !ok {
+		return func() {}
+	}
+	observable.SetActivityObserver(func(next ProviderActivity) {
+		if next.Phase == "backoff" {
+			processState("backoff")
+		} else {
+			processState("processing")
+		}
+	})
+	return func() {
+		observable.SetActivityObserver(nil)
+	}
+}
+
 func startRunHeartbeat(
 	ctx context.Context,
 	store WorkerStore,
 	runID string,
 	provider AIProvider,
+	processState func(string),
 	log *slog.Logger,
 ) (context.Context, func()) {
 	heartbeat, ok := store.(AssistantRunHeartbeatStore)
@@ -295,6 +321,13 @@ func startRunHeartbeat(
 			activityMu.Lock()
 			activity = next
 			activityMu.Unlock()
+			if processState != nil {
+				if next.Phase == "backoff" {
+					processState("backoff")
+				} else {
+					processState("processing")
+				}
+			}
 		})
 		deferObserver := observable
 		wg.Add(1)

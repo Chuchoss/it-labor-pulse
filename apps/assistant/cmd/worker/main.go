@@ -59,8 +59,10 @@ func main() {
 	probeExternal := flag.Bool("probe-external", false, "make exactly one synthetic provider health call")
 	providerTimeout := flag.Duration("provider-timeout", 0, "override provider timeout for this worker")
 	batchSize := flag.Int("batch-size", 0, "override durable processing batch size")
+	pollInterval := flag.Duration("poll-interval", 0, "override continuous worker poll interval")
 	maxSnapshotPages := flag.Int("max-snapshot-pages", 0, "pause a manual run after this many durable pages")
 	maxExternalHTTP := flag.Int("max-external-http", 0, "cap external HTTP calls for a controlled verification")
+	heartbeatOnly := flag.Bool("heartbeat-only", false, "publish process heartbeat without scanning work")
 	inspectRun := flag.String("inspect-run", "", "print safe runtime metadata for one assistant run")
 	recoverRun := flag.String("recover-run", "", "requeue one unfinished superseded run without resetting progress")
 	flag.Parse()
@@ -185,10 +187,6 @@ func main() {
 			os.Exit(1)
 		}
 		opts.AIProvider = provider
-		minimumPage := cfg.AIMaxBatchSize * cfg.AIConcurrency
-		if opts.BatchSize < minimumPage {
-			opts.BatchSize = min(minimumPage, 100)
-		}
 		log.Warn("assistant_worker_external_ai_enabled", "request_count", "unlimited",
 			"max_batch_size", cfg.AIMaxBatchSize, "max_concurrency", cfg.AIConcurrency)
 	}
@@ -212,7 +210,55 @@ func main() {
 			"retries", stats.Retries, "latency_ms", stats.Latency.Milliseconds())
 		return
 	}
+	var processHeartbeat *assistant.ProcessHeartbeat
+	if !*once {
+		lockStore, lockOK := store.(assistant.WorkerProcessLockStore)
+		heartbeatStore, heartbeatOK := store.(assistant.WorkerProcessHeartbeatStore)
+		if !lockOK || !heartbeatOK {
+			log.Error("assistant_worker_process_runtime_missing", "category", "persistent_store_required")
+			os.Exit(1)
+		}
+		releaseProcess, acquired, err := lockStore.TryProcessLock(ctx)
+		if err != nil {
+			log.Error("assistant_worker_process_lock_failed", "category", "database")
+			os.Exit(1)
+		}
+		if !acquired {
+			log.Error("assistant_worker_process_lock_denied", "category", "already_running")
+			os.Exit(1)
+		}
+		defer func() {
+			if err := releaseProcess(); err != nil {
+				log.Warn("assistant_worker_process_unlock_failed", "category", "database")
+			}
+		}()
+		mode := "continuous"
+		if *heartbeatOnly {
+			mode = "heartbeat-only"
+		}
+		processHeartbeat, err = assistant.StartProcessHeartbeat(ctx, heartbeatStore, assistant.ProcessHeartbeatOptions{
+			Version: envOr("APP_VERSION", "dev"),
+			Mode:    mode,
+			Log:     log,
+		})
+		if err != nil {
+			log.Error("assistant_worker_process_heartbeat_start_failed", "category", "initialization")
+			os.Exit(1)
+		}
+		defer processHeartbeat.Stop()
+		opts.ProcessState = processHeartbeat.SetState
+		log.Info("assistant_worker_process_online", "instance_id", processHeartbeat.InstanceID())
+	}
+	if *heartbeatOnly {
+		log.Info("assistant_worker_heartbeat_only_started")
+		<-ctx.Done()
+		return
+	}
 	run := func() (err error) {
+		if processHeartbeat != nil {
+			processHeartbeat.SetState("processing")
+			defer processHeartbeat.SetState("idle")
+		}
 		defer func() {
 			if recover() != nil {
 				log.Error("assistant_worker_run_panic", "category", "panic")
@@ -258,6 +304,9 @@ func main() {
 		return
 	}
 	interval := durationEnv("ASSISTANT_WORKER_INTERVAL", 30*time.Minute)
+	if *pollInterval >= time.Second {
+		interval = *pollInterval
+	}
 	log.Info("assistant_worker_started", "poll_interval_ms", interval.Milliseconds(), "batch_size", opts.BatchSize)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

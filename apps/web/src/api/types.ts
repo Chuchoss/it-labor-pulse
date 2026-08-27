@@ -269,6 +269,13 @@ export interface AssistantStatus {
   worker_concurrency?: number
   worker_offline: boolean
   worker_stalled: boolean
+  worker_instance_id?: string
+  worker_started_at?: string
+  worker_version?: string
+  worker_mode?: string
+  worker_state?: 'idle' | 'processing' | 'backoff' | 'stopping' | 'offline'
+  worker_last_seen_at?: string
+  server_time?: string
 }
 
 export interface AssistantMatch {

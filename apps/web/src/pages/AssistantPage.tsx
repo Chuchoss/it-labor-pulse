@@ -67,6 +67,14 @@ const aiSkipReasonText: Record<string, string> = {
   unknown: 'AI-анализ не выполнялся; причина недоступна для старого запуска.',
 }
 
+const workerStateText: Record<string, string> = {
+  idle: 'ожидает новые вакансии',
+  processing: 'обрабатывает вакансии',
+  backoff: 'повторит после временной ошибки',
+  stopping: 'останавливается',
+  offline: 'недоступен',
+}
+
 function normalizeLegacyAlias(value: string) {
   const key = value.trim().toLowerCase().replaceAll('_', ' ').replaceAll('-', ' ').replace(/\s+/g, ' ')
   return legacyRoleAliases[key]
@@ -133,13 +141,7 @@ export function AssistantPage() {
   const status = useQuery({
     queryKey: ['assistant-status'],
     queryFn: api.assistantStatus,
-    refetchInterval: (query) => {
-      const current = query.state.data
-      return current?.state === 'queued' || current?.state === 'running'
-        || current?.ai_status === 'pending' || current?.ai_status === 'running'
-        ? (import.meta.env.MODE === 'test' ? 50 : 2000)
-        : false
-    },
+    refetchInterval: import.meta.env.MODE === 'test' ? 50 : 10_000,
   })
   const analysisPreview = useQuery({ queryKey: ['assistant-analysis-preview'], queryFn: api.assistantAnalysisPreview })
   const matches = useQuery({ queryKey: ['assistant-matches'], queryFn: api.assistantMatches })
@@ -382,7 +384,7 @@ export function AssistantPage() {
           </Stack>}
           {status.data?.state === 'running' && <Typography>Анализируем все текущие вакансии…</Typography>}
           {status.data?.worker_offline && (
-            <Alert severity="error">Worker не отправляет heartbeat и считается недоступным.</Alert>
+            <Alert severity="error">Сервис обработки недоступен: heartbeat просрочен.</Alert>
           )}
           {!status.data?.worker_offline && status.data?.worker_stalled && (
             <Alert severity="warning">Worker доступен, но прогресс пакетов задерживается.</Alert>
@@ -395,6 +397,11 @@ export function AssistantPage() {
                 : ' с безопасной задержкой'}.
             </Alert>
           )}
+          <Typography variant="body2" color="text.secondary">
+            Сервис обработки: {status.data?.worker_offline
+              ? workerStateText.offline
+              : workerStateText[status.data?.worker_state ?? 'idle'] ?? 'состояние неизвестно'}.
+          </Typography>
           <Typography>
             Проверено по критериям: {metric(status.data?.processed)} из {metric(status.data?.total)}
             {' · '}Предварительно подходят: {metric(status.data?.matched)}
@@ -449,8 +456,8 @@ export function AssistantPage() {
           {status.data?.last_checked_at && <Typography variant="caption" color="text.secondary">
             Обновлено: {new Date(status.data.last_checked_at).toLocaleTimeString('ru-RU')}
           </Typography>}
-          {status.data?.worker_heartbeat_at && <Typography variant="caption" color="text.secondary">
-            Heartbeat worker: {new Date(status.data.worker_heartbeat_at).toLocaleTimeString('ru-RU')}
+          {status.data?.worker_last_seen_at && <Typography variant="caption" color="text.secondary">
+            Последний heartbeat: {new Date(status.data.worker_last_seen_at).toLocaleTimeString('ru-RU')}
           </Typography>}
           <Button type="button" variant="contained" disabled={run.isPending || preferences.isLoading} onClick={startRun}>
             {run.isPending
