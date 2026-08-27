@@ -258,6 +258,7 @@ describe('AssistantPage', () => {
     expect(screen.getByText(/AI-анализ: не выполнялся · Совпадения: — · Ошибки: 0 · Пропущено AI: 25/)).toBeInTheDocument()
     const runButton = screen.getByRole('button', { name: 'Проверить текущие вакансии' })
     await user.click(runButton)
+    expect(screen.queryByRole('dialog', { name: 'Подтверждение действия' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Подготавливаем список вакансий…' })).toBeDisabled()
     expect(screen.getByText('Подготавливаем список вакансий…', { selector: 'p' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Подготавливаем список вакансий…' }))
@@ -302,6 +303,83 @@ describe('AssistantPage', () => {
     const callsAtCompletion = statusCalls
     await new Promise((resolve) => setTimeout(resolve, 150))
     expect(statusCalls).toBe(callsAtCompletion)
+  })
+
+  it('explains that saved criteria are required without sending a request', async () => {
+    let requests = 0
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        note: '', hard_criteria: {}, soft_criteria: {}, weights: {},
+      })),
+      http.post('*/api/v1/assistant/analyze', () => {
+        requests += 1
+        return HttpResponse.json({ run_id: 'unexpected', status: 'queued' }, { status: 202 })
+      }),
+    )
+
+    const user = userEvent.setup()
+    renderPage(<AssistantPage />)
+    await screen.findByText('Критерии вакансии')
+    await user.click(screen.getByRole('button', { name: 'Проверить текущие вакансии' }))
+
+    expect(screen.getByText('Сначала сохраните критерии вакансии, затем запустите анализ.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'К критериям' })).toBeInTheDocument()
+    expect(requests).toBe(0)
+  })
+
+  it('shows an active run after refresh and never submits a duplicate', async () => {
+    let requests = 0
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        id: 'preference-1', version: 1, note: '', hard_criteria: {},
+        soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        ai_configured: true, ai_status: 'running', state: 'running', processed: 3, total: 12,
+        eligible: 3, matched: 1, ai_calls: 2, ai_succeeded: 2, ai_matches: 1, ai_failures: 0,
+        ai_skipped: 0, skipped: 2, pending_candidates: false,
+      })),
+      http.post('*/api/v1/assistant/analyze', () => {
+        requests += 1
+        return HttpResponse.json({ run_id: 'unexpected', status: 'queued' }, { status: 202 })
+      }),
+    )
+
+    const user = userEvent.setup()
+    renderPage(<AssistantPage />)
+    expect(await screen.findByText('Активная проверка восстановлена. Прогресс обновляется автоматически.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Показать текущий анализ' }))
+
+    expect(requests).toBe(0)
+    expect(screen.getByText(/3 из 12/)).toBeInTheDocument()
+  })
+
+  it('shows an API rejection next to the run button', async () => {
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        id: 'preference-1', version: 1, note: '', hard_criteria: {},
+        soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        ai_configured: true, ai_status: 'completed', state: 'succeeded', processed: 12, total: 12,
+        eligible: 12, matched: 1, ai_calls: 0, ai_succeeded: 0, ai_matches: 0, ai_failures: 0,
+        ai_skipped: 12, skipped: 11, pending_candidates: false,
+      })),
+      http.post('*/api/v1/assistant/analyze', () => HttpResponse.json(
+        { error: { code: 'CONFLICT', message: 'Анализ уже выполняется', request_id: 'safe-request' } },
+        { status: 409 },
+      )),
+    )
+
+    const user = userEvent.setup()
+    renderPage(<AssistantPage />)
+    await screen.findByText(/12 из 12/)
+    await user.click(screen.getByRole('button', { name: 'Проверить текущие вакансии' }))
+
+    expect(await screen.findByText('Не удалось запустить анализ: Анализ уже выполняется')).toBeInTheDocument()
   })
 
   it('labels a historical deterministic-only run without false AI matches', async () => {

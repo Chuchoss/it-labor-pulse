@@ -140,7 +140,10 @@ export function AssistantPage() {
   const [confirmed, setConfirmed] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'archive' | 'ai' | 'telegram' | 'test' | null>(null)
   const [submittedRunID, setSubmittedRunID] = useState<string>()
+  const [runPrerequisiteMissing, setRunPrerequisiteMissing] = useState(false)
   const runSubmissionRef = useRef(false)
+  const statusSectionRef = useRef<HTMLDivElement>(null)
+  const criteriaSectionRef = useRef<HTMLDivElement>(null)
   const noteValue = note ?? preferences.data?.note ?? ''
   const hardCriteriaValue = preferences.data?.hard_criteria ?? {}
   const softCriteriaValue = preferences.data?.soft_criteria ?? {}
@@ -179,6 +182,7 @@ export function AssistantPage() {
     },
     onSuccess: async () => {
       setConfirmed(true)
+      setRunPrerequisiteMissing(false)
       setLegacyRoleResolved(false)
       await client.refetchQueries({ queryKey: ['assistant-preferences'] })
       await client.refetchQueries({ queryKey: ['assistant-preference-list'] })
@@ -221,18 +225,40 @@ export function AssistantPage() {
     },
     onSuccess: (result) => {
       setSubmittedRunID(result.run_id)
+      setRunPrerequisiteMissing(false)
+      client.setQueryData<import('../api/types').AssistantStatus>(['assistant-status'], (current) => (
+        current ? { ...current, run_id: result.run_id } : current
+      ))
       void status.refetch()
       void client.invalidateQueries({ queryKey: ['assistant-matches'] })
     },
-    onError: () => {
-      void status.refetch()
+    onError: (error) => {
+      void status.refetch().then(() => {
+        if (error instanceof ApiError && error.status === 409) focusSection(statusSectionRef.current)
+      })
     },
     onSettled: () => {
       runSubmissionRef.current = false
     },
   })
+  const focusSection = (section: HTMLDivElement | null) => {
+    if (typeof section?.scrollIntoView === 'function') {
+      section.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+    section?.focus({ preventScroll: true })
+  }
   const startRun = () => {
-    if (runSubmissionRef.current || run.isPending || status.data?.state === 'queued' || status.data?.state === 'running') return
+    if (status.data?.state === 'queued' || status.data?.state === 'running') {
+      focusSection(statusSectionRef.current)
+      return
+    }
+    if (!preferences.data?.id) {
+      setRunPrerequisiteMissing(true)
+      focusSection(criteriaSectionRef.current)
+      return
+    }
+    if (runSubmissionRef.current || run.isPending) return
+    setRunPrerequisiteMissing(false)
     runSubmissionRef.current = true
     run.mutate()
   }
@@ -248,6 +274,7 @@ export function AssistantPage() {
   const saveError = save.error instanceof ApiError && (save.error.code || save.error.requestId)
     ? `${save.error.message} (${save.error.code ?? 'API_ERROR'}${save.error.requestId ? `, request_id: ${save.error.requestId}` : ''})`
     : save.error?.message
+  const activeRunID = submittedRunID ?? status.data?.run_id
 
   return (
     <Stack spacing={3}>
@@ -279,7 +306,7 @@ export function AssistantPage() {
         </Stack>
       </CardContent></Card>
       <Card variant="outlined"><CardContent>
-        <Stack spacing={2} aria-live="polite" aria-busy={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'}>
+        <Stack ref={statusSectionRef} tabIndex={-1} spacing={2} aria-live="polite" aria-busy={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'}>
           <Typography variant="h6">Статус анализа</Typography>
           <Stack direction="row" spacing={1}>
             <Chip label={status.data?.state ?? 'загрузка'} color={status.data?.state === 'succeeded' ? 'success' : status.data?.state === 'failed' ? 'error' : 'default'} />
@@ -309,11 +336,18 @@ export function AssistantPage() {
           {status.data?.last_checked_at && <Typography variant="caption" color="text.secondary">
             Обновлено: {new Date(status.data.last_checked_at).toLocaleTimeString('ru-RU')}
           </Typography>}
-          <Button variant="contained" disabled={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'} onClick={startRun}>
-            {run.isPending ? 'Подготавливаем список вакансий…' : 'Проверить текущие вакансии'}
+          <Button type="button" variant="contained" disabled={run.isPending || preferences.isLoading} onClick={startRun}>
+            {run.isPending
+              ? 'Подготавливаем список вакансий…'
+              : status.data?.state === 'queued' || status.data?.state === 'running'
+                ? 'Показать текущий анализ'
+                : 'Проверить текущие вакансии'}
           </Button>
-          {submittedRunID && (status.data?.state === 'queued' || status.data?.state === 'running') && (
-            <Alert severity="info">Проверка запущена. Прогресс обновляется автоматически.</Alert>
+          {(status.data?.state === 'queued' || status.data?.state === 'running') && (
+            <Alert severity="info">
+              {submittedRunID ? 'Проверка запущена.' : 'Активная проверка восстановлена.'} Прогресс обновляется автоматически.
+              {activeRunID && <> ID запуска: {activeRunID}.</>}
+            </Alert>
           )}
           {submittedRunID && status.data?.state === 'succeeded' && (
             <Alert severity={status.data.ai_status === 'partial' || status.data.ai_status === 'failed' ? 'warning' : 'success'}>
@@ -322,11 +356,18 @@ export function AssistantPage() {
                 : 'Проверка вакансий завершена.'}
             </Alert>
           )}
+          {runPrerequisiteMissing && <Alert severity="warning" action={
+            <Button type="button" color="inherit" size="small" onClick={() => focusSection(criteriaSectionRef.current)}>
+              К критериям
+            </Button>
+          }>
+            Сначала сохраните критерии вакансии, затем запустите анализ.
+          </Alert>}
           {run.isError && <Alert severity="error">Не удалось запустить анализ: {run.error.message}</Alert>}
         </Stack>
       </CardContent></Card>
       <Card variant="outlined"><CardContent>
-        <Stack spacing={2}>
+        <Stack ref={criteriaSectionRef} tabIndex={-1} spacing={2}>
           <Typography variant="h6">Критерии вакансии</Typography>
           <Autocomplete multiple options={approvedRoleOptions} groupBy={(option) => option.group}
             getOptionLabel={(option) => option.label}

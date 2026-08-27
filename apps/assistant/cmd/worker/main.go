@@ -170,7 +170,7 @@ func intEnv(key string, fallback int) int {
 }
 func durationEnv(key string, fallback time.Duration) time.Duration {
 	value, err := time.ParseDuration(os.Getenv(key))
-	if err != nil || value < time.Minute {
+	if err != nil || value < time.Second {
 		return fallback
 	}
 	return value

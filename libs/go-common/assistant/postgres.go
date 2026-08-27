@@ -34,6 +34,7 @@ type PreferenceRecord struct {
 }
 
 type AnalysisStatus struct {
+	RunID             string     `json:"run_id,omitempty"`
 	AIConfigured      bool       `json:"ai_configured"`
 	AIStatus          string     `json:"ai_status"`
 	AISkipReason      *string    `json:"ai_skip_reason,omitempty"`
@@ -228,13 +229,13 @@ func (r *PostgresRepository) ArchivePreference(ctx context.Context, userID, pref
 func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, aiConfigured bool) (AnalysisStatus, error) {
 	var s AnalysisStatus
 	var cursorAt *time.Time
-	err := r.db.QueryRow(ctx, `SELECT state, started_at, finished_at, last_checked_at,
+	err := r.db.QueryRow(ctx, `SELECT id::text, state, started_at, finished_at, last_checked_at,
 		processed, snapshot_total, eligible, matched, ai_calls, ai_eligible, ai_succeeded,
 		ai_matches, ai_failures, ai_skipped, ai_status, ai_skip_reason,
 		skipped, error_category, request_id,
 		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version
 		FROM assistant_runs WHERE user_id = $1::uuid ORDER BY created_at DESC LIMIT 1`, userID).Scan(
-		&s.State, &s.StartedAt, &s.FinishedAt, &s.LastCheckedAt, &s.Processed, &s.Total, &s.Eligible,
+		&s.RunID, &s.State, &s.StartedAt, &s.FinishedAt, &s.LastCheckedAt, &s.Processed, &s.Total, &s.Eligible,
 		&s.Matched, &s.AICalls, &s.AIEligible, &s.AISucceeded,
 		&s.AIMatches, &s.AIFailures, &s.AISkipped, &s.AIStatus, &s.AISkipReason,
 		&s.Skipped, &s.ErrorCategory, &s.RequestID, &s.CursorSource,

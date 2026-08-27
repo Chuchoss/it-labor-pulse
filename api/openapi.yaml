@@ -1665,6 +1665,7 @@ components:
       type: object
       required: [ai_configured, ai_status, state, processed, total, eligible, matched, ai_eligible, ai_calls, ai_succeeded, ai_matches, ai_failures, ai_skipped, skipped, pending_candidates]
       properties:
+        run_id: { type: string, format: uuid }
         ai_configured: { type: boolean }
         ai_status:
           type: string

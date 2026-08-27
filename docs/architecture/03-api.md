@@ -466,7 +466,8 @@ aliases из [runbook assistant](../runbooks/personal-assistant.md): извес�
 outbox. Один активный run на пользователя; повтор того же `Idempotency-Key`
 возвращает исходный `run_id`.
 
-`GET /status` возвращает `processed/total`, deterministic `matched`, а отдельно
+`GET /status` возвращает `run_id`, чтобы UI восстанавливал активный запуск после
+refresh, `processed/total`, deterministic `matched`, а отдельно
 `ai_status`, `ai_skip_reason`, `ai_eligible`, `ai_calls`, `ai_succeeded`,
 `ai_matches`, `ai_failures` и `ai_skipped`. Нулевые `ai_calls` означают
 «не выполнялся», а не нулевой результат AI; причина фиксируется при создании

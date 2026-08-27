@@ -210,6 +210,7 @@ export interface AssistantPreferences {
 }
 
 export interface AssistantStatus {
+  run_id?: string
   ai_configured: boolean
   ai_status: 'not_run' | 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'skipped'
   ai_skip_reason?: 'server_disabled' | 'user_opt_out' | 'run_predates_ai' | 'no_eligible'
