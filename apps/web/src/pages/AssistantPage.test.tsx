@@ -15,7 +15,7 @@ function useSupportingAssistantHandlers() {
       skipped: 0, pending_candidates: false,
     })),
     http.get('*/api/v1/assistant/automation', () => HttpResponse.json({
-      ai_enabled: false, telegram_enabled: false, max_ai_calls_per_hour: 20,
+      ai_enabled: false, telegram_enabled: false,
     })),
     http.get('*/api/v1/assistant/matches', () => HttpResponse.json([])),
     http.get('*/api/v1/assistant/telegram', () => HttpResponse.json({
@@ -234,9 +234,11 @@ describe('AssistantPage', () => {
     renderPage(<AssistantPage />)
     expect(await screen.findByText(/25 из 151/)).toBeInTheDocument()
     expect(screen.getByText(/Новые вакансии будут автоматически анализироваться AI по полному описанию/)).toBeInTheDocument()
+    expect(screen.getByText(/каждая подходящая вакансия может создать платный AI-запрос/i)).toBeInTheDocument()
+    expect(screen.queryByText(/20.*запрос|лимит 20/i)).not.toBeInTheDocument()
     expect(screen.getByText(/AI-анализ: не выполнялся · Совпадения: — · Ошибки: 0 · Пропущено AI: 25/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Проверить текущие вакансии' }))
-    expect(screen.getByText(/AI не запустится: внешний провайдер выключен на сервере/)).toBeInTheDocument()
+    expect(screen.getByText(/снимка из 22 активных вакансий.*AI не запустится/i)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Подтвердить' }))
 
     await waitFor(() => expect(started).toBe(true))

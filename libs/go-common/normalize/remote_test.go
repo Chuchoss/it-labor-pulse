@@ -17,14 +17,13 @@ func TestDetectRemote(t *testing.T) {
 		region   string
 		title    string
 		desc     string
-		want     bool
+		want     *bool
 	}{
-		{name: "work_format_remote", formats: []string{"REMOTE"}, want: true},
-		{name: "schedule_remote", schedule: "remote", want: true},
-		{name: "region_remote", region: "Удалённо", want: true},
-		{name: "keyword_only_title", title: "Remote Go Developer", want: false},
-		{name: "keyword_title_and_desc", title: "Remote engineer", desc: "работа удалённо", want: true},
-		{name: "office", schedule: "fullDay", formats: []string{"ON_SITE"}, region: "Москва", title: "Go", want: false},
+		{name: "work_format_remote", formats: []string{"REMOTE"}, want: boolPtr(true)},
+		{name: "schedule_remote", schedule: "remote", want: boolPtr(true)},
+		{name: "text_is_not_authoritative", region: "Удалённо", title: "Remote", desc: "удалённо", want: nil},
+		{name: "office", schedule: "fullDay", formats: []string{"ON_SITE"}, region: "Москва", title: "Go", want: boolPtr(false)},
+		{name: "unknown", want: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -33,4 +32,8 @@ func TestDetectRemote(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }

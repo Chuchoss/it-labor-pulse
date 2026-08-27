@@ -268,5 +268,4 @@ export interface AssistantAutomationSettings {
   ai_enabled: boolean
   telegram_enabled: boolean
   activation_at?: string
-  max_ai_calls_per_hour: number
 }

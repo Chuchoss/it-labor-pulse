@@ -46,7 +46,6 @@ func main() {
 		BatchSize:       intEnv("ASSISTANT_BATCH_SIZE", 25),
 		Log:             log,
 		Cutoff:          time.Now().UTC().Add(-24 * time.Hour),
-		AIBudget:        intEnv("ASSISTANT_MAX_AI_CALLS_PER_RUN", 20),
 		TelegramEnabled: envBool("ASSISTANT_TELEGRAM_ENABLED", false) && *allowTelegram,
 	}
 	var store assistant.WorkerStore = localStore{}
@@ -88,7 +87,7 @@ func main() {
 			os.Exit(1)
 		}
 		opts.AIProvider = provider
-		log.Warn("assistant_worker_external_ai_enabled", "max_calls_per_run", opts.AIBudget)
+		log.Warn("assistant_worker_external_ai_enabled", "request_count", "unlimited")
 	}
 	run := func() error {
 		runCtx, cancel := context.WithTimeout(ctx, durationEnv("ASSISTANT_RUN_TIMEOUT", 10*time.Minute))

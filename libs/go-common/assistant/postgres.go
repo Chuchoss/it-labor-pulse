@@ -119,10 +119,9 @@ type TelegramStatus struct {
 }
 
 type AutomationSettings struct {
-	AIEnabled         bool       `json:"ai_enabled"`
-	TelegramEnabled   bool       `json:"telegram_enabled"`
-	ActivationAt      *time.Time `json:"activation_at,omitempty"`
-	MaxAICallsPerHour int        `json:"max_ai_calls_per_hour"`
+	AIEnabled       bool       `json:"ai_enabled"`
+	TelegramEnabled bool       `json:"telegram_enabled"`
+	ActivationAt    *time.Time `json:"activation_at,omitempty"`
 }
 
 // PostgresRepository persists preferences and reads assistant results without
@@ -303,6 +302,20 @@ func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestI
 		return "", fmt.Errorf("queue assistant analysis: %w", err)
 	}
 	return id, nil
+}
+
+func (r *PostgresRepository) AnalysisSnapshotTotal(ctx context.Context) (int, error) {
+	var total int
+	err := r.db.QueryRow(ctx, `
+		SELECT count(v.id)::integer
+		FROM vacancies v
+		JOIN sources s ON s.code = v.source AND s.is_active
+		WHERE v.is_active AND v.deleted_at IS NULL
+	`).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("count assistant snapshot: %w", err)
+	}
+	return total, nil
 }
 
 func (r *PostgresRepository) ClaimAssistantRun(ctx context.Context) (AssistantRun, bool, error) {
@@ -631,11 +644,11 @@ func (r *PostgresRepository) SetTelegramOptIn(ctx context.Context, userID string
 func (r *PostgresRepository) AutomationSettings(ctx context.Context, userID string) (AutomationSettings, error) {
 	var settings AutomationSettings
 	err := r.db.QueryRow(ctx, `
-		SELECT ai_enabled, telegram_enabled, activation_at, max_ai_calls_per_hour
+		SELECT ai_enabled, telegram_enabled, activation_at
 		FROM assistant_automation_settings WHERE user_id = $1::uuid
-	`, userID).Scan(&settings.AIEnabled, &settings.TelegramEnabled, &settings.ActivationAt, &settings.MaxAICallsPerHour)
+	`, userID).Scan(&settings.AIEnabled, &settings.TelegramEnabled, &settings.ActivationAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return AutomationSettings{MaxAICallsPerHour: 20}, nil
+		return AutomationSettings{}, nil
 	}
 	if err != nil {
 		return AutomationSettings{}, fmt.Errorf("get assistant automation settings: %w", err)
@@ -644,9 +657,6 @@ func (r *PostgresRepository) AutomationSettings(ctx context.Context, userID stri
 }
 
 func (r *PostgresRepository) SaveAutomationSettings(ctx context.Context, userID string, settings AutomationSettings) (AutomationSettings, error) {
-	if settings.MaxAICallsPerHour < 1 || settings.MaxAICallsPerHour > 100 {
-		settings.MaxAICallsPerHour = 20
-	}
 	if settings.AIEnabled && settings.ActivationAt == nil {
 		now := time.Now().UTC()
 		settings.ActivationAt = &now
@@ -654,7 +664,7 @@ func (r *PostgresRepository) SaveAutomationSettings(ctx context.Context, userID 
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO assistant_automation_settings
 			(user_id, ai_enabled, telegram_enabled, activation_at, max_ai_calls_per_hour)
-		VALUES ($1::uuid, $2, $3, $4, $5)
+		VALUES ($1::uuid, $2, $3, $4, 0)
 		ON CONFLICT (user_id) DO UPDATE SET
 			ai_enabled = EXCLUDED.ai_enabled,
 			telegram_enabled = EXCLUDED.telegram_enabled,
@@ -664,9 +674,9 @@ func (r *PostgresRepository) SaveAutomationSettings(ctx context.Context, userID 
 				WHEN NOT EXCLUDED.ai_enabled THEN NULL
 				ELSE assistant_automation_settings.activation_at
 			END,
-			max_ai_calls_per_hour = EXCLUDED.max_ai_calls_per_hour,
+			max_ai_calls_per_hour = 0,
 			updated_at = now()
-	`, userID, settings.AIEnabled, settings.TelegramEnabled, settings.ActivationAt, settings.MaxAICallsPerHour)
+	`, userID, settings.AIEnabled, settings.TelegramEnabled, settings.ActivationAt)
 	if err != nil {
 		return AutomationSettings{}, fmt.Errorf("save assistant automation settings: %w", err)
 	}
@@ -756,13 +766,20 @@ func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run Assista
 	}
 	rows, err := r.db.Query(ctx, `
 		SELECT v.id::text, v.source, v.external_id, v.title, v.source_url,
-			v.salary_mid, COALESCE(ra.pattern, v.role_id::text), v.region_id::text,
+			v.salary_mid, COALESCE(ra.pattern, v.role_id::text),
+			COALESCE(array_agg(DISTINCT scope_alias.pattern)
+				FILTER (WHERE scope_alias.pattern IS NOT NULL), '{}'),
+			v.region_id::text, v.is_remote,
 			v.published_at, v.collected_at, v.created_at, COALESCE(v.description_text, ''),
 			v.description_truncated, v.analysis_revision,
-			COALESCE(array_agg(sk.slug) FILTER (WHERE sk.slug IS NOT NULL), '{}')
+			COALESCE(array_agg(DISTINCT sk.slug) FILTER (WHERE sk.slug IS NOT NULL), '{}')
 		FROM vacancies v
 		JOIN sources src ON src.code = v.source AND src.is_active
 		LEFT JOIN role_aliases ra ON ra.role_id = v.role_id AND ra.source = v.source
+		LEFT JOIN vacancy_role_scopes vrs ON vrs.vacancy_id = v.id
+			AND vrs.scope = 'vacancy_listing'
+		LEFT JOIN role_aliases scope_alias ON scope_alias.role_id = vrs.role_id
+			AND scope_alias.source = v.source
 		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
 		LEFT JOIN skills sk ON sk.id = vs.skill_id
 		WHERE v.is_active AND v.deleted_at IS NULL AND v.created_at <= $1
@@ -781,17 +798,21 @@ func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run Assista
 		var c WorkerCandidate
 		var salary *float64
 		var sourceURL, roleID, regionID *string
+		var isRemote *bool
 		var published *time.Time
-		var skills []string
+		var roleIDs, skills []string
 		if err := rows.Scan(&c.ID, &c.Source, &c.ExternalID, &c.Title, &sourceURL,
-			&salary, &roleID, &regionID, &published, &c.ObservedAt, &c.CreatedAt,
+			&salary, &roleID, &roleIDs, &regionID, &isRemote, &published, &c.ObservedAt, &c.CreatedAt,
 			&c.Description, &c.DescriptionTruncated, &c.Revision, &skills); err != nil {
 			return nil, fmt.Errorf("scan assistant snapshot candidate: %w", err)
 		}
 		if sourceURL != nil {
 			c.SourceURL = *sourceURL
 		}
-		c.Vacancy = Vacancy{ID: c.ID, Title: c.Title, SalaryRUB: salary, PublishedAt: published, Skills: skills}
+		c.Vacancy = Vacancy{
+			ID: c.ID, Title: c.Title, RoleIDs: roleIDs, SalaryRUB: salary,
+			IsRemote: isRemote, PublishedAt: published, Skills: skills,
+		}
 		if roleID != nil {
 			c.Vacancy.RoleID = *roleID
 		}
@@ -866,13 +887,20 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, _ ti
 			RETURNING source, external_id, vacancy_revision
 		)
 		SELECT v.id::text, v.source, v.external_id, v.title, v.source_url,
-			v.salary_mid, COALESCE(ra.pattern, v.role_id::text), v.region_id::text, v.published_at,
+			v.salary_mid, COALESCE(ra.pattern, v.role_id::text),
+			COALESCE(array_agg(DISTINCT scope_alias.pattern)
+				FILTER (WHERE scope_alias.pattern IS NOT NULL), '{}'),
+			v.region_id::text, v.is_remote, v.published_at,
 			v.collected_at, COALESCE(v.description_text, ''), v.description_truncated,
-			v.analysis_revision, COALESCE(array_agg(s.slug) FILTER (WHERE s.slug IS NOT NULL), '{}')
+			v.analysis_revision, COALESCE(array_agg(DISTINCT s.slug) FILTER (WHERE s.slug IS NOT NULL), '{}')
 		FROM vacancies v
 		JOIN claimed w ON w.source = v.source AND w.external_id = v.external_id
 			AND w.vacancy_revision = v.analysis_revision
 		LEFT JOIN role_aliases ra ON ra.role_id = v.role_id AND ra.source = 'hh'
+		LEFT JOIN vacancy_role_scopes vrs ON vrs.vacancy_id = v.id
+			AND vrs.scope = 'vacancy_listing'
+		LEFT JOIN role_aliases scope_alias ON scope_alias.role_id = vrs.role_id
+			AND scope_alias.source = v.source
 		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
 		LEFT JOIN skills s ON s.id = vs.skill_id
 		WHERE v.source = $1 AND v.is_active AND v.deleted_at IS NULL
@@ -890,17 +918,21 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, _ ti
 		var salary *float64
 		var sourceURL *string
 		var roleID, regionID *string
+		var isRemote *bool
 		var published *time.Time
-		var skills []string
+		var roleIDs, skills []string
 		if err := rows.Scan(&c.ID, &c.Source, &c.ExternalID, &c.Title, &sourceURL,
-			&salary, &roleID, &regionID, &published, &c.ObservedAt, &c.Description,
+			&salary, &roleID, &roleIDs, &regionID, &isRemote, &published, &c.ObservedAt, &c.Description,
 			&c.DescriptionTruncated, &c.Revision, &skills); err != nil {
 			return nil, fmt.Errorf("scan assistant candidate: %w", err)
 		}
 		if sourceURL != nil {
 			c.SourceURL = *sourceURL
 		}
-		c.Vacancy = Vacancy{ID: c.ID, Title: c.Title, SalaryRUB: salary, PublishedAt: published, Skills: skills}
+		c.Vacancy = Vacancy{
+			ID: c.ID, Title: c.Title, RoleIDs: roleIDs, SalaryRUB: salary,
+			IsRemote: isRemote, PublishedAt: published, Skills: skills,
+		}
 		if roleID != nil {
 			c.Vacancy.RoleID = *roleID
 		}
@@ -1035,15 +1067,6 @@ func (r *PostgresRepository) AIResultExists(
 		)
 	`, userID, preferenceVersion, vacancyID, max(vacancyRevision, 1)).Scan(&exists)
 	return exists, err
-}
-
-func (r *PostgresRepository) RecentAICalls(ctx context.Context, userID string, since time.Time) (int, error) {
-	var count int
-	err := r.db.QueryRow(ctx, `
-		SELECT COALESCE(sum(attempts), 0)::integer FROM assistant_ai_jobs
-		WHERE user_id = $1::uuid AND created_at >= $2 AND attempts > 0
-	`, userID, since).Scan(&count)
-	return count, err
 }
 
 func (r *PostgresRepository) SaveAIFailure(ctx context.Context, match WorkerMatch, errorCode string) error {

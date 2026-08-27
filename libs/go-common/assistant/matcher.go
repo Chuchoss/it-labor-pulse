@@ -27,6 +27,7 @@ type Weights struct {
 
 type Vacancy struct {
 	ID, Title, RoleID, RegionID string
+	RoleIDs                     []string
 	SalaryRUB                   *float64
 	Skills                      []string
 	IsRemote                    *bool
@@ -79,9 +80,9 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 		return r
 	}
 	if len(p.ApprovedRoles) > 0 {
-		if v.RoleID == "" {
+		if len(v.RoleIDs) == 0 {
 			r.Unknowns = append(r.Unknowns, "role")
-		} else if !contains(p.ApprovedRoles, v.RoleID) {
+		} else if !overlaps(p.ApprovedRoles, v.RoleIDs) {
 			r.Decision = DecisionReject
 			r.Conflicts = append(r.Conflicts, "role")
 			return r
@@ -148,7 +149,7 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 		}
 	}
 	w := p.normalizedWeights()
-	components := []float64{boolScore(v.RoleID != "", len(p.ApprovedRoles) == 0 || contains(p.ApprovedRoles, v.RoleID)), boolScore(v.SalaryRUB != nil, p.MinSalaryRUB == nil || (v.SalaryRUB != nil && *v.SalaryRUB >= *p.MinSalaryRUB)), boolScore(v.RegionID != "", len(p.Regions) == 0 || contains(p.Regions, v.RegionID)), skillScore(p.RequiredSkills, skills)}
+	components := []float64{boolScore(len(v.RoleIDs) > 0, len(p.ApprovedRoles) == 0 || overlaps(p.ApprovedRoles, v.RoleIDs)), boolScore(v.SalaryRUB != nil, p.MinSalaryRUB == nil || (v.SalaryRUB != nil && *v.SalaryRUB >= *p.MinSalaryRUB)), boolScore(v.RegionID != "", len(p.Regions) == 0 || contains(p.Regions, v.RegionID)), skillScore(p.RequiredSkills, skills)}
 	r.Score = math.Round((components[0]*w.Role+components[1]*w.Salary+components[2]*w.Region+components[3]*w.Skills)*100) / 100
 	if len(r.Unknowns) > 0 {
 		r.Decision = DecisionReview
@@ -183,6 +184,15 @@ func skillScore(required []string, skills map[string]bool) float64 {
 func contains(values []string, needle string) bool {
 	for _, value := range values {
 		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(needle)) {
+			return true
+		}
+	}
+	return false
+}
+
+func overlaps(left, right []string) bool {
+	for _, value := range left {
+		if contains(right, value) {
 			return true
 		}
 	}

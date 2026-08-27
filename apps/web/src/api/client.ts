@@ -261,6 +261,7 @@ export const api = {
   archiveAssistantPreference: (id: string) =>
     mutate<void>('/assistant/preferences/archive', 'POST', { id }),
   assistantStatus: () => get<import('./types').AssistantStatus>('/assistant/status', {}),
+  assistantAnalysisPreview: () => get<{ snapshot_total: number }>('/assistant/analyze', {}),
   runAssistantAnalysis: () => mutate<{ run_id: string; status: string }>('/assistant/analyze', 'POST', undefined, crypto.randomUUID()),
   assistantMatches: () => get<import('./types').AssistantMatch[]>('/assistant/matches', {}),
   telegramStatus: () => get<import('./types').TelegramStatus>('/assistant/telegram', {}),

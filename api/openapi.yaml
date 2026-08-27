@@ -658,11 +658,35 @@ paths:
               schema: { $ref: "#/components/schemas/AssistantStatus" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /api/v1/assistant/analyze:
+    get:
+      tags: [assistant]
+      operationId: previewAssistantAnalysis
+      summary: Получить размер текущего снимка до подтверждения
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Число активных вакансий, которые войдут в новый снимок
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshot_total]
+                properties:
+                  snapshot_total: { type: integer, minimum: 0 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       tags: [assistant]
       operationId: runAssistantAnalysis
       summary: Запустить анализ всех текущих вакансий
-      description: Фиксирует конечный снимок всех активных неудалённых вакансий активных источников и обрабатывает его bounded keyset-пакетами. Новые вакансии после cutoff остаются для следующего запуска и инкрементального outbox. При пользовательском opt-in и server-side флаге AI получает каждую вакансию снимка, включая ограниченное безопасное текстовое описание; deterministic reject не исключает AI-проверку.
+      description: >-
+        Фиксирует конечный снимок всех активных неудалённых вакансий активных
+        источников и обрабатывает его bounded keyset-пакетами. Новые вакансии
+        после cutoff остаются для следующего запуска и инкрементального outbox.
+        При пользовательском opt-in и server-side флаге AI получает каждую
+        вакансию снимка, включая ограниченное безопасное текстовое описание;
+        deterministic reject не исключает AI-проверку. Число AI-запросов не
+        ограничено: каждый элемент снимка может создать платный запрос.
       security:
         - bearerAuth: []
       responses:
@@ -808,7 +832,7 @@ paths:
       tags: [assistant]
       operationId: updateAssistantAutomation
       summary: Включить или выключить AI и Telegram отдельно
-      description: Включение AI фиксирует activation_at; каждая новая или содержательно изменившаяся вакансия после него анализируется по описанию в пределах лимитов. Старые вакансии не backfill-ятся.
+      description: Включение AI фиксирует activation_at; каждая новая или содержательно изменившаяся вакансия после него анализируется по описанию без лимита количества запросов. Старые вакансии не backfill-ятся.
       security:
         - bearerAuth: []
       requestBody:
@@ -820,7 +844,6 @@ paths:
               properties:
                 ai_enabled: { type: boolean }
                 telegram_enabled: { type: boolean }
-                max_ai_calls_per_hour: { type: integer, minimum: 1, maximum: 100 }
       responses:
         "200":
           description: Сохранённые настройки
@@ -1705,7 +1728,7 @@ components:
 
     AssistantAutomationSettings:
       type: object
-      required: [ai_enabled, telegram_enabled, max_ai_calls_per_hour]
+      required: [ai_enabled, telegram_enabled]
       properties:
         ai_enabled: { type: boolean }
         telegram_enabled: { type: boolean }
@@ -1713,7 +1736,3 @@ components:
           type: [string, "null"]
           format: date-time
           description: Cutoff включения; вакансии, наблюдённые ранее, не backfill-ятся.
-        max_ai_calls_per_hour:
-          type: integer
-          minimum: 1
-          maximum: 100

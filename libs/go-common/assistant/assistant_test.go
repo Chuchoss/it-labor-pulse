@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,49 @@ func TestMatchRejectsHardConflictAndReviewsUnknown(t *testing.T) {
 	result = Match(v, Preferences{RequiredSkills: []string{"Postgres"}}, time.Now())
 	if result.Decision != DecisionReview {
 		t.Fatalf("decision = %s", result.Decision)
+	}
+}
+
+func TestMatchUsesAnyOfficialRoleScopeAndIgnoresPrimaryMismatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		roles    []string
+		approved []string
+		want     Decision
+	}{
+		{name: "any overlap", roles: []string{"124", "96"}, approved: []string{"148", "96"}, want: DecisionMatch},
+		{name: "no overlap", roles: []string{"124", "150"}, approved: []string{"96", "148"}, want: DecisionReject},
+		{name: "unknown scopes", approved: []string{"96"}, want: DecisionReview},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Match(Vacancy{RoleID: "999", RoleIDs: tt.roles}, Preferences{ApprovedRoles: tt.approved}, time.Now())
+			if got.Decision != tt.want {
+				t.Fatalf("decision = %s, want %s", got.Decision, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchRemoteTriState(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		remote *bool
+		want   Decision
+	}{
+		{name: "remote", remote: boolPointerForTest(true), want: DecisionMatch},
+		{name: "non remote", remote: boolPointerForTest(false), want: DecisionReject},
+		{name: "unknown", want: DecisionReview},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Match(Vacancy{IsRemote: tt.remote}, Preferences{RemoteOnly: true}, time.Now())
+			if got.Decision != tt.want {
+				t.Fatalf("decision = %s, want %s", got.Decision, tt.want)
+			}
+		})
+	}
+	if got := Match(Vacancy{}, Preferences{RemoteOnly: false}, time.Now()); got.Decision != DecisionMatch {
+		t.Fatalf("remote_only=false decision = %s", got.Decision)
 	}
 }
 
@@ -157,9 +201,6 @@ func (f *aiWorkerFake) AutomationSettings(_ context.Context, userID string) (Aut
 func (f *aiWorkerFake) AIResultExists(_ context.Context, userID string, version int, vacancyID string, revision int) (bool, error) {
 	_, ok := f.jobs[userID+vacancyID]
 	return ok, nil
-}
-func (f *aiWorkerFake) RecentAICalls(context.Context, string, time.Time) (int, error) {
-	return 0, nil
 }
 func (f *aiWorkerFake) SaveAIResult(_ context.Context, match WorkerMatch, output MatchOutput) error {
 	if f.jobs == nil {
@@ -358,12 +399,12 @@ func TestManualSnapshotAIUsesDescriptionForDeterministicReject(t *testing.T) {
 					Vacancy: Vacancy{ID: "v1", RoleID: "124"},
 				}},
 			},
-			settings: map[string]AutomationSettings{"u1": {AIEnabled: true, MaxAICallsPerHour: 20}},
+			settings: map[string]AutomationSettings{"u1": {AIEnabled: true}},
 		},
 		run: AssistantRun{ID: "run-ai", UserID: "u1"},
 	}
 	stats, err := RunOnce(context.Background(), fake, WorkerOptions{
-		BatchSize: 1, AIProvider: provider, AIBudget: 20, Now: time.Now().UTC(),
+		BatchSize: 1, AIProvider: provider, Now: time.Now().UTC(),
 	})
 	if err != nil || fake.completed != "succeeded" || stats.AICalls != 1 ||
 		fake.completedStats.AIStatus != "completed" || fake.completedStats.AISucceeded != 1 ||
@@ -403,8 +444,8 @@ func TestWorkerUsesApprovedRolesWithoutProviderCalls(t *testing.T) {
 			Version: 2, HardCriteria: map[string]any{"approved_roles": []any{"96"}},
 		}}},
 		candidates: []WorkerCandidate{
-			{ID: "v1", Source: "hh", ExternalID: "1", Vacancy: Vacancy{ID: "v1", RoleID: "96"}},
-			{ID: "v2", Source: "hh", ExternalID: "2", Vacancy: Vacancy{ID: "v2", RoleID: "124"}},
+			{ID: "v1", Source: "hh", ExternalID: "1", Vacancy: Vacancy{ID: "v1", RoleID: "124", RoleIDs: []string{"96"}}},
+			{ID: "v2", Source: "hh", ExternalID: "2", Vacancy: Vacancy{ID: "v2", RoleID: "96", RoleIDs: []string{"124"}}},
 		},
 	}
 	stats, err := RunOnce(context.Background(), fake, WorkerOptions{BatchSize: 2})
@@ -430,11 +471,11 @@ func TestAutomaticAIAnalyzesNewVacancyDescriptionEvenAfterDeterministicReject(t 
 			}},
 		},
 		settings: map[string]AutomationSettings{
-			"u1": {AIEnabled: true, ActivationAt: &activation, MaxAICallsPerHour: 20},
+			"u1": {AIEnabled: true, ActivationAt: &activation},
 		},
 	}
 	stats, err := RunOnce(context.Background(), fake, WorkerOptions{
-		BatchSize: 1, AIProvider: provider, AIBudget: 20, Now: time.Now().UTC(),
+		BatchSize: 1, AIProvider: provider, Now: time.Now().UTC(),
 	})
 	if err != nil || stats.AICalls != 1 || stats.Matched != 0 || len(provider.calls) != 1 {
 		t.Fatalf("stats=%+v calls=%d err=%v", stats, len(provider.calls), err)
@@ -460,12 +501,12 @@ func TestAutomaticAIDisabledAndProspectiveActivationMakeNoCalls(t *testing.T) {
 			}},
 		},
 		settings: map[string]AutomationSettings{
-			"enabled":  {AIEnabled: true, ActivationAt: &activation, MaxAICallsPerHour: 20},
-			"disabled": {AIEnabled: false, MaxAICallsPerHour: 20},
+			"enabled":  {AIEnabled: true, ActivationAt: &activation},
+			"disabled": {AIEnabled: false},
 		},
 	}
 	stats, err := RunOnce(context.Background(), fake, WorkerOptions{
-		BatchSize: 1, AIProvider: provider, AIBudget: 20, Now: activation,
+		BatchSize: 1, AIProvider: provider, Now: activation,
 	})
 	if err != nil || stats.AICalls != 0 || len(provider.calls) != 0 {
 		t.Fatalf("stats=%+v calls=%d err=%v", stats, len(provider.calls), err)
@@ -479,10 +520,10 @@ func TestAIProviderFailureDoesNotAbortDeterministicProcessing(t *testing.T) {
 			users:      []WorkerUser{{ID: "u1", Preference: PreferenceRecord{Version: 1}}},
 			candidates: []WorkerCandidate{{ID: "v1", ExternalID: "1", Source: "hh", Revision: 1, Vacancy: Vacancy{ID: "v1"}}},
 		},
-		settings: map[string]AutomationSettings{"u1": {AIEnabled: true, MaxAICallsPerHour: 20}},
+		settings: map[string]AutomationSettings{"u1": {AIEnabled: true}},
 	}
 	stats, err := RunOnce(context.Background(), fake, WorkerOptions{
-		BatchSize: 1, AIProvider: provider, AIBudget: 20, Now: time.Now().UTC(),
+		BatchSize: 1, AIProvider: provider, Now: time.Now().UTC(),
 	})
 	if err != nil || stats.Matched != 1 || stats.AIFailures != 1 || fake.failures != 1 {
 		t.Fatalf("stats=%+v failures=%d err=%v", stats, fake.failures, err)
@@ -506,11 +547,11 @@ func TestAutomaticAIFansOutPerUserAndIsIdempotent(t *testing.T) {
 			}},
 		},
 		settings: map[string]AutomationSettings{
-			"u1": {AIEnabled: true, MaxAICallsPerHour: 20},
-			"u2": {AIEnabled: true, MaxAICallsPerHour: 20},
+			"u1": {AIEnabled: true},
+			"u2": {AIEnabled: true},
 		},
 	}
-	opts := WorkerOptions{BatchSize: 1, AIProvider: provider, AIBudget: 20, Now: time.Now().UTC()}
+	opts := WorkerOptions{BatchSize: 1, AIProvider: provider, Now: time.Now().UTC()}
 	stats, err := RunOnce(context.Background(), fake, opts)
 	if err != nil || stats.AICalls != 2 || stats.AIMatches != 2 ||
 		len(fake.jobs) != 2 || len(provider.calls) != 2 {
@@ -523,4 +564,65 @@ func TestAutomaticAIFansOutPerUserAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAutomaticAIHasNoRequestCountCap(t *testing.T) {
+	now := time.Now().UTC()
+	provider := &fakeAIProvider{output: MatchOutput{
+		Decision: "review", Score: .5, Confidence: "medium", Evidence: []string{"vacancy:title"},
+	}}
+	candidates := make([]WorkerCandidate, 50)
+	for i := range candidates {
+		id := "v" + strconv.Itoa(i+1)
+		candidates[i] = WorkerCandidate{
+			ID: id, ExternalID: strconv.Itoa(i + 1), Source: "hh", Revision: 1,
+			ObservedAt: now, Title: "Synthetic", Vacancy: Vacancy{ID: id},
+		}
+	}
+	fake := &aiWorkerFake{
+		workerFake: &workerFake{
+			users:      []WorkerUser{{ID: "u1", Preference: PreferenceRecord{Version: 1}}},
+			candidates: candidates,
+		},
+		settings: map[string]AutomationSettings{"u1": {AIEnabled: true, ActivationAt: &now}},
+	}
+	stats, err := RunOnce(context.Background(), fake, WorkerOptions{
+		BatchSize: 50, AIProvider: provider, Now: now,
+	})
+	if err != nil || stats.AICalls != 50 || stats.AISkipped != 0 || len(provider.calls) != 50 {
+		t.Fatalf("stats=%+v calls=%d err=%v", stats, len(provider.calls), err)
+	}
+}
+
+func TestManualAIHasNoRequestCountCap(t *testing.T) {
+	now := time.Now().UTC()
+	provider := &fakeAIProvider{output: MatchOutput{
+		Decision: "match", Score: .8, Confidence: "high", Evidence: []string{"vacancy:title"},
+	}}
+	candidates := make([]WorkerCandidate, 25)
+	for i := range candidates {
+		id := "manual-" + string(rune('A'+i))
+		candidates[i] = WorkerCandidate{
+			ID: id, ExternalID: strconv.Itoa(i + 1), Source: "hh", Revision: 1,
+			CreatedAt: now.Add(-time.Minute), Title: "Synthetic", Vacancy: Vacancy{ID: id},
+		}
+	}
+	fake := &queuedAIWorkerFake{
+		aiWorkerFake: &aiWorkerFake{
+			workerFake: &workerFake{
+				users:      []WorkerUser{{ID: "u1", Preference: PreferenceRecord{Version: 1}}},
+				candidates: candidates,
+			},
+			settings: map[string]AutomationSettings{"u1": {AIEnabled: true}},
+		},
+		run: AssistantRun{ID: "manual-unlimited", UserID: "u1", SnapshotCutoff: now},
+	}
+	stats, err := RunOnce(context.Background(), fake, WorkerOptions{
+		BatchSize: 25, AIProvider: provider, Now: now,
+	})
+	if err != nil || stats.AICalls != 25 || stats.AISkipped != 0 || len(provider.calls) != 25 {
+		t.Fatalf("stats=%+v calls=%d err=%v", stats, len(provider.calls), err)
+	}
+}
+
 func ptr(v float64) *float64 { return &v }
+
+func boolPointerForTest(value bool) *bool { return &value }

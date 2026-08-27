@@ -173,16 +173,15 @@ Slug ролей — канон в PG (`go-developer`), в API часто удо�
 
 ## Remote detection
 
-`is_remote` (поле Target в модели / флаг в JSONB attrs; MVP можно колонку позже):
+`vacancies.is_remote` — nullable boolean из полей официального HH detail API:
 
-| Сигнал | Вес |
-|--------|-----|
-| HH schedule / work_format id «удалённо» | сильный → true |
-| `area` = «Удаленно» / remote | сильный |
-| title/description содержит `\bremote\b`, «удаленн» | слабый (нужен ещё один сигнал) |
+- `schedule.id == "remote"` или `work_format[].id == "REMOTE"` → `true`;
+- известный иной `schedule.id`/непустой `work_format` без `REMOTE` → `false`;
+- оба поля отсутствуют → `NULL` (unknown).
 
-Иначе `is_remote=false`.  
-Гибрид: `is_remote=true` + region офиса сохраняем оба.
+Текст title/description и название area не используются как источник истины.
+Если HH перечисляет `REMOTE` вместе с другим форматом, сохраняется `true`:
+удалённый вариант явно доступен; region офиса сохраняется отдельно.
 
 ---
 

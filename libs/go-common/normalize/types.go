@@ -66,7 +66,7 @@ type CanonicalVacancy struct {
 	SalaryRateProvider   string     `json:"salary_rate_provider,omitempty"`
 	ExcludeFromSalaryAgg bool       `json:"exclude_from_salary_agg"`
 	Skills               []SkillRef `json:"skills"`
-	IsRemote             bool       `json:"is_remote"`
+	IsRemote             *bool      `json:"is_remote"`
 	IsActive             bool       `json:"is_active"`
 	PublishedAt          time.Time  `json:"published_at"`
 	CollectedAt          time.Time  `json:"collected_at"`

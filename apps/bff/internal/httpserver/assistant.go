@@ -46,6 +46,9 @@ type telegramLinkRepository interface {
 type telegramChatRepository interface {
 	VerifiedTelegramChat(context.Context, string) (int64, error)
 }
+type analysisPreviewRepository interface {
+	AnalysisSnapshotTotal(context.Context) (int, error)
+}
 
 type assistantPreferencesPayload struct {
 	ID                 string             `json:"id,omitempty"`
@@ -203,6 +206,20 @@ func (h *assistantHandler) status(w http.ResponseWriter, r *http.Request) {
 
 func (h *assistantHandler) analyze(w http.ResponseWriter, r *http.Request) {
 	if !h.guard(w, r) {
+		return
+	}
+	if r.Method == http.MethodGet {
+		repo, ok := h.opts.Repository.(analysisPreviewRepository)
+		if !ok {
+			h.error(w, r, 503, "DEPENDENCY_UNAVAILABLE", "Analysis preview is not configured", nil)
+			return
+		}
+		total, err := repo.AnalysisSnapshotTotal(r.Context())
+		if err != nil {
+			h.error(w, r, 500, "INTERNAL_ERROR", "Could not count analysis snapshot", nil)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"snapshot_total": total})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -452,7 +469,7 @@ func (h *assistantHandler) automation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.opts.Repository == nil {
-		writeJSON(w, http.StatusOK, assistant.AutomationSettings{MaxAICallsPerHour: 20})
+		writeJSON(w, http.StatusOK, assistant.AutomationSettings{})
 		return
 	}
 	if r.Method == http.MethodGet {
@@ -471,7 +488,6 @@ func (h *assistantHandler) automation(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AIEnabled       *bool `json:"ai_enabled"`
 		TelegramEnabled *bool `json:"telegram_enabled"`
-		MaxAICalls      int   `json:"max_ai_calls_per_hour"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024)).Decode(&body) != nil {
 		h.error(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid JSON", nil)
@@ -495,9 +511,6 @@ func (h *assistantHandler) automation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		current.TelegramEnabled = *body.TelegramEnabled
-	}
-	if body.MaxAICalls != 0 {
-		current.MaxAICallsPerHour = body.MaxAICalls
 	}
 	saved, err := h.opts.Repository.SaveAutomationSettings(r.Context(), userID, current)
 	if err != nil {

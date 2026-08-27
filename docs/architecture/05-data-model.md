@@ -44,6 +44,7 @@ erDiagram
     uuid employer_id FK
     uuid role_id FK
     uuid region_id FK
+    boolean is_remote
     numeric salary_from
     numeric salary_to
     char currency
@@ -175,6 +176,7 @@ Bash и 1C имеют явные отдельные категории и в н�
 | `employer_id` | `UUID` NULL FK | |
 | `role_id` | `UUID` NULL FK | nullable пока не сматчили |
 | `region_id` | `UUID` NULL FK | |
+| `is_remote` | `BOOLEAN` NULL | official HH `schedule`/`work_format`; `NULL` = источник не сообщил формат |
 | `salary_from` | `NUMERIC(12,2)` NULL | |
 | `salary_to` | `NUMERIC(12,2)` NULL | |
 | `salary_currency` | `CHAR(3)` NULL | |
@@ -195,6 +197,11 @@ Bash и 1C имеют явные отдельные категории и в н�
 | `content_hash` | `BYTEA`/`CHAR(64)` | для skip unchanged |
 | `raw_payload` | `JSONB` NULL | MVP optional; Target — object storage / TTL cleanup |
 | `created_at` / `updated_at` | `TIMESTAMPTZ` | |
+
+`role_id` остаётся primary/display-связью. Для фильтрации assistant и
+продуктовых scopes источником истины служит many-to-many
+`vacancy_role_scopes`; совпадение нескольких желаемых ролей — любое пересечение
+официальных HH role IDs через `role_aliases`.
 
 **Constraints / indexes:**
 

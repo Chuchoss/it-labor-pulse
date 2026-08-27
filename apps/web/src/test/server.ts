@@ -223,6 +223,9 @@ export const handlers = [
       total: 22,
     })
   }),
+  http.get('*/api/v1/assistant/analyze', () =>
+    HttpResponse.json({ snapshot_total: 22 }),
+  ),
 ]
 
 export const server = setupServer(...handlers)

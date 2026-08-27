@@ -46,6 +46,9 @@ func (f *assistantRepositoryFake) AnalysisStatus(context.Context, string, bool) 
 func (f *assistantRepositoryFake) QueueAnalysis(context.Context, string, string, bool) (string, error) {
 	return "run-1", nil
 }
+func (f *assistantRepositoryFake) AnalysisSnapshotTotal(context.Context) (int, error) {
+	return 2073, nil
+}
 func (f *assistantRepositoryFake) ListMatches(context.Context, string, int) ([]assistant.MatchRecord, error) {
 	return []assistant.MatchRecord{}, nil
 }
@@ -53,12 +56,23 @@ func (f *assistantRepositoryFake) TelegramStatus(context.Context, string, bool) 
 	return assistant.TelegramStatus{}, nil
 }
 func (f *assistantRepositoryFake) AutomationSettings(context.Context, string) (assistant.AutomationSettings, error) {
-	return assistant.AutomationSettings{MaxAICallsPerHour: 20}, nil
+	return assistant.AutomationSettings{}, nil
 }
 func (f *assistantRepositoryFake) SaveAutomationSettings(_ context.Context, _ string, settings assistant.AutomationSettings) (assistant.AutomationSettings, error) {
 	return settings, nil
 }
 func (f *assistantRepositoryFake) SetTelegramOptIn(context.Context, string, bool) error { return nil }
+
+func TestAssistantAnalysisPreviewShowsSnapshotTotal(t *testing.T) {
+	repo := &assistantRepositoryFake{}
+	srv := New(Options{Assistant: AssistantOptions{
+		Enabled: true, DevAuthEnabled: true, DevSubject: "local-dev-user", Repository: repo,
+	}})
+	rec := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/assistant/analyze", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"snapshot_total":2073}`, rec.Body.String())
+}
 
 func TestAssistantPreferencesUseStableDevSubjectAndSupportPatch(t *testing.T) {
 	repo := &assistantRepositoryFake{}

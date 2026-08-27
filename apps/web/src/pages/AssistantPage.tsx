@@ -48,7 +48,7 @@ const aiSkipReasonText: Record<string, string> = {
   user_opt_out: 'AI-анализ не запускался: не включён пользователем.',
   run_predates_ai: 'AI-анализ не запускался: запуск создан до включения AI.',
   no_eligible: 'AI-анализ не запускался: нет вакансий для AI.',
-  budget_exhausted: 'AI-анализ не запускался: исчерпан лимит вызовов.',
+  budget_exhausted: 'Старый запуск остановлен историческим лимитом вызовов; новые запуски выполняются без лимита количества.',
   already_analyzed: 'AI-анализ не запускался: вакансии уже были обработаны AI.',
   provider_unavailable: 'AI-анализ не запускался: worker не получил разрешение на внешний провайдер.',
   unknown: 'AI-анализ не выполнялся; причина недоступна для старого запуска.',
@@ -114,6 +114,7 @@ export function AssistantPage() {
   const preferences = useQuery({ queryKey: ['assistant-preferences'], queryFn: api.assistantPreferences })
   const preferenceList = useQuery({ queryKey: ['assistant-preference-list'], queryFn: api.assistantPreferenceList })
   const status = useQuery({ queryKey: ['assistant-status'], queryFn: api.assistantStatus, refetchInterval: 3000 })
+  const analysisPreview = useQuery({ queryKey: ['assistant-analysis-preview'], queryFn: api.assistantAnalysisPreview })
   const matches = useQuery({ queryKey: ['assistant-matches'], queryFn: api.assistantMatches })
   const telegram = useQuery({ queryKey: ['telegram-status'], queryFn: api.telegramStatus })
   const automation = useQuery({ queryKey: ['assistant-automation'], queryFn: api.assistantAutomation })
@@ -212,8 +213,8 @@ export function AssistantPage() {
         <Stack spacing={1}>
           <Typography variant="h6">Автоматизация</Typography>
           <Typography variant="body2" color="text.secondary">
-            Новые вакансии будут автоматически анализироваться AI по полному описанию. Возможны расходы.
-            Действует только после включения и в пределах установленного лимита; Telegram включается отдельно.
+            Новые вакансии будут автоматически анализироваться AI по полному описанию. Каждая подходящая
+            вакансия может создать платный AI-запрос; количество запросов может быть большим. Telegram включается отдельно.
           </Typography>
           <Stack direction="row" sx={{ alignItems: 'center' }}>
             <Switch checked={automation.data?.ai_enabled ?? false} disabled={!status.data?.ai_configured || updateAutomation.isPending}
@@ -404,10 +405,10 @@ export function AssistantPage() {
           ? 'Архивировать текущую версию? Она останется в истории, совпадения не удаляются.'
           : confirmAction === 'run'
             ? !status.data?.ai_configured
-              ? 'Запустить проверку всех текущих активных вакансий по критериям? AI не запустится: внешний провайдер выключен на сервере.'
+              ? `Запустить проверку снимка из ${analysisPreview.data?.snapshot_total ?? 'неизвестного числа'} активных вакансий по критериям? AI не запустится: внешний провайдер выключен на сервере.`
               : !automation.data?.ai_enabled
-                ? 'Запустить проверку всех текущих активных вакансий по критериям? AI не запустится: автоматический AI-анализ не включён пользователем.'
-                : 'Запустить проверку всех текущих активных вакансий и AI-анализ описаний? Возможны расходы; действуют лимиты.'
+                ? `Запустить проверку снимка из ${analysisPreview.data?.snapshot_total ?? 'неизвестного числа'} активных вакансий по критериям? AI не запустится: автоматический AI-анализ не включён пользователем.`
+                : `Запустить проверку снимка из ${analysisPreview.data?.snapshot_total ?? 'неизвестного числа'} активных вакансий и AI-анализ описаний? Каждая вакансия может создать платный запрос; лимита количества нет.`
             : confirmAction === 'ai'
               ? `${automation.data?.ai_enabled ? 'Выключить' : 'Включить'} автоматический AI-анализ? Внешний провайдер может расходовать средства; исторические вакансии не будут обработаны.`
               : confirmAction === 'test'

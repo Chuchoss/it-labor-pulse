@@ -458,6 +458,7 @@ aliases из [runbook assistant](../runbooks/personal-assistant.md): извес�
 
 #### `/api/v1/assistant/analyze` и `/api/v1/assistant/status` (Phase 4)
 
+`GET /analyze` возвращает `snapshot_total` для подтверждения стоимости в UI.
 `POST /analyze` фиксирует конечный снимок всех `is_active=true`,
 `deleted_at IS NULL` вакансий активных sources на момент создания run. Scope
 ограничен `snapshot_cutoff` и проходит keyset-пакетами `(created_at, id)`;
@@ -474,7 +475,8 @@ run и уточняется worker. Старые запуски до появл�
 недоступный не блокирует deterministic scan. При пользовательском и серверном
 opt-in AI проверяет по очищенному описанию все вакансии снимка, включая
 deterministic rejects; автоматический путь делает то же только для новых/новых
-ревизий после `activation_at` и в пределах per-run/per-user лимитов.
+ревизий после `activation_at`. Лимитов количества AI-запросов на запуск и на
+пользователя в час нет; batch/rate controls ограничивают только скорость.
 
 ---
 

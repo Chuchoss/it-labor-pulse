@@ -55,7 +55,6 @@ type WorkerMatch struct {
 type AIStore interface {
 	SaveAIResult(context.Context, WorkerMatch, MatchOutput) error
 	AIResultExists(context.Context, string, int, string, int) (bool, error)
-	RecentAICalls(context.Context, string, time.Time) (int, error)
 	SaveAIFailure(context.Context, WorkerMatch, string) error
 }
 
@@ -86,7 +85,6 @@ type WorkerOptions struct {
 	Log             *slog.Logger
 	AIProvider      AIProvider
 	AIThreshold     float64
-	AIBudget        int
 	TelegramEnabled bool
 }
 
@@ -119,9 +117,6 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 	}
 	if opts.Now.IsZero() {
 		opts.Now = time.Now().UTC()
-	}
-	if opts.AIBudget < 1 || opts.AIBudget > 100 {
-		opts.AIBudget = 20
 	}
 	release, acquired, err := store.TryLock(ctx)
 	if err != nil || !acquired {
@@ -234,17 +229,14 @@ func processCandidates(
 	stats *WorkerStats,
 	manual bool,
 ) error {
-	aiCalls := stats.AICalls
-	perUserCalls := make(map[string]int)
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		stats.Processed++
 		candidateFailed := false
-		candidateDeferred := false
 		for _, user := range users {
-			settings := AutomationSettings{MaxAICallsPerHour: 20}
+			settings := AutomationSettings{}
 			if settingsStore, ok := store.(AutomationStore); ok {
 				var settingsErr error
 				settings, settingsErr = settingsStore.AutomationSettings(ctx, user.ID)
@@ -314,18 +306,6 @@ func processCandidates(
 				setAISkipReason(stats, "already_analyzed")
 				continue
 			}
-			if perUserCalls[user.ID] == 0 {
-				perUserCalls[user.ID], err = durable.RecentAICalls(ctx, user.ID, opts.Now.Add(-time.Hour))
-				if err != nil {
-					return err
-				}
-			}
-			if aiCalls >= opts.AIBudget || perUserCalls[user.ID] >= settings.MaxAICallsPerHour {
-				stats.AISkipped++
-				setAISkipReason(stats, "budget_exhausted")
-				candidateDeferred = true
-				continue
-			}
 			evidence := map[string]bool{"vacancy:title": true, "vacancy:description": true, "preferences": true}
 			facts := map[string]string{
 				"salary":                 candidate.SalaryText,
@@ -341,8 +321,6 @@ func processCandidates(
 				PromptVersion: "description-v1", InputSnapshotHash: sha256Bytes(input),
 			}
 			output, providerErr := opts.AIProvider.Complete(ctx, Request{InputSnapshot: input, Evidence: evidence})
-			aiCalls++
-			perUserCalls[user.ID]++
 			stats.AICalls++
 			if providerErr != nil {
 				stats.AIFailures++
@@ -367,10 +345,6 @@ func processCandidates(
 				if candidateFailed {
 					itemErr = workItems.RetryWorkItem(
 						ctx, candidate.Source, candidate.ExternalID, candidate.Revision, "ai_provider_failed",
-					)
-				} else if candidateDeferred {
-					itemErr = workItems.DeferWorkItem(
-						ctx, candidate.Source, candidate.ExternalID, candidate.Revision, opts.Now.Add(time.Hour),
 					)
 				} else {
 					itemErr = workItems.CompleteWorkItem(ctx, candidate.Source, candidate.ExternalID, candidate.Revision)

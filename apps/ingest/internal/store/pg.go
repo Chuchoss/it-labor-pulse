@@ -987,10 +987,11 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			    role_id = $5::uuid,
 			    employer_id = $6::uuid,
 			    source_url = NULLIF($7, ''),
+			    is_remote = $8,
 			    deleted_at = NULL,
 			    updated_at = now()
 			WHERE id = $1::uuid
-		`, vacancyID, v.CollectedAt.UTC(), v.IsActive, regionID, roleID, employerID, v.SourceURL)
+		`, vacancyID, v.CollectedAt.UTC(), v.IsActive, regionID, roleID, employerID, v.SourceURL, v.IsRemote)
 		if err != nil {
 			return false, atDBStage("touch vacancy", err)
 		}
@@ -1011,14 +1012,14 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			salary_from, salary_to, salary_currency, salary_gross, salary_mid,
 			salary_from_rub_net, salary_to_rub_net, salary_rate_date, salary_rate_provider,
 			description_text, description_truncated, published_at, collected_at, first_observed_at, is_active, deleted_at,
-			last_seen_at, content_hash, raw_payload, updated_at
+			last_seen_at, content_hash, raw_payload, is_remote, updated_at
 		) VALUES (
 			$1, $2, NULLIF($3, ''), $4, $5::uuid, $6::uuid, $7::uuid,
 			$8, $9, NULLIF($10, ''), $11, $12,
 			$13, $14, $15, NULLIF($16, ''),
 			NULLIF($17, ''), $18, $19, $20, $20, $21, NULL,
 			CASE WHEN $21 THEN $20 ELSE NULL END,
-			$22, $23::jsonb, now()
+			$22, $23::jsonb, $24, now()
 		)
 		ON CONFLICT (source, external_id) DO UPDATE SET
 			source_url = EXCLUDED.source_url,
@@ -1047,6 +1048,7 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			content_hash = EXCLUDED.content_hash,
 			analysis_revision = vacancies.analysis_revision + 1,
 			raw_payload = EXCLUDED.raw_payload,
+			is_remote = EXCLUDED.is_remote,
 			updated_at = now()
 		RETURNING id::text
 	`,
@@ -1055,7 +1057,7 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 		salaryBoundRub(v, v.SalaryFrom), salaryBoundRub(v, v.SalaryTo),
 		nullTimePointer(v.SalaryRateDate), v.SalaryRateProvider,
 		v.DescriptionText, v.DescriptionTruncated, nullTime(v.PublishedAt), v.CollectedAt.UTC(), v.IsActive,
-		hashBytes, raw,
+		hashBytes, raw, v.IsRemote,
 	).Scan(&vacancyID)
 	if err != nil {
 		return false, atDBStage("upsert vacancy", err)
