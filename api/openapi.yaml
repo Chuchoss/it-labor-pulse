@@ -1715,7 +1715,7 @@ components:
           enum: [not_run, pending, running, completed, partial, failed, skipped]
         ai_skip_reason:
           type: [string, "null"]
-          enum: [server_disabled, user_opt_out, run_predates_ai, no_eligible, budget_exhausted, already_analyzed, provider_unavailable, preferences_changed, unknown, null]
+          enum: [server_disabled, user_opt_out, run_predates_ai, no_eligible, budget_exhausted, already_analyzed, provider_unavailable, preferences_changed, hard_reject, unknown, null]
         state: { type: string, enum: [never_run, queued, running, paused, succeeded, failed, disabled, superseded] }
         preference_version: { type: integer, minimum: 1 }
         current_preference_version: { type: integer, minimum: 1 }
@@ -1772,7 +1772,12 @@ components:
         provider: { type: [string, "null"] }
         model: { type: [string, "null"] }
         prompt_version: { type: [string, "null"] }
-        method_version: { type: string }
+        method_version:
+          type: string
+          description: Текущая версия hard-gate ruleset в коде BFF/worker.
+        ruleset_version:
+          type: string
+          description: Immutable ruleset запуска. Отличается от method_version после смены политики, пока не создан новый снимок.
         worker_heartbeat_at:
           type: [string, "null"]
           format: date-time
@@ -1783,7 +1788,7 @@ components:
         worker_retry_category: { type: [string, "null"] }
         worker_retry_until: { type: [string, "null"], format: date-time }
         worker_active_batches: { type: integer, minimum: 0 }
-        worker_concurrency: { type: integer, minimum: 0, maximum: 4 }
+        worker_concurrency: { type: integer, minimum: 0, maximum: 6 }
         worker_instance_id:
           type: [string, "null"]
           format: uuid

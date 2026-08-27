@@ -424,13 +424,13 @@ func recoverAssistantRun(ctx context.Context, pool *pgxpool.Pool, runID string, 
 func inspectAssistantRun(ctx context.Context, pool *pgxpool.Pool, runID string, log interface {
 	Info(string, ...any)
 }) error {
-	var state, phase, supersededFrom string
+	var state, phase, supersededFrom, ruleset string
 	var processed, total, aiCalls, aiSucceeded, aiFailures, httpAttempts, retries, batches int
 	var preferenceVersion, currentPreferenceVersion int
 	var progressAge, leaseRemaining, heartbeatAge *int
 	err := pool.QueryRow(ctx, `
 		SELECT r.state, r.processed, r.snapshot_total, r.ai_calls, r.ai_succeeded, r.ai_failures,
-			ai_http_attempts, ai_retries, ai_batches, worker_phase,
+			ai_http_attempts, ai_retries, ai_batches, worker_phase, r.ruleset_version,
 			EXTRACT(EPOCH FROM now()-last_checked_at)::integer,
 			CASE WHEN lease_until IS NULL THEN NULL
 			     ELSE EXTRACT(EPOCH FROM lease_until-now())::integer END,
@@ -447,7 +447,7 @@ func inspectAssistantRun(ctx context.Context, pool *pgxpool.Pool, runID string, 
 		) current_preference ON true
 		WHERE r.id=$1::uuid
 	`, runID).Scan(&state, &processed, &total, &aiCalls, &aiSucceeded, &aiFailures,
-		&httpAttempts, &retries, &batches, &phase, &progressAge, &leaseRemaining, &heartbeatAge,
+		&httpAttempts, &retries, &batches, &phase, &ruleset, &progressAge, &leaseRemaining, &heartbeatAge,
 		&preferenceVersion, &currentPreferenceVersion, &supersededFrom)
 	if err != nil {
 		return err
@@ -482,7 +482,7 @@ func inspectAssistantRun(ctx context.Context, pool *pgxpool.Pool, runID string, 
 		return err
 	}
 	log.Info("assistant_worker_run_metadata",
-		"run_id", runID, "state", state, "processed", processed, "total", total,
+		"run_id", runID, "state", state, "ruleset", ruleset, "processed", processed, "total", total,
 		"ai_calls", aiCalls, "ai_succeeded", aiSucceeded, "ai_failures", aiFailures,
 		"ai_http_attempts", httpAttempts, "ai_retries", retries, "ai_batches", batches,
 		"worker_phase", phase, "progress_age_seconds", progressAge,

@@ -490,7 +490,13 @@ outbox. Один активный run на пользователя; повто�
 `GET /status` возвращает `run_id`, чтобы UI восстанавливал активный запуск после
 refresh, `processed/total`, deterministic `matched`, а отдельно
 `ai_status`, `ai_skip_reason`, `ai_eligible`, `ai_calls`, `ai_succeeded`,
-`ai_matches`, `ai_failures` и `ai_skipped`. `ai_calls` означает уникальные
+`ai_matches`, `ai_failures` и `ai_skipped`. `ruleset_version` — immutable
+версия hard-gate политики запуска; `method_version` — текущий ruleset кода.
+`already_analyzed` действует только внутри той же preference, ревизии вакансии
+и ruleset: complete-job или AI-reject старого ruleset не пропускают
+повторный вызов. После смены ruleset новый снимок пересчитывает deterministic
+решения для всех вакансий снимка и отправляет в AI только оставшиеся
+`match`/`review`; доказанный hard-reject в модель не идёт. `ai_calls` означает уникальные
 отправки вакансий в модель, `ai_http_attempts` — все HTTP-попытки, а `ai_retries` —
 повторные запросы. UI отдельно показывает вакансии, HTTP-запросы и средний
 размер пакета (`ai_calls / ai_batches`). `ai_failures` считает только вакансии с финальной ошибкой;
@@ -524,9 +530,9 @@ preferences новее версии снимка. Операция снимае�
 run и уточняется worker. Старые запуски до появления AI помечаются
 `run_predates_ai`, без догадки о runtime-конфигурации. AI выключенный или
 недоступный не блокирует deterministic scan. При пользовательском и серверном
-opt-in AI проверяет по очищенному описанию все вакансии снимка, включая
-deterministic rejects; автоматический путь делает то же только для новых/новых
-ревизий после `activation_at`. Лимитов количества AI-запросов на запуск и на
+opt-in AI проверяет по очищенному описанию вакансии снимка, которые не дали
+доказанный deterministic `reject`; автоматический путь делает то же только для
+новых/новых ревизий после `activation_at`. Лимитов количества AI-запросов на запуск и на
 пользователя в час нет; batch/rate controls ограничивают только скорость.
 
 ---

@@ -573,6 +573,48 @@ describe('AssistantPage', () => {
     expect(screen.queryByText('Технический директор')).not.toBeInTheDocument()
   })
 
+  it('explains a stale-ruleset skip instead of already analyzed', async () => {
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        run_id: 'run-stale', ai_configured: true, ai_status: 'skipped',
+        ai_skip_reason: 'already_analyzed', state: 'succeeded',
+        preference_version: 15, current_preference_version: 15,
+        ruleset_version: 'assistant-hard-gates-v3',
+        method_version: 'assistant-hard-gates-v4',
+        processed: 4738, total: 4738, eligible: 4738, matched: 0,
+        ai_calls: 0, ai_eligible: 4738, ai_skipped: 4738, skipped: 4738,
+        pending_candidates: false, worker_offline: false, worker_stalled: false,
+      })),
+    )
+
+    renderPage(<AssistantPage />)
+
+    expect(await screen.findByText(/Пересчёт по новым правилам/)).toBeInTheDocument()
+    expect(screen.queryByText(/уже были обработаны AI/)).not.toBeInTheDocument()
+  })
+
+  it('keeps already-analyzed copy when the run used the current ruleset', async () => {
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        run_id: 'run-current', ai_configured: true, ai_status: 'skipped',
+        ai_skip_reason: 'already_analyzed', state: 'succeeded',
+        preference_version: 15, current_preference_version: 15,
+        ruleset_version: 'assistant-hard-gates-v4',
+        method_version: 'assistant-hard-gates-v4',
+        processed: 40, total: 40, eligible: 40, matched: 9,
+        ai_calls: 0, ai_eligible: 40, ai_skipped: 40, skipped: 31,
+        pending_candidates: false, worker_offline: false, worker_stalled: false,
+      })),
+    )
+
+    renderPage(<AssistantPage />)
+
+    expect(await screen.findByText(/уже были обработаны AI/)).toBeInTheDocument()
+    expect(screen.queryByText(/Пересчёт по новым правилам/)).not.toBeInTheDocument()
+  })
+
   it('keeps missing or null historical telemetry unknown and handles zero batches', async () => {
     useSupportingAssistantHandlers()
     server.use(

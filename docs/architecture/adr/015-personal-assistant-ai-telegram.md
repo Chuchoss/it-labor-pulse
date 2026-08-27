@@ -85,9 +85,13 @@ cost-risk. Оператор управляет расходами останов
 некорректного ответа и медленно восстанавливает её после успешных волн.
 Ограничение batch size и provider rate limiting управляют пропускной
 способностью, но не общим числом вакансий. Идемпотентность AI:
-`(user, preference, vacancy, vacancy_revision)`; provider failures повторяются
-до пяти раз и затем переходят в dead-letter. Ошибка/отсутствие AI не отменяет
-сохранённый deterministic результат.
+`(user, preference, vacancy, vacancy_revision, ruleset)`; complete-job или
+reject другого ruleset не пропускают повторный вызов. Provider failures
+повторяются до пяти раз внутри текущего ruleset и затем переходят в
+dead-letter. Ошибка/отсутствие AI не отменяет сохранённый deterministic
+результат. Unique key результата включает `ruleset_version`, поэтому снимок
+после bump пишет новые deterministic/AI строки, не затирая аудит старой
+политики.
 
 Начиная с ruleset `assistant-hard-gates-v4`, deterministic hard-критерии имеют
 безусловный приоритет. Доказанное нарушение всегда даёт `reject`, даже если AI

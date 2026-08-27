@@ -76,6 +76,18 @@ const workerStateText: Record<string, string> = {
   offline: 'недоступен',
 }
 
+function assistantAISkipCopy(status: {
+  ruleset_version?: string
+  method_version?: string
+  ai_skip_reason?: string
+}) {
+  if (status.ruleset_version && status.method_version && status.ruleset_version !== status.method_version) {
+    return 'Пересчёт по новым правилам: этот запуск ещё на предыдущей версии фильтров. Запустите проверку снова.'
+  }
+  if (!status.ai_skip_reason) return undefined
+  return aiSkipReasonText[status.ai_skip_reason] ?? 'AI-анализ не выполнялся; причина недоступна.'
+}
+
 function isManagementLeadershipTitle(title: string) {
   return /team[\s-]?lead|tech(?:nical)?[\s-]?lead|\blead[\s-]+(?:developer|engineer|front)|тим[\s-]?лид|тех[\s-]?лид|руководител|head[\s-]?of|\bcto\b|директор/i.test(title)
 }
@@ -320,6 +332,7 @@ export function AssistantPage() {
     : save.error?.message
   const activeRunID = submittedRunID ?? status.data?.run_id
   const aiCalls = status.data?.ai_calls
+  const skipCopy = assistantAISkipCopy(status.data ?? {})
   const aiPending = Math.max(
     0,
     (status.data?.ai_eligible ?? 0) - (status.data?.ai_succeeded ?? 0) - (status.data?.ai_failures ?? 0) - (status.data?.ai_skipped ?? 0),
@@ -454,9 +467,9 @@ export function AssistantPage() {
               При необходимости запустите новую ручную проверку.
             </Alert>
           )}
-          {aiCalls === 0 && status.data?.ai_skip_reason && (
+          {aiCalls === 0 && skipCopy && (
             <Alert severity="info">
-              {aiSkipReasonText[status.data.ai_skip_reason] ?? 'AI-анализ не выполнялся; причина недоступна.'}
+              {skipCopy}
             </Alert>
           )}
           <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключён; проверка по критериям ещё не запускалась.' : status.data?.state === 'never_run' ? 'Проверка ещё не запускалась.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала проверки.' : status.data?.state === 'running' ? (status.data?.ai_retries ? 'Проверка идёт; временные ошибки провайдера повторяются с задержкой.' : 'Проверка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.') : status.data?.state === 'paused' ? 'Проверка безопасно приостановлена и может быть продолжена тем же запуском.' : status.data?.state === 'superseded' ? 'Этот снимок завершён без изменения его исторических результатов.' : status.data?.state === 'unknown' || status.data?.ai_status === 'unknown' ? 'Статус старого запуска недоступен; данные показаны без предположений.' : status.data?.state === 'failed' ? 'Проверка по критериям завершилась с безопасной ошибкой; повторите запуск.' : status.data?.ai_status === 'completed' ? 'Проверка по критериям и AI-анализ завершены.' : status.data?.ai_status === 'partial' || status.data?.ai_status === 'failed' ? 'Проверка по критериям завершена; AI-анализ завершён частично или с ошибкой.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Проверка по критериям завершена.'}</Typography>

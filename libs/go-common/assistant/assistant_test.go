@@ -465,9 +465,12 @@ func (f *workerFake) Candidates(context.Context, string, time.Time, int) ([]Work
 	return f.candidates, nil
 }
 func (f *workerFake) SaveMatch(_ context.Context, match WorkerMatch) (bool, error) {
-	for _, existing := range f.matches {
+	for i, existing := range f.matches {
 		if existing.UserID == match.UserID && existing.VacancyID == match.VacancyID &&
-			existing.PreferenceVersion == match.PreferenceVersion {
+			existing.PreferenceVersion == match.PreferenceVersion &&
+			existing.VacancyRevision == match.VacancyRevision &&
+			existing.Method == match.Method {
+			f.matches[i] = match
 			return false, nil
 		}
 	}
@@ -809,6 +812,118 @@ func TestHardRejectNeverSentToAI(t *testing.T) {
 	}
 	if stats.AIHTTPAttempts != 1 || stats.AIBatches != 1 {
 		t.Fatalf("http/batch counters=%+v", stats)
+	}
+}
+
+func TestAlreadyAnalyzedSkipStillWritesFreshDeterministicDecisions(t *testing.T) {
+	activation := time.Now().UTC().Add(-time.Minute)
+	remote := true
+	fake := &aiWorkerFake{
+		workerFake: &workerFake{
+			users: []WorkerUser{{ID: "u1", Preference: PreferenceRecord{
+				Version: 2, HardCriteria: map[string]any{
+					"approved_roles": []any{"96"}, "specialization": "frontend",
+					"include_leadership": false, "remote_only": true,
+					"required_skills": []any{"React"},
+				},
+			}}},
+			candidates: []WorkerCandidate{{
+				ID: "senior-ic", ExternalID: "1", Source: "hh", Revision: 1, ObservedAt: time.Now().UTC(),
+				Title: "Ведущий фронтенд-разработчик (React)", Description: "Remote frontend product work.",
+				Vacancy: Vacancy{
+					ID: "senior-ic", Title: "Ведущий фронтенд-разработчик (React)", RoleIDs: []string{"96"},
+					Skills: []string{"React.js"}, IsRemote: &remote,
+				},
+			}},
+			matches: []WorkerMatch{{
+				UserID: "u1", VacancyID: "senior-ic", PreferenceVersion: 2, VacancyRevision: 1,
+				Result: Result{Decision: DecisionReject, Conflicts: []string{"role"}},
+			}},
+		},
+		settings: map[string]AutomationSettings{
+			"u1": {AIEnabled: true, ActivationAt: &activation},
+		},
+		jobs: map[string]MatchOutput{"u1senior-ic": {Decision: "reject"}},
+	}
+	provider := &recordingBatchProvider{}
+	stats, err := RunOnce(context.Background(), fake, WorkerOptions{
+		BatchSize: 1, AIProvider: provider, Now: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.AICalls != 0 || stats.AISkipped != 1 || stats.AISkipReason != "already_analyzed" {
+		t.Fatalf("expected same-ruleset AI skip, stats=%+v", stats)
+	}
+	if len(provider.ids) != 0 {
+		t.Fatalf("provider called for already-analyzed vacancy: %v", provider.ids)
+	}
+	if len(fake.matches) != 1 || fake.matches[0].Result.Decision != DecisionMatch {
+		t.Fatalf("deterministic decision was not rewritten: %+v", fake.matches)
+	}
+	if stats.Matched != 1 {
+		t.Fatalf("matched=%d", stats.Matched)
+	}
+}
+
+func TestRulesetMissSendsOnlyMatchAndReviewToAI(t *testing.T) {
+	activation := time.Now().UTC().Add(-time.Minute)
+	remote := true
+	fake := &aiWorkerFake{
+		workerFake: &workerFake{
+			users: []WorkerUser{{ID: "u1", Preference: PreferenceRecord{
+				Version: 2, HardCriteria: map[string]any{
+					"approved_roles": []any{"96"}, "specialization": "frontend",
+					"include_leadership": false, "remote_only": true,
+					"required_skills": []any{"React"},
+				},
+			}}},
+			candidates: []WorkerCandidate{
+				{
+					ID: "backend", ExternalID: "1", Source: "hh", Revision: 1, ObservedAt: time.Now().UTC(),
+					Title: "Backend Developer", Description: "Go services. Fully remote.",
+					Vacancy: Vacancy{
+						ID: "backend", Title: "Backend Developer", RoleIDs: []string{"96"},
+						Skills: []string{"Go"}, IsRemote: &remote,
+					},
+				},
+				{
+					ID: "senior-ic", ExternalID: "2", Source: "hh", Revision: 1, ObservedAt: time.Now().UTC(),
+					Title: "Ведущий фронтенд-разработчик (React)", Description: "Remote frontend product work.",
+					Vacancy: Vacancy{
+						ID: "senior-ic", Title: "Ведущий фронтенд-разработчик (React)", RoleIDs: []string{"96"},
+						Skills: []string{"React.js"}, IsRemote: &remote,
+					},
+				},
+				{
+					ID: "unknown-remote", ExternalID: "3", Source: "hh", Revision: 1, ObservedAt: time.Now().UTC(),
+					Title: "Frontend Developer (React)", Description: "Frontend product work.",
+					Vacancy: Vacancy{
+						ID: "unknown-remote", Title: "Frontend Developer (React)", RoleIDs: []string{"96"},
+						Skills: []string{"React"},
+					},
+				},
+			},
+		},
+		settings: map[string]AutomationSettings{
+			"u1": {AIEnabled: true, ActivationAt: &activation},
+		},
+	}
+	provider := &recordingBatchProvider{}
+	stats, err := RunOnce(context.Background(), fake, WorkerOptions{
+		BatchSize: 10, AIProvider: provider, Now: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.AISkipped == stats.Processed || stats.AISkipReason == "already_analyzed" {
+		t.Fatalf("ruleset miss skipped all AI: %+v", stats)
+	}
+	if len(provider.ids) != 2 || !contains(provider.ids, "senior-ic") || !contains(provider.ids, "unknown-remote") {
+		t.Fatalf("expected only match+review to reach AI, sent=%v stats=%+v", provider.ids, stats)
+	}
+	if fake.jobs["u1backend"].Decision != "reject" {
+		t.Fatalf("hard reject was sent or not stored: %+v", fake.jobs)
 	}
 }
 

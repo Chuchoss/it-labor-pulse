@@ -215,7 +215,8 @@ export interface AssistantStatus {
   ai_configured?: boolean
   ai_status: 'not_run' | 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'skipped' | 'unknown'
   ai_skip_reason?: 'server_disabled' | 'user_opt_out' | 'run_predates_ai' | 'no_eligible'
-    | 'budget_exhausted' | 'already_analyzed' | 'provider_unavailable' | 'preferences_changed' | 'unknown'
+    | 'budget_exhausted' | 'already_analyzed' | 'provider_unavailable' | 'preferences_changed'
+    | 'hard_reject' | 'unknown'
   state: 'never_run' | 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'disabled' | 'superseded' | 'unknown'
   started_at?: string
   finished_at?: string
@@ -257,6 +258,7 @@ export interface AssistantStatus {
   model?: string
   prompt_version?: string
   method_version?: string
+  ruleset_version?: string
   preference_version?: number
   current_preference_version?: number
   superseded_by_preference_version?: number

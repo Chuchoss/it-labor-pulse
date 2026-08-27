@@ -327,6 +327,124 @@ func TestPostgresAIResultExistsIsScopedToCurrentRuleset(t *testing.T) {
 	require.True(t, exists)
 }
 
+func TestPostgresRulesetBumpRecomputesDeterministicAndDoesNotSkipAll(t *testing.T) {
+	_ = godotenv.Load("../../../.env")
+	databaseURL := os.Getenv("ASSISTANT_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		databaseURL = os.Getenv("DATABASE_URL")
+	}
+	if databaseURL == "" {
+		t.Skip("ASSISTANT_TEST_DATABASE_URL or DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, databaseURL)
+	require.NoError(t, err)
+	defer conn.Close(context.Background())
+	repo := NewPostgresRepository(conn)
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID, err := repo.EnsureUser(ctx, "assistant-ruleset-bump-"+suffix)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = conn.Exec(context.Background(), `DELETE FROM assistant_users WHERE id=$1::uuid`, userID)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM vacancies WHERE source='hh' AND external_id LIKE $1`, "synthetic-ruleset-bump-"+suffix+"%")
+	}()
+	preference, err := repo.SavePreferences(ctx, userID, "ruleset-bump", PreferenceRecord{
+		HardCriteria: map[string]any{"approved_roles": []any{"96"}, "specialization": "frontend"},
+		SoftCriteria: map[string]any{}, Weights: map[string]float64{},
+	})
+	require.NoError(t, err)
+	insertVacancy := func(label string) string {
+		var id string
+		require.NoError(t, conn.QueryRow(ctx, `
+			INSERT INTO vacancies (source, external_id, title, collected_at, is_active)
+			VALUES ('hh', $1, 'Synthetic frontend', now(), true) RETURNING id::text
+		`, "synthetic-ruleset-bump-"+suffix+"-"+label).Scan(&id))
+		return id
+	}
+	matchID := insertVacancy("match")
+	reviewID := insertVacancy("review")
+	rejectID := insertVacancy("reject")
+	for _, vacancyID := range []string{matchID, reviewID, rejectID} {
+		_, err = conn.Exec(ctx, `
+			INSERT INTO assistant_ai_jobs
+				(user_id, preference_id, vacancy_id, vacancy_revision, status, provider, attempts, finished_at, ruleset_version)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, 1, 'complete', 'deepseek', 1, now(), 'assistant-hard-gates-v3')
+		`, userID, preference.ID, vacancyID)
+		require.NoError(t, err)
+		_, err = conn.Exec(ctx, `
+			INSERT INTO vacancy_match_results
+				(user_id, preference_id, vacancy_id, decision, method, score, rationale,
+				 evidence_ids, conflicts, unknowns, provider, model, prompt_version, vacancy_revision, ruleset_version)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, 'reject', 'ai', 0, 'legacy',
+				'[]'::jsonb, '[]'::jsonb, '[]'::jsonb, 'deepseek', 'deepseek-chat', 'batch-v7-id-list', 1, 'assistant-hard-gates-v3')
+		`, userID, preference.ID, vacancyID)
+		require.NoError(t, err)
+		_, err = conn.Exec(ctx, `
+			INSERT INTO vacancy_match_results
+				(user_id, preference_id, vacancy_id, decision, method, score, rationale,
+				 evidence_ids, conflicts, unknowns, vacancy_revision, ruleset_version)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, 'reject', 'deterministic', 0, 'legacy',
+				'[]'::jsonb, '[]'::jsonb, '[]'::jsonb, 1, 'assistant-hard-gates-v3')
+		`, userID, preference.ID, vacancyID)
+		require.NoError(t, err)
+		exists, existsErr := repo.AIResultExists(ctx, userID, preference.Version, vacancyID, 1)
+		require.NoError(t, existsErr)
+		require.False(t, exists, "complete v3 jobs must not skip the current ruleset")
+	}
+
+	created, err := repo.SaveMatch(ctx, WorkerMatch{
+		UserID: userID, VacancyID: matchID, PreferenceVersion: preference.Version, VacancyRevision: 1,
+		Result: Result{Decision: DecisionMatch, Score: .9, Reasons: []string{"specialization:frontend"}},
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+	_, err = repo.SaveMatch(ctx, WorkerMatch{
+		UserID: userID, VacancyID: reviewID, PreferenceVersion: preference.Version, VacancyRevision: 1,
+		Result: Result{Decision: DecisionReview, Score: .4, Unknowns: []string{"remote"}},
+	})
+	require.NoError(t, err)
+	_, err = repo.SaveMatch(ctx, WorkerMatch{
+		UserID: userID, VacancyID: rejectID, PreferenceVersion: preference.Version, VacancyRevision: 1,
+		Result: Result{Decision: DecisionReject, Score: 0, Conflicts: []string{"specialization:backend"}},
+	})
+	require.NoError(t, err)
+
+	matches, err := repo.ListMatches(ctx, userID, 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 2)
+	got := map[string]Decision{}
+	for _, item := range matches {
+		got[item.VacancyID] = item.Decision
+	}
+	require.Equal(t, DecisionMatch, got[matchID])
+	require.Equal(t, DecisionReview, got[reviewID])
+	_, listedReject := got[rejectID]
+	require.False(t, listedReject)
+
+	require.NoError(t, repo.SaveAIResult(ctx, WorkerMatch{
+		UserID: userID, VacancyID: matchID, PreferenceVersion: preference.Version,
+		VacancyRevision: 1, Method: "ai", Provider: "deepseek", Model: "deepseek-chat",
+		PromptVersion: "batch-v7-id-list",
+	}, MatchOutput{Decision: "match", Score: .9, Confidence: "high"}))
+	exists, err := repo.AIResultExists(ctx, userID, preference.Version, matchID, 1)
+	require.NoError(t, err)
+	require.True(t, exists)
+	var v3AI, v4AI int
+	require.NoError(t, conn.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE ruleset_version='assistant-hard-gates-v3' AND method='ai'),
+			count(*) FILTER (WHERE ruleset_version=$2 AND method='ai')
+		FROM vacancy_match_results
+		WHERE user_id=$1::uuid
+	`, userID, SpecializationRulesVersion).Scan(&v3AI, &v4AI))
+	require.Equal(t, 3, v3AI)
+	require.Equal(t, 1, v4AI)
+	listed, err := repo.ListMatches(ctx, userID, 10)
+	require.NoError(t, err)
+	require.Len(t, listed, 2)
+}
+
 func TestPostgresManualSnapshotScansEligibleVacanciesAndDeduplicatesOutbox(t *testing.T) {
 	_ = godotenv.Load("../../../.env")
 	databaseURL := os.Getenv("ASSISTANT_TEST_DATABASE_URL")

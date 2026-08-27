@@ -81,6 +81,7 @@ type AnalysisStatus struct {
 	Model                         *string    `json:"model,omitempty"`
 	PromptVersion                 *string    `json:"prompt_version,omitempty"`
 	MethodVersion                 string     `json:"method_version"`
+	RulesetVersion                string     `json:"ruleset_version,omitempty"`
 	PreferenceVersion             int        `json:"preference_version,omitempty"`
 	CurrentPreferenceVersion      int        `json:"current_preference_version,omitempty"`
 	SupersededByPreferenceVersion *int       `json:"superseded_by_preference_version,omitempty"`
@@ -294,7 +295,7 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 		skipped, error_category, request_id,
 		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version,
 		run_preference.version, current_preference.version, superseding_preference.version,
-		COALESCE(ar.superseded_from_state, ''),
+		COALESCE(ar.superseded_from_state, ''), ar.ruleset_version,
 		ar.worker_heartbeat_at, ar.worker_phase, ar.worker_retry_category, ar.worker_retry_until,
 		ar.worker_active_batches, ar.worker_concurrency
 		FROM assistant_runs ar
@@ -317,7 +318,7 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 		&s.Skipped, &s.ErrorCategory, &s.RequestID, &s.CursorSource,
 		&cursorAt, &s.PendingCandidates, &s.Provider, &s.Model, &s.PromptVersion,
 		&s.PreferenceVersion, &s.CurrentPreferenceVersion, &s.SupersededByPreferenceVersion,
-		&s.SupersededFromState, &s.WorkerHeartbeatAt, &s.WorkerPhase,
+		&s.SupersededFromState, &s.RulesetVersion, &s.WorkerHeartbeatAt, &s.WorkerPhase,
 		&s.WorkerRetryCategory, &s.WorkerRetryUntil, &s.WorkerActiveBatches, &s.WorkerConcurrency)
 	if errors.Is(err, pgx.ErrNoRows) {
 		s.State = "never_run"
@@ -1418,7 +1419,7 @@ func (r *PostgresRepository) SaveMatch(ctx context.Context, match WorkerMatch) (
 			NULLIF($16, '')::uuid, $17
 		FROM vacancy_preferences p
 		WHERE p.user_id = $1::uuid AND p.version = $9
-		ON CONFLICT (user_id, preference_id, vacancy_id, vacancy_revision, method, (COALESCE(provider, '')), (COALESCE(model, '')), (COALESCE(prompt_version, '')))
+		ON CONFLICT (user_id, preference_id, vacancy_id, vacancy_revision, method, ruleset_version, (COALESCE(provider, '')), (COALESCE(model, '')), (COALESCE(prompt_version, '')))
 		DO UPDATE SET
 			run_id = COALESCE(EXCLUDED.run_id, vacancy_match_results.run_id),
 			decision = EXCLUDED.decision,
@@ -1427,7 +1428,6 @@ func (r *PostgresRepository) SaveMatch(ctx context.Context, match WorkerMatch) (
 			evidence_ids = EXCLUDED.evidence_ids,
 			conflicts = EXCLUDED.conflicts,
 			unknowns = EXCLUDED.unknowns,
-			ruleset_version = EXCLUDED.ruleset_version,
 			input_snapshot_hash = COALESCE(EXCLUDED.input_snapshot_hash, vacancy_match_results.input_snapshot_hash)
 		RETURNING (xmax = 0)
 	`, match.UserID, match.VacancyID, string(match.Result.Decision), match.Result.Score,
@@ -1445,16 +1445,16 @@ func (r *PostgresRepository) SaveAIResult(ctx context.Context, match WorkerMatch
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO assistant_ai_jobs
 			(user_id, preference_id, vacancy_id, vacancy_revision, status, provider, model,
-			 input_snapshot_hash, attempts, finished_at)
-		SELECT $1::uuid, p.id, $2::uuid, $7, 'complete', $3, $4, $5, 1, now()
+			 input_snapshot_hash, attempts, finished_at, ruleset_version)
+		SELECT $1::uuid, p.id, $2::uuid, $7, 'complete', $3, $4, $5, 1, now(), $8
 		FROM vacancy_preferences p
 		WHERE p.user_id = $1::uuid AND p.version = $6
-		ON CONFLICT (user_id, preference_id, vacancy_id, vacancy_revision) DO UPDATE SET
+		ON CONFLICT (user_id, preference_id, vacancy_id, vacancy_revision, ruleset_version) DO UPDATE SET
 			status = EXCLUDED.status, provider = EXCLUDED.provider, model = EXCLUDED.model,
 			input_snapshot_hash = EXCLUDED.input_snapshot_hash, attempts = assistant_ai_jobs.attempts + 1,
 			error_code = NULL, finished_at = EXCLUDED.finished_at
 	`, match.UserID, match.VacancyID, match.Provider, match.Model, inputHash,
-		match.PreferenceVersion, max(match.VacancyRevision, 1))
+		match.PreferenceVersion, max(match.VacancyRevision, 1), SpecializationRulesVersion)
 	if err != nil {
 		return fmt.Errorf("save assistant AI job: %w", err)
 	}
@@ -1467,7 +1467,17 @@ func (r *PostgresRepository) SaveAIResult(ctx context.Context, match WorkerMatch
 			$9::jsonb, $10, $11, $12, $13, $15, NULLIF($16, '')::uuid, $17
 		FROM vacancy_preferences p
 		WHERE p.user_id = $1::uuid AND p.version = $14
-		ON CONFLICT DO NOTHING
+		ON CONFLICT (user_id, preference_id, vacancy_id, vacancy_revision, method, ruleset_version, (COALESCE(provider, '')), (COALESCE(model, '')), (COALESCE(prompt_version, '')))
+		DO UPDATE SET
+			run_id = COALESCE(EXCLUDED.run_id, vacancy_match_results.run_id),
+			decision = EXCLUDED.decision,
+			score = EXCLUDED.score,
+			confidence = EXCLUDED.confidence,
+			rationale = EXCLUDED.rationale,
+			evidence_ids = EXCLUDED.evidence_ids,
+			conflicts = EXCLUDED.conflicts,
+			unknowns = EXCLUDED.unknowns,
+			input_snapshot_hash = COALESCE(EXCLUDED.input_snapshot_hash, vacancy_match_results.input_snapshot_hash)
 	`, match.UserID, match.VacancyID, output.Decision, output.Score, output.Confidence,
 		output.Rationale, jsonArray(output.Evidence), jsonArray(output.Conflicts),
 		jsonArray(output.Unknowns), match.Provider, match.Model, match.PromptVersion, inputHash,
@@ -1497,6 +1507,7 @@ func (r *PostgresRepository) AIResultExists(
 			JOIN vacancy_preferences p ON p.id = j.preference_id
 			WHERE j.user_id = $1::uuid AND p.version = $2 AND j.vacancy_id = $3::uuid
 			  AND j.vacancy_revision = $4 AND j.status = 'failed' AND j.attempts >= 5
+			  AND j.ruleset_version = $5
 		)
 	`, userID, preferenceVersion, vacancyID, max(vacancyRevision, 1), SpecializationRulesVersion).Scan(&exists)
 	return exists, err
@@ -1506,15 +1517,15 @@ func (r *PostgresRepository) SaveAIFailure(ctx context.Context, match WorkerMatc
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO assistant_ai_jobs
 			(user_id, preference_id, vacancy_id, vacancy_revision, status, provider, model,
-			 input_snapshot_hash, attempts, error_code, finished_at)
-		SELECT $1::uuid, p.id, $2::uuid, $7, 'failed', $3, $4, $5, 1, $8, now()
+			 input_snapshot_hash, attempts, error_code, finished_at, ruleset_version)
+		SELECT $1::uuid, p.id, $2::uuid, $7, 'failed', $3, $4, $5, 1, $8, now(), $9
 		FROM vacancy_preferences p
 		WHERE p.user_id = $1::uuid AND p.version = $6
-		ON CONFLICT (user_id, preference_id, vacancy_id, vacancy_revision) DO UPDATE SET
+		ON CONFLICT (user_id, preference_id, vacancy_id, vacancy_revision, ruleset_version) DO UPDATE SET
 			status = 'failed', attempts = LEAST(assistant_ai_jobs.attempts + 1, 5),
 			error_code = EXCLUDED.error_code, finished_at = now()
 	`, match.UserID, match.VacancyID, match.Provider, match.Model, match.InputSnapshotHash,
-		match.PreferenceVersion, max(match.VacancyRevision, 1), errorCode)
+		match.PreferenceVersion, max(match.VacancyRevision, 1), errorCode, SpecializationRulesVersion)
 	return err
 }
 
