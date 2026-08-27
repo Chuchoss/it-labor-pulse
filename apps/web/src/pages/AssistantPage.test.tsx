@@ -211,21 +211,40 @@ describe('AssistantPage', () => {
     expect(hardCriteria.min_salary_rub).toBeUndefined()
   })
 
-  it('starts a full current-vacancy scan and shows meaningful progress', async () => {
-    let started = false
+  it('shows immediate feedback, submits once, polls progress and stops when finished', async () => {
+    let requests = 0
+    let runAccepted = false
+    let statusAfterRun = 0
+    let releaseRequest = () => {}
     useSupportingAssistantHandlers()
     server.use(
       http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
         id: 'preference-1', version: 1, note: '', hard_criteria: {},
         soft_criteria: {}, weights: {},
       })),
-      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
-        ai_configured: false, state: 'succeeded', processed: 25, total: 151,
-        eligible: 25, matched: 3, ai_calls: 0, ai_matches: 0, ai_failures: 0,
-        ai_skipped: 25, skipped: 22, pending_candidates: false,
-      })),
-      http.post('*/api/v1/assistant/analyze', () => {
-        started = true
+      http.get('*/api/v1/assistant/status', () => {
+        if (!runAccepted) return HttpResponse.json({
+          ai_configured: true, ai_status: 'completed', state: 'succeeded', processed: 25, total: 151,
+          eligible: 25, matched: 3, ai_calls: 0, ai_succeeded: 0, ai_matches: 0, ai_failures: 0,
+          ai_skipped: 25, skipped: 22, pending_candidates: false,
+        })
+        statusAfterRun += 1
+        if (statusAfterRun === 1) return HttpResponse.json({
+          ai_configured: true, ai_status: 'running', state: 'running', processed: 10, total: 22,
+          eligible: 10, matched: 1, ai_calls: 4, ai_succeeded: 3, ai_matches: 1, ai_failures: 1,
+          ai_skipped: 0, skipped: 9, pending_candidates: false, last_checked_at: '2026-08-27T01:00:00Z',
+        })
+        return HttpResponse.json({
+          ai_configured: true, ai_status: 'partial', state: 'succeeded', processed: 22, total: 22,
+          eligible: 22, matched: 2, ai_calls: 8, ai_succeeded: 7, ai_matches: 2, ai_failures: 1,
+          ai_skipped: 14, skipped: 20, pending_candidates: false,
+          finished_at: '2026-08-27T01:00:01Z', last_checked_at: '2026-08-27T01:00:01Z',
+        })
+      }),
+      http.post('*/api/v1/assistant/analyze', async () => {
+        requests += 1
+        await new Promise<void>((resolve) => { releaseRequest = resolve })
+        runAccepted = true
         return HttpResponse.json({ run_id: 'run-full', status: 'queued' }, { status: 202 })
       }),
     )
@@ -237,12 +256,52 @@ describe('AssistantPage', () => {
     expect(screen.getByText(/каждая подходящая вакансия может создать платный AI-запрос/i)).toBeInTheDocument()
     expect(screen.queryByText(/20.*запрос|лимит 20/i)).not.toBeInTheDocument()
     expect(screen.getByText(/AI-анализ: не выполнялся · Совпадения: — · Ошибки: 0 · Пропущено AI: 25/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Проверить текущие вакансии' }))
-    expect(screen.getByText(/снимка из 22 активных вакансий.*AI не запустится/i)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Подтвердить' }))
+    const runButton = screen.getByRole('button', { name: 'Проверить текущие вакансии' })
+    await user.click(runButton)
+    expect(screen.getByRole('button', { name: 'Подготавливаем список вакансий…' })).toBeDisabled()
+    expect(screen.getByText('Подготавливаем список вакансий…', { selector: 'p' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Подготавливаем список вакансий…' }))
+    expect(requests).toBe(1)
 
-    await waitFor(() => expect(started).toBe(true))
-    expect(await screen.findByText(/ID запуска: run-full/)).toBeInTheDocument()
+    releaseRequest()
+    expect(await screen.findByText(/10 из 22/)).toBeInTheDocument()
+    expect(screen.getByText(/AI: попыток 4 · Успешно 3 · Ошибок 1/)).toBeInTheDocument()
+    expect(await screen.findByText('Проверка завершена, но часть AI-запросов не удалась.')).toBeInTheDocument()
+    expect(screen.getByText(/22 из 22/)).toBeInTheDocument()
+    expect(requests).toBe(1)
+
+    const callsAtCompletion = statusAfterRun
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(statusAfterRun).toBe(callsAtCompletion)
+  }, 10_000)
+
+  it('resumes polling an active run after page refresh', async () => {
+    let statusCalls = 0
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        id: 'preference-1', version: 1, note: '', hard_criteria: {},
+        soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/status', () => {
+        statusCalls += 1
+        const done = statusCalls > 1
+        return HttpResponse.json({
+          ai_configured: true, ai_status: done ? 'completed' : 'running',
+          state: done ? 'succeeded' : 'running', processed: done ? 12 : 5, total: 12,
+          eligible: done ? 12 : 5, matched: done ? 2 : 1, ai_calls: done ? 12 : 5,
+          ai_succeeded: done ? 12 : 5, ai_matches: done ? 2 : 1, ai_failures: 0,
+          ai_skipped: 0, skipped: done ? 10 : 4, pending_candidates: false,
+        })
+      }),
+    )
+
+    renderPage(<AssistantPage />)
+    expect(await screen.findByText(/5 из 12/)).toBeInTheDocument()
+    expect(await screen.findByText(/12 из 12/)).toBeInTheDocument()
+    const callsAtCompletion = statusCalls
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(statusCalls).toBe(callsAtCompletion)
   })
 
   it('labels a historical deterministic-only run without false AI matches', async () => {

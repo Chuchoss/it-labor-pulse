@@ -9,6 +9,7 @@ import {
   Card,
   CardContent,
   Chip,
+  CircularProgress,
   Divider,
   FormControl,
   FormControlLabel,
@@ -20,7 +21,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, api } from '../api/client'
 
@@ -113,7 +114,17 @@ export function AssistantPage() {
   const client = useQueryClient()
   const preferences = useQuery({ queryKey: ['assistant-preferences'], queryFn: api.assistantPreferences })
   const preferenceList = useQuery({ queryKey: ['assistant-preference-list'], queryFn: api.assistantPreferenceList })
-  const status = useQuery({ queryKey: ['assistant-status'], queryFn: api.assistantStatus, refetchInterval: 3000 })
+  const status = useQuery({
+    queryKey: ['assistant-status'],
+    queryFn: api.assistantStatus,
+    refetchInterval: (query) => {
+      const current = query.state.data
+      return current?.state === 'queued' || current?.state === 'running'
+        || current?.ai_status === 'pending' || current?.ai_status === 'running'
+        ? (import.meta.env.MODE === 'test' ? 50 : 2000)
+        : false
+    },
+  })
   const analysisPreview = useQuery({ queryKey: ['assistant-analysis-preview'], queryFn: api.assistantAnalysisPreview })
   const matches = useQuery({ queryKey: ['assistant-matches'], queryFn: api.assistantMatches })
   const telegram = useQuery({ queryKey: ['telegram-status'], queryFn: api.telegramStatus })
@@ -127,7 +138,9 @@ export function AssistantPage() {
   const [minSalaryRUB, setMinSalaryRUB] = useState<string>()
   const [legacyRoleResolved, setLegacyRoleResolved] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
-  const [confirmAction, setConfirmAction] = useState<'archive' | 'run' | 'ai' | 'telegram' | 'test' | null>(null)
+  const [confirmAction, setConfirmAction] = useState<'archive' | 'ai' | 'telegram' | 'test' | null>(null)
+  const [submittedRunID, setSubmittedRunID] = useState<string>()
+  const runSubmissionRef = useRef(false)
   const noteValue = note ?? preferences.data?.note ?? ''
   const hardCriteriaValue = preferences.data?.hard_criteria ?? {}
   const softCriteriaValue = preferences.data?.soft_criteria ?? {}
@@ -184,11 +197,45 @@ export function AssistantPage() {
     void client.invalidateQueries({ queryKey: ['assistant-preferences'] })
     void client.invalidateQueries({ queryKey: ['assistant-preference-list'] })
   } })
-  const run = useMutation({ mutationFn: api.runAssistantAnalysis, onSuccess: () => {
-    setConfirmAction(null)
-    void client.invalidateQueries({ queryKey: ['assistant-status'] })
-    void client.invalidateQueries({ queryKey: ['assistant-matches'] })
-  } })
+  const run = useMutation({
+    mutationFn: api.runAssistantAnalysis,
+    onMutate: () => {
+      client.setQueryData<import('../api/types').AssistantStatus>(['assistant-status'], (current) => ({
+        ai_configured: current?.ai_configured ?? false,
+        ai_status: automation.data?.ai_enabled && (current?.ai_configured ?? false) ? 'pending' : 'skipped',
+        state: 'queued',
+        last_checked_at: new Date().toISOString(),
+        processed: 0,
+        total: analysisPreview.data?.snapshot_total ?? 0,
+        eligible: 0,
+        matched: 0,
+        ai_calls: 0,
+        ai_eligible: 0,
+        ai_succeeded: 0,
+        ai_matches: 0,
+        ai_failures: 0,
+        ai_skipped: 0,
+        skipped: 0,
+        pending_candidates: false,
+      }))
+    },
+    onSuccess: (result) => {
+      setSubmittedRunID(result.run_id)
+      void status.refetch()
+      void client.invalidateQueries({ queryKey: ['assistant-matches'] })
+    },
+    onError: () => {
+      void status.refetch()
+    },
+    onSettled: () => {
+      runSubmissionRef.current = false
+    },
+  })
+  const startRun = () => {
+    if (runSubmissionRef.current || run.isPending || status.data?.state === 'queued' || status.data?.state === 'running') return
+    runSubmissionRef.current = true
+    run.mutate()
+  }
   const updateAutomation = useMutation({
     mutationFn: (value: { ai_enabled?: boolean; telegram_enabled?: boolean }) => api.updateAssistantAutomation(value),
     onSuccess: () => void client.invalidateQueries({ queryKey: ['assistant-automation'] }),
@@ -232,13 +279,16 @@ export function AssistantPage() {
         </Stack>
       </CardContent></Card>
       <Card variant="outlined"><CardContent>
-        <Stack spacing={2}>
+        <Stack spacing={2} aria-live="polite" aria-busy={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'}>
           <Typography variant="h6">Статус анализа</Typography>
           <Stack direction="row" spacing={1}>
             <Chip label={status.data?.state ?? 'загрузка'} color={status.data?.state === 'succeeded' ? 'success' : status.data?.state === 'failed' ? 'error' : 'default'} />
             <Button size="small" onClick={() => void status.refetch()}>Обновить</Button>
           </Stack>
-          {status.data?.state === 'queued' && <Typography>Подготавливаем снимок всех текущих вакансий…</Typography>}
+          {(run.isPending || status.data?.state === 'queued') && <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <CircularProgress size={18} aria-hidden="true" />
+            <Typography>Подготавливаем список вакансий…</Typography>
+          </Stack>}
           {status.data?.state === 'running' && <Typography>Анализируем все текущие вакансии…</Typography>}
           <Typography>
             Проверено по критериям: {status.data?.processed ?? 0}
@@ -247,16 +297,31 @@ export function AssistantPage() {
           <Typography>
             {(status.data?.ai_calls ?? 0) === 0
               ? 'AI-анализ: не выполнялся · Совпадения: —'
-              : `AI-вызовы: ${status.data?.ai_calls ?? 0} · Успешно: ${status.data?.ai_succeeded ?? 0} · Совпадения: ${status.data?.ai_matches ?? 0}`}
-            {' · '}Ошибки: {status.data?.ai_failures ?? 0} · Пропущено AI: {status.data?.ai_skipped ?? 0}
+              : `AI: попыток ${status.data?.ai_calls ?? 0} · Успешно ${status.data?.ai_succeeded ?? 0} · Ошибок ${status.data?.ai_failures ?? 0} · Совпадений ${status.data?.ai_matches ?? 0}`}
+            {(status.data?.ai_calls ?? 0) === 0 && ` · Ошибки: ${status.data?.ai_failures ?? 0}`}
+            {' · '}Пропущено AI: {status.data?.ai_skipped ?? 0}
           </Typography>
           {(status.data?.ai_calls ?? 0) === 0 && status.data?.ai_skip_reason && (
             <Alert severity="info">{aiSkipReasonText[status.data.ai_skip_reason]}</Alert>
           )}
           <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключён; проверка по критериям ещё не запускалась.' : status.data?.state === 'never_run' ? 'Проверка ещё не запускалась.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала проверки.' : status.data?.state === 'running' ? 'Проверка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.' : status.data?.state === 'failed' ? 'Проверка по критериям завершилась с безопасной ошибкой; повторите запуск.' : status.data?.ai_status === 'completed' ? 'Проверка по критериям и AI-анализ завершены.' : status.data?.ai_status === 'partial' || status.data?.ai_status === 'failed' ? 'Проверка по критериям завершена; AI-анализ завершён частично или с ошибкой.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Проверка по критериям завершена.'}</Typography>
           {status.data?.finished_at && <Typography variant="body2">Последний анализ: {new Date(status.data.finished_at).toLocaleString('ru-RU')}</Typography>}
-          <Button variant="contained" disabled={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'} onClick={() => setConfirmAction('run')}>Проверить текущие вакансии</Button>
-          {run.data && <Alert severity="info">Поставлено в очередь. ID запуска: {run.data.run_id}</Alert>}
+          {status.data?.last_checked_at && <Typography variant="caption" color="text.secondary">
+            Обновлено: {new Date(status.data.last_checked_at).toLocaleTimeString('ru-RU')}
+          </Typography>}
+          <Button variant="contained" disabled={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'} onClick={startRun}>
+            {run.isPending ? 'Подготавливаем список вакансий…' : 'Проверить текущие вакансии'}
+          </Button>
+          {submittedRunID && (status.data?.state === 'queued' || status.data?.state === 'running') && (
+            <Alert severity="info">Проверка запущена. Прогресс обновляется автоматически.</Alert>
+          )}
+          {submittedRunID && status.data?.state === 'succeeded' && (
+            <Alert severity={status.data.ai_status === 'partial' || status.data.ai_status === 'failed' ? 'warning' : 'success'}>
+              {status.data.ai_status === 'partial' || status.data.ai_status === 'failed'
+                ? 'Проверка завершена, но часть AI-запросов не удалась.'
+                : 'Проверка вакансий завершена.'}
+            </Alert>
+          )}
           {run.isError && <Alert severity="error">Не удалось запустить анализ: {run.error.message}</Alert>}
         </Stack>
       </CardContent></Card>
@@ -403,13 +468,7 @@ export function AssistantPage() {
       {confirmAction && <div role="dialog" aria-label="Подтверждение действия">
         <Typography>{confirmAction === 'archive'
           ? 'Архивировать текущую версию? Она останется в истории, совпадения не удаляются.'
-          : confirmAction === 'run'
-            ? !status.data?.ai_configured
-              ? `Запустить проверку снимка из ${analysisPreview.data?.snapshot_total ?? 'неизвестного числа'} активных вакансий по критериям? AI не запустится: внешний провайдер выключен на сервере.`
-              : !automation.data?.ai_enabled
-                ? `Запустить проверку снимка из ${analysisPreview.data?.snapshot_total ?? 'неизвестного числа'} активных вакансий по критериям? AI не запустится: автоматический AI-анализ не включён пользователем.`
-                : `Запустить проверку снимка из ${analysisPreview.data?.snapshot_total ?? 'неизвестного числа'} активных вакансий и AI-анализ описаний? Каждая вакансия может создать платный запрос; лимита количества нет.`
-            : confirmAction === 'ai'
+          : confirmAction === 'ai'
               ? `${automation.data?.ai_enabled ? 'Выключить' : 'Включить'} автоматический AI-анализ? Внешний провайдер может расходовать средства; исторические вакансии не будут обработаны.`
               : confirmAction === 'test'
                 ? 'Внимание: будет отправлено одно реальное сообщение в подтверждённый Telegram-чат. Продолжить?'
@@ -417,7 +476,6 @@ export function AssistantPage() {
         <Button onClick={() => setConfirmAction(null)}>Отмена</Button>
         <Button onClick={() => {
           if (confirmAction === 'archive') void archive.mutate()
-          else if (confirmAction === 'run') void run.mutate()
           else if (confirmAction === 'ai') void updateAutomation.mutate({ ai_enabled: !automation.data?.ai_enabled })
           else if (confirmAction === 'telegram') void updateAutomation.mutate({ telegram_enabled: !automation.data?.telegram_enabled })
           else if (confirmAction === 'test') void testTelegram.mutate()
