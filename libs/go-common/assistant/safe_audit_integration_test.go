@@ -5,6 +5,7 @@ package assistant
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -209,4 +210,214 @@ func TestSafeCurrentFrontendAudit(t *testing.T) {
 		legacyVisible["deterministic_nonlead"], legacyVisible["ai_frontend"],
 		legacyVisible["ai_backend"], legacyVisible["ai_fullstack"], legacyVisible["ai_other"],
 		legacyVisible["ai_unknown"], legacyVisible["ai_lead"], legacyVisible["ai_nonlead"])
+}
+
+func TestSafeRunDecisionAudit(t *testing.T) {
+	runID := os.Getenv("ASSISTANT_SAFE_AUDIT_RUN_ID")
+	if os.Getenv("ASSISTANT_SAFE_AUDIT") != "1" || runID == "" {
+		t.Skip("safe run audit not requested")
+	}
+	_ = godotenv.Load("../../../.env")
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repo := NewPostgresRepository(pool)
+
+	var run AssistantRun
+	var state string
+	var cursorAt *time.Time
+	var specialization string
+	var includeLeadership, remoteOnly, notePresent bool
+	var approvedRoles, regions, requiredSkills, excludedSkills int
+	err = pool.QueryRow(ctx, `
+		SELECT r.id::text, r.user_id::text, r.preference_id::text, r.snapshot_cutoff,
+		       r.snapshot_total, r.processed, r.snapshot_cursor_created_at,
+		       COALESCE(r.snapshot_cursor_vacancy_id::text, ''), r.state,
+		       COALESCE(p.hard_criteria->>'specialization', ''),
+		       COALESCE((p.hard_criteria->>'include_leadership')::boolean, false),
+		       COALESCE((p.hard_criteria->>'remote_only')::boolean, false),
+		       NULLIF(BTRIM(p.note), '') IS NOT NULL,
+		       COALESCE(jsonb_array_length(p.hard_criteria->'approved_roles'), 0),
+		       COALESCE(jsonb_array_length(p.hard_criteria->'regions'), 0),
+		       COALESCE(jsonb_array_length(p.hard_criteria->'required_skills'), 0),
+		       COALESCE(jsonb_array_length(p.hard_criteria->'excluded_skills'), 0)
+		FROM assistant_runs r
+		JOIN vacancy_preferences p ON p.id=r.preference_id
+		WHERE r.id=$1::uuid
+	`, runID).Scan(&run.ID, &run.UserID, &run.PreferenceID, &run.SnapshotCutoff,
+		&run.Total, &run.Processed, &cursorAt, &run.CursorVacancyID, &state,
+		&specialization, &includeLeadership, &remoteOnly, &notePresent,
+		&approvedRoles, &regions, &requiredSkills, &excludedSkills)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.CursorCreatedAt = cursorAt
+	users, err := repo.UsersForAssistantRun(ctx, run)
+	if err != nil || len(users) != 1 {
+		t.Fatalf("load snapshotted preference: users=%d err=%v", len(users), err)
+	}
+	t.Logf("SAFE_RUN state=%s processed=%d total=%d specialization=%s include_leadership=%t remote_only=%t note_present=%t approved_roles=%d regions=%d required_skills=%d excluded_skills=%d",
+		state, run.Processed, run.Total, specialization, includeLeadership, remoteOnly, notePresent,
+		approvedRoles, regions, requiredSkills, excludedSkills)
+
+	auditRun := run
+	auditRun.CursorCreatedAt = nil
+	auditRun.CursorVacancyID = ""
+	p := toPreferences(users[0].Preference)
+	counts := map[string]int{}
+	done := false
+	for !done {
+		candidates, candidateErr := repo.SnapshotCandidates(ctx, auditRun, 100)
+		if candidateErr != nil {
+			t.Fatal(candidateErr)
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		for _, candidate := range candidates {
+			if cursorAt != nil && (candidate.CreatedAt.After(*cursorAt) ||
+				(candidate.CreatedAt.Equal(*cursorAt) && strings.Compare(candidate.ID, run.CursorVacancyID) > 0)) {
+				done = true
+				break
+			}
+			result := Match(candidate.Vacancy, p, time.Now().UTC())
+			counts["decision_"+string(result.Decision)]++
+			for _, conflict := range result.Conflicts {
+				switch {
+				case conflict == "role":
+					counts["reason_role"]++
+				case strings.HasPrefix(conflict, "specialization:"):
+					counts["reason_specialization"]++
+				case conflict == "leadership_excluded":
+					counts["reason_leadership"]++
+				case conflict == "remote_only":
+					counts["reason_remote"]++
+				case conflict == "minimum_salary":
+					counts["reason_salary"]++
+				case strings.HasPrefix(conflict, "excluded_skill:"):
+					counts["reason_skills"]++
+				case conflict == "region":
+					counts["reason_region"]++
+				}
+			}
+		}
+		last := candidates[len(candidates)-1]
+		auditRun.CursorCreatedAt = &last.CreatedAt
+		auditRun.CursorVacancyID = last.ID
+	}
+	t.Logf("SAFE_DETERMINISTIC match=%d review=%d reject=%d role=%d specialization=%d leadership=%d remote=%d salary=%d skills=%d region=%d",
+		counts["decision_match"], counts["decision_review"], counts["decision_reject"],
+		counts["reason_role"], counts["reason_specialization"], counts["reason_leadership"],
+		counts["reason_remote"], counts["reason_salary"], counts["reason_skills"], counts["reason_region"])
+
+	var aiMatch, aiReview, aiReject, parsedResults, completeJobs, failedJobs, invalidJobs int
+	err = pool.QueryRow(ctx, `
+		WITH scope AS (
+			SELECT v.id, v.analysis_revision
+			FROM vacancies v
+			WHERE v.created_at <= $2
+			  AND ($3::timestamptz IS NULL OR (v.created_at, v.id) <= ($3, NULLIF($4, '')::uuid))
+		), results AS (
+			SELECT m.decision
+			FROM vacancy_match_results m JOIN scope s
+			  ON s.id=m.vacancy_id AND s.analysis_revision=m.vacancy_revision
+			WHERE m.preference_id=$1::uuid AND m.method='ai'
+		), jobs AS (
+			SELECT j.status, j.error_code
+			FROM assistant_ai_jobs j JOIN scope s
+			  ON s.id=j.vacancy_id AND s.analysis_revision=j.vacancy_revision
+			WHERE j.preference_id=$1::uuid
+		)
+		SELECT
+			count(*) FILTER (WHERE decision='match'),
+			count(*) FILTER (WHERE decision='review'),
+			count(*) FILTER (WHERE decision='reject'),
+			count(*),
+			(SELECT count(*) FROM jobs WHERE status='complete'),
+			(SELECT count(*) FROM jobs WHERE status='failed'),
+			(SELECT count(*) FROM jobs WHERE status='failed' AND error_code='invalid_response')
+		FROM results
+	`, run.PreferenceID, run.SnapshotCutoff, cursorAt, run.CursorVacancyID).
+		Scan(&aiMatch, &aiReview, &aiReject, &parsedResults, &completeJobs, &failedJobs, &invalidJobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_AI parsed_match=%d parsed_review=%d parsed_reject=%d parsed_total=%d provider_complete_jobs=%d final_failed_jobs=%d invalid_jobs=%d missing_parsed_for_complete=%d",
+		aiMatch, aiReview, aiReject, parsedResults, completeJobs, failedJobs, invalidJobs, completeJobs-parsedResults)
+}
+
+func TestControlledLiveSemanticFixtures(t *testing.T) {
+	if os.Getenv("ASSISTANT_LIVE_FIXTURES") != "1" {
+		t.Skip("controlled live fixtures not requested")
+	}
+	_ = godotenv.Load("../../../.env")
+	cfg := LoadConfig()
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+	provider, err := NewDeepSeek(DeepSeekConfig{
+		APIKey: cfg.DeepSeekAPIKey, BaseURL: cfg.DeepSeekBaseURL, Model: cfg.DeepSeekModel,
+		Timeout: cfg.Timeout, MaxTokens: 5000, MaxAttempts: 1, MaxBatchSize: 5,
+		MaxConcurrency: 1, InputTokenBudget: 30000,
+	}, nil)
+	if err != nil {
+		t.Fatal("provider configuration unavailable")
+	}
+	evidence := map[string]bool{"vacancy:title": true, "vacancy:description": true, "preferences": true}
+	fixtures := []struct {
+		id, title, description, want string
+	}{
+		{"frontend-ic-remote", "Frontend Developer", "Individual contributor. React and TypeScript. Fully remote.", "match"},
+		{"backend", "Backend Developer", "Server-side Go and PostgreSQL. Fully remote.", "reject"},
+		{"fullstack", "Fullstack Developer", "Frontend and backend ownership. React and Go. Fully remote.", "reject"},
+		{"lead", "Frontend Team Lead", "Leads a frontend team. React and TypeScript. Fully remote.", "reject"},
+		{"frontend-ambiguous", "Software Developer", "Web product development; exact specialization and remote format are not stated.", "review"},
+	}
+	items := make([]BatchItem, 0, len(fixtures))
+	for _, fixture := range fixtures {
+		items = append(items, BatchItem{
+			ID: fixture.id,
+			InputSnapshot: MinimizedInput(fixture.title, fixture.description, map[string]string{
+				"requested_specialization": "frontend",
+				"include_leadership":       "false",
+			}, evidence),
+			Evidence: evidence,
+		})
+	}
+	result, err := provider.CompleteBatchDetailed(ctx, BatchRequest{
+		SharedPreferences: `{"hard_criteria":{"approved_roles":["96"],"specialization":"frontend","include_leadership":false,"remote_only":true,"required_skills":["react"]}}`,
+		Items:             items,
+	})
+	if err != nil {
+		t.Fatalf("controlled live batch failed: category=%s", providerErrorCategory(err))
+	}
+	if result.Stats.HTTPAttempts != 1 {
+		t.Fatalf("controlled live batch used %d HTTP attempts", result.Stats.HTTPAttempts)
+	}
+	for _, fixture := range fixtures {
+		got, ok := result.Outputs[fixture.id]
+		if !ok || got.Decision != fixture.want {
+			t.Errorf("fixture=%s decision=%s want=%s", fixture.id, got.Decision, fixture.want)
+		}
+	}
+	t.Logf("SAFE_LIVE_FIXTURES http_attempts=%d match=%d review=%d reject=%d",
+		result.Stats.HTTPAttempts, countFixtureDecisions(result.Outputs, "match"),
+		countFixtureDecisions(result.Outputs, "review"), countFixtureDecisions(result.Outputs, "reject"))
+}
+
+func countFixtureDecisions(outputs map[string]MatchOutput, decision string) int {
+	count := 0
+	for _, output := range outputs {
+		if output.Decision == decision {
+			count++
+		}
+	}
+	return count
 }

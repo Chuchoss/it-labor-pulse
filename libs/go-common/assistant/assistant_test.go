@@ -548,7 +548,7 @@ func (f *queuedWorkerFake) SnapshotCandidates(_ context.Context, run AssistantRu
 func (f *queuedWorkerFake) UpdateAssistantRunProgress(context.Context, string, WorkerStats, *WorkerCandidate) error {
 	return nil
 }
-func (f *queuedWorkerFake) HeartbeatAssistantRun(context.Context, string, string, string, *time.Time) error {
+func (f *queuedWorkerFake) HeartbeatAssistantRun(context.Context, string, string, string, *time.Time, int, int) error {
 	f.beats.Add(1)
 	return nil
 }

@@ -30,11 +30,13 @@ const assistantAIStates = new Set([
 ])
 const assistantCounterFields = [
   'processed', 'total', 'eligible', 'matched', 'ai_calls', 'ai_eligible', 'ai_succeeded',
-  'ai_matches', 'ai_failures', 'ai_skipped', 'ai_http_attempts', 'ai_retries', 'ai_batches',
+  'ai_matches', 'ai_reviews', 'ai_rejects', 'ai_failures', 'ai_skipped',
+  'ai_http_attempts', 'ai_retries', 'ai_batches',
   'ai_prompt_tokens', 'ai_completion_tokens', 'ai_cached_tokens', 'ai_rate_limit', 'ai_timeouts',
   'ai_invalid_responses', 'ai_auth', 'ai_quota', 'ai_server', 'ai_network', 'ai_context_limit',
   'ai_content_filter', 'ai_invalid_request', 'skipped',
   'preference_version', 'current_preference_version', 'superseded_by_preference_version',
+  'worker_active_batches', 'worker_concurrency',
 ] as const
 
 function asRecord(value: unknown): Record<string, unknown> {

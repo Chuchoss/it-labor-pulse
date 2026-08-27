@@ -67,11 +67,14 @@ deterministic assessment дал `reject`; такой результат хран
 
 Количество AI-вакансий не ограничивается ни на запуск, ни на пользователя в
 час. Worker объединяет ещё не обработанные вакансии одной версии preferences в
-адаптивные пакеты: максимум 5 и не более настроенного оценочного token budget.
+адаптивные пакеты: обычно максимум 15 (жёсткий предел 20) и не более настроенного
+оценочного token budget. До трёх HTTP-пакетов выполняются параллельно.
 Общий контекст и preferences передаются один раз на пакет; каждое решение
 сохраняется отдельно. Это осознанный cost-risk. Оператор управляет расходами
 остановкой единственного worker, снятием `-allow-external`, отключением
 `ASSISTANT_AI_ENABLED`/`ASSISTANT_AI_LIVE_TEST` или пользовательского opt-in.
+Контроллер уменьшает concurrency после 429, timeout, context-limit или
+некорректного ответа и медленно восстанавливает её после успешных волн.
 Ограничение batch size и provider rate limiting управляют пропускной
 способностью, но не общим числом вакансий. Идемпотентность AI:
 `(user, preference, vacancy, vacancy_revision)`; provider failures повторяются
@@ -83,6 +86,12 @@ deterministic assessment дал `reject`; такой результат хран
 AI `reject|review` скрывает предварительное совпадение из положительного списка,
 а `match` становится `confirmed`. Telegram при включённом AI ставится в очередь
 только после AI `match`.
+
+AI получает только `hard_criteria`; свободная заметка и дополнительные пожелания
+не превращаются в обязательные условия. Неизвестные salary/remote/region/skills
+дают `review`, если известные данные не опровергают hard-критерий. Для строгого
+Frontend ясный Frontend IC может дать `match`, Backend/Fullstack и leadership
+при `include_leadership=false` дают `reject`.
 
 Batch-ответ — JSON-объект с ровно одним решением на каждый opaque
 `vacancy_id`. Duplicate/unknown ID отклоняет пакет; missing item остаётся

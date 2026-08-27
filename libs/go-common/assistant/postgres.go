@@ -51,6 +51,8 @@ type AnalysisStatus struct {
 	AIEligible                    int        `json:"ai_eligible"`
 	AISucceeded                   int        `json:"ai_succeeded"`
 	AIMatches                     int        `json:"ai_matches"`
+	AIReviews                     int        `json:"ai_reviews"`
+	AIRejects                     int        `json:"ai_rejects"`
 	AIFailures                    int        `json:"ai_failures"`
 	AISkipped                     int        `json:"ai_skipped"`
 	AIHTTPAttempts                int        `json:"ai_http_attempts"`
@@ -87,6 +89,8 @@ type AnalysisStatus struct {
 	WorkerPhase                   string     `json:"worker_phase,omitempty"`
 	WorkerRetryCategory           *string    `json:"worker_retry_category,omitempty"`
 	WorkerRetryUntil              *time.Time `json:"worker_retry_until,omitempty"`
+	WorkerActiveBatches           int        `json:"worker_active_batches"`
+	WorkerConcurrency             int        `json:"worker_concurrency"`
 	WorkerOffline                 bool       `json:"worker_offline"`
 	WorkerStalled                 bool       `json:"worker_stalled"`
 }
@@ -104,6 +108,8 @@ type AssistantRun struct {
 	AIEligible                                                   int
 	AISucceeded                                                  int
 	AIMatches                                                    int
+	AIReviews                                                    int
+	AIRejects                                                    int
 	AIFailures                                                   int
 	AISkipped                                                    int
 	AIHTTPAttempts, AIRetries, AIBatches                         int
@@ -124,7 +130,7 @@ type AssistantRunStore interface {
 }
 
 type AssistantRunHeartbeatStore interface {
-	HeartbeatAssistantRun(context.Context, string, string, string, *time.Time) error
+	HeartbeatAssistantRun(context.Context, string, string, string, *time.Time, int, int) error
 }
 
 type AssistantRunControlStore interface {
@@ -274,7 +280,7 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 	var cursorAt *time.Time
 	err := r.db.QueryRow(ctx, `SELECT ar.id::text, ar.state, ar.started_at, ar.finished_at, ar.last_checked_at,
 		processed, snapshot_total, eligible, matched, ai_calls, ai_eligible, ai_succeeded,
-		ai_matches, ai_failures, ai_skipped, ai_status, ai_skip_reason,
+		ai_matches, ai_reviews, ai_rejects, ai_failures, ai_skipped, ai_status, ai_skip_reason,
 		ai_http_attempts, ai_retries, ai_batches, ai_prompt_tokens, ai_completion_tokens, ai_cached_tokens,
 		ai_rate_limit, ai_timeouts, ai_invalid_responses,
 		ai_auth, ai_quota, ai_server, ai_network, ai_context_limit, ai_content_filter, ai_invalid_request,
@@ -282,7 +288,8 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version,
 		run_preference.version, current_preference.version, superseding_preference.version,
 		COALESCE(ar.superseded_from_state, ''),
-		ar.worker_heartbeat_at, ar.worker_phase, ar.worker_retry_category, ar.worker_retry_until
+		ar.worker_heartbeat_at, ar.worker_phase, ar.worker_retry_category, ar.worker_retry_until,
+		ar.worker_active_batches, ar.worker_concurrency
 		FROM assistant_runs ar
 		JOIN vacancy_preferences run_preference ON run_preference.id=ar.preference_id
 		JOIN LATERAL (
@@ -295,7 +302,7 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 		WHERE ar.user_id = $1::uuid ORDER BY ar.created_at DESC LIMIT 1`, userID).Scan(
 		&s.RunID, &s.State, &s.StartedAt, &s.FinishedAt, &s.LastCheckedAt, &s.Processed, &s.Total, &s.Eligible,
 		&s.Matched, &s.AICalls, &s.AIEligible, &s.AISucceeded,
-		&s.AIMatches, &s.AIFailures, &s.AISkipped, &s.AIStatus, &s.AISkipReason,
+		&s.AIMatches, &s.AIReviews, &s.AIRejects, &s.AIFailures, &s.AISkipped, &s.AIStatus, &s.AISkipReason,
 		&s.AIHTTPAttempts, &s.AIRetries, &s.AIBatches, &s.AIPromptTokens, &s.AICompletionTokens,
 		&s.AICachedTokens, &s.AIRateLimit, &s.AITimeouts, &s.AIInvalidResponses,
 		&s.AIAuth, &s.AIQuota, &s.AIServer, &s.AINetwork, &s.AIContextLimit, &s.AIContentFilter,
@@ -304,7 +311,7 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 		&cursorAt, &s.PendingCandidates, &s.Provider, &s.Model, &s.PromptVersion,
 		&s.PreferenceVersion, &s.CurrentPreferenceVersion, &s.SupersededByPreferenceVersion,
 		&s.SupersededFromState, &s.WorkerHeartbeatAt, &s.WorkerPhase,
-		&s.WorkerRetryCategory, &s.WorkerRetryUntil)
+		&s.WorkerRetryCategory, &s.WorkerRetryUntil, &s.WorkerActiveBatches, &s.WorkerConcurrency)
 	if errors.Is(err, pgx.ErrNoRows) {
 		s.State = "never_run"
 		s.AIStatus = "not_run"
@@ -404,14 +411,15 @@ func (r *PostgresRepository) ClaimAssistantRun(ctx context.Context) (AssistantRu
 		)
 		RETURNING id::text, user_id::text, preference_id::text, snapshot_cutoff,
 			snapshot_total, processed, eligible, matched, ai_calls, ai_eligible, ai_succeeded,
-			ai_matches, ai_failures, ai_skipped, skipped, ai_status, COALESCE(ai_skip_reason, ''),
+			ai_matches, ai_reviews, ai_rejects, ai_failures, ai_skipped, skipped, ai_status, COALESCE(ai_skip_reason, ''),
 			ai_http_attempts, ai_retries, ai_batches, ai_prompt_tokens, ai_completion_tokens, ai_cached_tokens,
 			ai_rate_limit, ai_timeouts, ai_invalid_responses,
 			ai_auth, ai_quota, ai_server, ai_network, ai_context_limit, ai_content_filter, ai_invalid_request,
 			snapshot_cursor_created_at, COALESCE(snapshot_cursor_vacancy_id::text, '')
 	`).Scan(&run.ID, &run.UserID, &run.PreferenceID, &run.SnapshotCutoff, &run.Total,
 		&run.Processed, &run.Eligible, &run.Matched, &run.AICalls, &run.AIEligible,
-		&run.AISucceeded, &run.AIMatches, &run.AIFailures, &run.AISkipped, &run.Skipped,
+		&run.AISucceeded, &run.AIMatches, &run.AIReviews, &run.AIRejects,
+		&run.AIFailures, &run.AISkipped, &run.Skipped,
 		&run.AIStatus, &run.AISkipReason,
 		&run.AIHTTPAttempts, &run.AIRetries, &run.AIBatches, &run.AIPromptTokens,
 		&run.AICompletionTokens, &run.AICachedTokens, &run.AIRateLimit, &run.AITimeouts,
@@ -510,6 +518,7 @@ func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, st
 			ai_quota=$22, ai_server=$23, ai_network=$24, ai_context_limit=$25,
 			ai_content_filter=$26, ai_invalid_request=$27, ai_batches=$28,
 			ai_prompt_tokens=$29, ai_completion_tokens=$30, ai_cached_tokens=$31,
+			ai_reviews=$32, ai_rejects=$33, worker_active_batches=0,
 			worker_heartbeat_at=now(), worker_phase='idle',
 			worker_retry_category=NULL, worker_retry_until=NULL
 		WHERE id = $1::uuid AND state='running'
@@ -519,7 +528,8 @@ func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, st
 		stats.AIHTTPAttempts, stats.AIRetries, stats.AIRateLimit, stats.AITimeouts,
 		stats.AIInvalidResponses, stats.AIAuth, stats.AIQuota, stats.AIServer, stats.AINetwork,
 		stats.AIContextLimit, stats.AIContentFilter, stats.AIInvalidRequest, stats.AIBatches,
-		stats.AIPromptTokens, stats.AICompletionTokens, stats.AICachedTokens)
+		stats.AIPromptTokens, stats.AICompletionTokens, stats.AICachedTokens,
+		stats.AIReviews, stats.AIRejects)
 	if err != nil {
 		return fmt.Errorf("complete assistant run: %w", err)
 	}
@@ -530,6 +540,7 @@ func (r *PostgresRepository) HeartbeatAssistantRun(
 	ctx context.Context,
 	runID, phase, retryCategory string,
 	retryUntil *time.Time,
+	activeBatches, concurrency int,
 ) error {
 	switch phase {
 	case "processing", "provider_request", "backoff", "stopping":
@@ -540,9 +551,10 @@ func (r *PostgresRepository) HeartbeatAssistantRun(
 		UPDATE assistant_runs
 		SET worker_heartbeat_at=now(), worker_phase=$2,
 			worker_retry_category=NULLIF($3, ''), worker_retry_until=$4,
+			worker_active_batches=$5, worker_concurrency=$6,
 			lease_until=now() + interval '10 minutes'
 		WHERE id=$1::uuid AND state='running'
-	`, runID, phase, retryCategory, retryUntil)
+	`, runID, phase, retryCategory, retryUntil, max(activeBatches, 0), max(concurrency, 0))
 	if err != nil {
 		return fmt.Errorf("heartbeat assistant run: %w", err)
 	}
@@ -1088,7 +1100,8 @@ func (r *PostgresRepository) UpdateAssistantRunProgress(
 			ai_rate_limit=$18, ai_timeouts=$19, ai_invalid_responses=$20, ai_auth=$21,
 			ai_quota=$22, ai_server=$23, ai_network=$24, ai_context_limit=$25,
 			ai_content_filter=$26, ai_invalid_request=$27, ai_batches=$28,
-			ai_prompt_tokens=$29, ai_completion_tokens=$30, ai_cached_tokens=$31
+			ai_prompt_tokens=$29, ai_completion_tokens=$30, ai_cached_tokens=$31,
+			ai_reviews=$32, ai_rejects=$33
 		WHERE id=$1::uuid AND state='running'
 	`, runID, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls,
 		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, cursorAt, cursorID,
@@ -1096,7 +1109,8 @@ func (r *PostgresRepository) UpdateAssistantRunProgress(
 		stats.AIHTTPAttempts, stats.AIRetries, stats.AIRateLimit, stats.AITimeouts,
 		stats.AIInvalidResponses, stats.AIAuth, stats.AIQuota, stats.AIServer, stats.AINetwork,
 		stats.AIContextLimit, stats.AIContentFilter, stats.AIInvalidRequest, stats.AIBatches,
-		stats.AIPromptTokens, stats.AICompletionTokens, stats.AICachedTokens)
+		stats.AIPromptTokens, stats.AICompletionTokens, stats.AICachedTokens,
+		stats.AIReviews, stats.AIRejects)
 	if err != nil {
 		return fmt.Errorf("update assistant run progress: %w", err)
 	}

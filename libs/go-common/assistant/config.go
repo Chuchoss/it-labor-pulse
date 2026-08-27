@@ -12,6 +12,7 @@ type Config struct {
 	DeepSeekAPIKey, DeepSeekBaseURL, DeepSeekModel, TelegramBotToken string
 	BatchSize                                                        int
 	AIMaxBatchSize, AIInputTokenBudget, AIMaxOutputTokens            int
+	AIConcurrency                                                    int
 	Timeout                                                          time.Duration
 }
 
@@ -26,9 +27,10 @@ func LoadConfig() Config {
 		DeepSeekModel:      strings.TrimSpace(os.Getenv("DEEPSEEK_MODEL")),
 		TelegramBotToken:   strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
 		BatchSize:          envInt("ASSISTANT_BATCH_SIZE", 25, 1, 100),
-		AIMaxBatchSize:     envInt("ASSISTANT_AI_MAX_BATCH_SIZE", 5, 1, 25),
-		AIInputTokenBudget: envInt("ASSISTANT_AI_INPUT_TOKEN_BUDGET", 24000, 4000, 900000),
-		AIMaxOutputTokens:  envInt("ASSISTANT_AI_MAX_OUTPUT_TOKENS", 3500, 700, 10000),
+		AIMaxBatchSize:     envInt("ASSISTANT_AI_MAX_BATCH_SIZE", 15, 1, 20),
+		AIConcurrency:      envInt("ASSISTANT_AI_CONCURRENCY", 3, 1, 4),
+		AIInputTokenBudget: envInt("ASSISTANT_AI_INPUT_TOKEN_BUDGET", 60000, 4000, 900000),
+		AIMaxOutputTokens:  envInt("ASSISTANT_AI_MAX_OUTPUT_TOKENS", 12000, 700, 40000),
 		Timeout:            time.Duration(envInt("ASSISTANT_TIMEOUT_SEC", 90, 10, 300)) * time.Second,
 	}
 }

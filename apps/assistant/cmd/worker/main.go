@@ -176,18 +176,21 @@ func main() {
 		provider, err := assistant.NewDeepSeek(assistant.DeepSeekConfig{
 			APIKey: cfg.DeepSeekAPIKey, BaseURL: cfg.DeepSeekBaseURL,
 			Model: cfg.DeepSeekModel, Timeout: cfg.Timeout, MaxTokens: cfg.AIMaxOutputTokens,
-			MaxAttempts: 3, MinInterval: time.Second,
-			MaxBatchSize: cfg.AIMaxBatchSize, InputTokenBudget: cfg.AIInputTokenBudget,
+			MaxAttempts: 3, MinInterval: 250 * time.Millisecond,
+			MaxBatchSize: cfg.AIMaxBatchSize, MaxConcurrency: cfg.AIConcurrency,
+			InputTokenBudget: cfg.AIInputTokenBudget,
 		}, providerClient)
 		if err != nil {
 			log.Error("assistant_worker_ai_config_failed", "kind", "provider_not_configured")
 			os.Exit(1)
 		}
 		opts.AIProvider = provider
-		if opts.BatchSize > cfg.AIMaxBatchSize {
-			opts.BatchSize = cfg.AIMaxBatchSize
+		minimumPage := cfg.AIMaxBatchSize * cfg.AIConcurrency
+		if opts.BatchSize < minimumPage {
+			opts.BatchSize = min(minimumPage, 100)
 		}
-		log.Warn("assistant_worker_external_ai_enabled", "request_count", "unlimited")
+		log.Warn("assistant_worker_external_ai_enabled", "request_count", "unlimited",
+			"max_batch_size", cfg.AIMaxBatchSize, "max_concurrency", cfg.AIConcurrency)
 	}
 	if *probeExternal {
 		detailed, ok := opts.AIProvider.(assistant.DetailedAIProvider)

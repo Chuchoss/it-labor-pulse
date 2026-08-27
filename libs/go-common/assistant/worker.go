@@ -102,7 +102,8 @@ type WorkerOptions struct {
 
 type WorkerStats struct {
 	Users, Processed, Eligible, Matched, Notified, Skipped, AICalls int
-	AIEligible, AISucceeded, AIMatches, AIFailures, AISkipped       int
+	AIEligible, AISucceeded, AIMatches, AIReviews, AIRejects        int
+	AIFailures, AISkipped                                           int
 	AIHTTPAttempts, AIRetries, AIBatches                            int
 	AIPromptTokens, AICompletionTokens, AICachedTokens              int
 	AIRateLimit, AITimeouts, AIInvalidResponses, AIAuth             int
@@ -183,7 +184,8 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 				Users: len(users), RunID: claimedRunID, Processed: run.Processed,
 				Eligible: run.Eligible, Matched: run.Matched, AICalls: run.AICalls, Skipped: run.Skipped,
 				AIEligible: run.AIEligible, AISucceeded: run.AISucceeded,
-				AIMatches: run.AIMatches, AIFailures: run.AIFailures, AISkipped: run.AISkipped,
+				AIMatches: run.AIMatches, AIReviews: run.AIReviews, AIRejects: run.AIRejects,
+				AIFailures: run.AIFailures, AISkipped: run.AISkipped,
 				AIHTTPAttempts: run.AIHTTPAttempts, AIRetries: run.AIRetries,
 				AIBatches: run.AIBatches, AIPromptTokens: run.AIPromptTokens,
 				AICompletionTokens: run.AICompletionTokens, AICachedTokens: run.AICachedTokens,
@@ -313,6 +315,7 @@ func startRunHeartbeat(
 			beatCtx, beatCancel := context.WithTimeout(context.WithoutCancel(heartbeatCtx), 5*time.Second)
 			err := heartbeat.HeartbeatAssistantRun(
 				beatCtx, runID, current.Phase, current.RetryCategory, current.RetryUntil,
+				current.ActiveBatches, current.Concurrency,
 			)
 			beatCancel()
 			if err != nil && log != nil {
@@ -464,7 +467,7 @@ func processCandidates(
 			match := WorkerMatch{
 				UserID: user.ID, VacancyID: candidate.ID, PreferenceVersion: user.Preference.Version,
 				VacancyRevision: candidate.Revision, Result: result, Method: "ai", Provider: "deepseek",
-				PromptVersion: "batch-v3-specialization", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
+				PromptVersion: "batch-v4-hard-semantics", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
 			}
 			jobs = append(jobs, aiJob{
 				candidate: candidate, user: user, match: match, shared: shared, settings: settings,
@@ -560,6 +563,10 @@ func processAIJobs(
 					}
 				}
 			}
+		} else if output.Decision == string(DecisionReview) {
+			stats.AIReviews++
+		} else if output.Decision == string(DecisionReject) {
+			stats.AIRejects++
 		}
 		return nil
 	}
@@ -684,7 +691,7 @@ func finalizeAIStats(stats *WorkerStats) {
 }
 
 func preferenceSnapshot(p PreferenceRecord) string {
-	value := map[string]any{"note": p.Note, "hard_criteria": p.HardCriteria}
+	value := map[string]any{"hard_criteria": p.HardCriteria}
 	data, _ := json.Marshal(value)
 	return string(data)
 }

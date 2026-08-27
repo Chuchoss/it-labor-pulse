@@ -319,6 +319,13 @@ export function AssistantPage() {
   const averageBatch = aiCalls !== undefined && aiBatchCount !== undefined && aiBatchCount > 0
     ? (aiCalls / aiBatchCount).toFixed(1)
     : '—'
+  const elapsedMinutes = status.data?.started_at && status.data?.last_checked_at
+    ? Math.max((new Date(status.data.last_checked_at).getTime() - new Date(status.data.started_at).getTime()) / 60000, 1 / 60)
+    : 0
+  const throughput = elapsedMinutes > 0 ? (status.data?.processed ?? 0) / elapsedMinutes : 0
+  const remainingMinutes = throughput > 0
+    ? Math.ceil(Math.max(0, (status.data?.total ?? 0) - (status.data?.processed ?? 0)) / throughput)
+    : null
   const aiFailureSummary = [
     ['ограничение скорости', status.data?.ai_rate_limit],
     ['таймауты', status.data?.ai_timeouts],
@@ -392,14 +399,21 @@ export function AssistantPage() {
             Проверено по критериям: {metric(status.data?.processed)} из {metric(status.data?.total)}
             {' · '}Предварительно подходят: {metric(status.data?.matched)}
             {' · '}Ожидают AI: {aiPending}
-            {' · '}Подтверждено AI: {aiCalls === 0 ? '—' : metric(status.data?.ai_matches)}
+            {' · '}Подтверждено AI: {aiCalls === 0 ? '—' : status.data?.state === 'running' && status.data?.ai_matches === 0 ? 'пока 0' : metric(status.data?.ai_matches)}
           </Typography>
+          {(status.data?.state === 'running' || status.data?.state === 'paused') && (
+            <Typography variant="body2" color="text.secondary">
+              Скорость: {throughput > 0 ? throughput.toFixed(1) : '—'} вакансий/мин
+              {' · '}Активные пакеты: {status.data?.worker_active_batches ?? 0} из {status.data?.worker_concurrency ?? '—'}
+              {' · '}Осталось: {status.data?.state === 'paused' ? 'приостановлено' : remainingMinutes === null ? 'считаем' : `около ${remainingMinutes} мин`}
+            </Typography>
+          )}
           <Typography>
             {aiCalls === undefined
               ? 'AI-анализ: телеметрия недоступна · Совпадения: —'
               : aiCalls === 0
               ? 'AI-анализ: не выполнялся · Совпадения: —'
-              : `AI проверено: ${metric(status.data?.ai_succeeded)} вакансий · DeepSeek HTTP-запросов: ${metric(status.data?.ai_http_attempts)} · Средний пакет: ${averageBatch} · Повторы: ${metric(status.data?.ai_retries)} · Ошибки: ${metric(status.data?.ai_failures)} · Совпадения: ${metric(status.data?.ai_matches)}`}
+              : `AI проверено: ${metric(status.data?.ai_succeeded)} вакансий · match: ${metric(status.data?.ai_matches)} · review: ${metric(status.data?.ai_reviews)} · reject: ${metric(status.data?.ai_rejects)} · DeepSeek HTTP-запросов: ${metric(status.data?.ai_http_attempts)} · Средний пакет: ${averageBatch} · Повторы: ${metric(status.data?.ai_retries)} · Ошибки: ${metric(status.data?.ai_failures)}`}
             {aiCalls === 0 && ` · Ошибки: ${metric(status.data?.ai_failures)}`}
             {' · '}Пропущено AI: {metric(status.data?.ai_skipped)}
           </Typography>
@@ -611,7 +625,9 @@ export function AssistantPage() {
           <Typography variant="h6">Результаты</Typography>
           {matches.isLoading && <Typography>Загрузка…</Typography>}
           {matches.isError && <Alert severity="warning">Assistant API пока не подключён.</Alert>}
-          {matches.data?.length === 0 && <Typography color="text.secondary">Новых совпадений нет.</Typography>}
+          {matches.data?.length === 0 && <Typography color="text.secondary">
+            {status.data?.state === 'running' ? 'Подтверждено на текущем этапе: 0.' : 'Новых совпадений нет.'}
+          </Typography>}
           {(matches.data?.some((match) => match.stage === 'confirmed')) && <Typography sx={{ fontWeight: 700 }}>Подтверждено AI</Typography>}
           {matches.data?.filter((match) => match.stage === 'confirmed').map((match, index) => <Stack key={`confirmed-${match.vacancy_id ?? 'unknown'}-${index}`} spacing={0.5}>
             <Typography sx={{ fontWeight: 700 }}>

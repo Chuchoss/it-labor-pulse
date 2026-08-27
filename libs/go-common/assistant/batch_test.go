@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -49,7 +50,7 @@ func TestProviderHangIsBoundedAndObservable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	activities := make(chan ProviderActivity, 1)
+	activities := make(chan ProviderActivity, 2)
 	provider.SetActivityObserver(func(activity ProviderActivity) { activities <- activity })
 	started := time.Now()
 	result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{
@@ -204,4 +205,144 @@ func TestDeepSeekBatchSplitsDuplicateUnknownAndMissingOutputs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProductionBatchPromptSemanticFixtures(t *testing.T) {
+	expected := map[string]string{
+		"frontend-ic-remote": "match",
+		"backend":            "reject",
+		"fullstack":          "reject",
+		"lead":               "reject",
+		"frontend-ambiguous": "review",
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+			return
+		}
+		if len(payload.Messages) != 2 || payload.Messages[0].Content != batchSystemPrompt {
+			t.Error("production system prompt was not used")
+			return
+		}
+		var user struct {
+			Preferences string `json:"preferences"`
+			Vacancies   []struct {
+				ID string `json:"vacancy_id"`
+			} `json:"vacancies"`
+		}
+		if err := json.Unmarshal([]byte(payload.Messages[1].Content), &user); err != nil {
+			t.Error(err)
+			return
+		}
+		if strings.Contains(user.Preferences, "optional wish") {
+			t.Error("optional note leaked into mandatory AI preferences")
+		}
+		decisions := make([]map[string]any, 0, len(user.Vacancies))
+		for _, vacancy := range user.Vacancies {
+			decisions = append(decisions, map[string]any{
+				"vacancy_id": vacancy.ID, "decision": expected[vacancy.ID], "score": .8,
+				"confidence": "high", "evidence_ids": []string{"vacancy:title"},
+			})
+		}
+		content, _ := json.Marshal(map[string]any{"decisions": decisions})
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
+			"message": map[string]any{"content": string(content)}, "finish_reason": "stop",
+		}}})
+	}))
+	defer server.Close()
+	provider, err := NewDeepSeek(DeepSeekConfig{
+		APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1,
+		MaxBatchSize: 15, MaxConcurrency: 3, MaxTokens: 12000,
+	}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := make([]BatchItem, 0, len(expected))
+	for id := range expected {
+		items = append(items, BatchItem{
+			ID: id, InputSnapshot: "VACANCY_DATA_BEGIN\nsynthetic fixture\nVACANCY_DATA_END",
+			Evidence: map[string]bool{"vacancy:title": true},
+		})
+	}
+	result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{
+		SharedPreferences: `{"hard_criteria":{"specialization":"frontend","include_leadership":false,"remote_only":true}}`,
+		Items:             items,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, decision := range expected {
+		if result.Outputs[id].Decision != decision {
+			t.Fatalf("%s: got %q, want %q", id, result.Outputs[id].Decision, decision)
+		}
+	}
+}
+
+func TestBatchThroughputSmokeHundredVacancies(t *testing.T) {
+	run := func(maxBatch, concurrency int) (requests int64, maxActive int64, elapsed time.Duration) {
+		var active atomic.Int64
+		var peak atomic.Int64
+		var calls atomic.Int64
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			current := active.Add(1)
+			defer active.Add(-1)
+			for current > peak.Load() && !peak.CompareAndSwap(peak.Load(), current) {
+			}
+			time.Sleep(15 * time.Millisecond)
+			var payload struct {
+				Messages []struct {
+					Content string `json:"content"`
+				} `json:"messages"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			var user struct {
+				Vacancies []struct {
+					ID string `json:"vacancy_id"`
+				} `json:"vacancies"`
+			}
+			_ = json.Unmarshal([]byte(payload.Messages[1].Content), &user)
+			decisions := make([]map[string]any, 0, len(user.Vacancies))
+			for _, vacancy := range user.Vacancies {
+				decisions = append(decisions, map[string]any{
+					"vacancy_id": vacancy.ID, "decision": "review", "score": .5,
+					"confidence": "medium", "evidence_ids": []string{},
+				})
+			}
+			content, _ := json.Marshal(map[string]any{"decisions": decisions})
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
+				"message": map[string]any{"content": string(content)}, "finish_reason": "stop",
+			}}})
+		}))
+		defer server.Close()
+		provider, _ := NewDeepSeek(DeepSeekConfig{
+			APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1,
+			MaxBatchSize: maxBatch, MaxConcurrency: concurrency, MaxTokens: 40000,
+		}, server.Client())
+		items := make([]BatchItem, 100)
+		for i := range items {
+			items[i] = BatchItem{ID: strconv.Itoa(i), InputSnapshot: "synthetic"}
+		}
+		start := time.Now()
+		result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{Items: items})
+		if err != nil || len(result.Outputs) != 100 {
+			t.Fatalf("outputs=%d err=%v", len(result.Outputs), err)
+		}
+		return calls.Load(), peak.Load(), time.Since(start)
+	}
+	beforeRequests, _, beforeElapsed := run(5, 1)
+	afterRequests, afterPeak, afterElapsed := run(15, 3)
+	if beforeRequests != 20 || afterRequests != 7 {
+		t.Fatalf("requests before=%d after=%d", beforeRequests, afterRequests)
+	}
+	if afterPeak < 2 || afterElapsed >= beforeElapsed {
+		t.Fatalf("peak=%d elapsed before=%s after=%s", afterPeak, beforeElapsed, afterElapsed)
+	}
+	t.Logf("BENCHMARK_100 before_requests=%d after_requests=%d before_ms=%d after_ms=%d peak_concurrency=%d",
+		beforeRequests, afterRequests, beforeElapsed.Milliseconds(), afterElapsed.Milliseconds(), afterPeak)
 }

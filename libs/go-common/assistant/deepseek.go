@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,6 +35,8 @@ type ProviderActivity struct {
 	Phase         string
 	RetryCategory string
 	RetryUntil    *time.Time
+	ActiveBatches int
+	Concurrency   int
 }
 
 type ObservableAIProvider interface {
@@ -93,6 +96,7 @@ type DeepSeekConfig struct {
 	MaxAttempts            int
 	MinInterval            time.Duration
 	MaxBatchSize           int
+	MaxConcurrency         int
 	InputTokenBudget       int
 }
 
@@ -103,6 +107,7 @@ type DeepSeek struct {
 	next       time.Time
 	observerMu sync.RWMutex
 	observer   func(ProviderActivity)
+	active     atomic.Int64
 }
 
 func NewDeepSeek(cfg DeepSeekConfig, client *http.Client) (*DeepSeek, error) {
@@ -122,8 +127,8 @@ func NewDeepSeek(cfg DeepSeekConfig, client *http.Client) (*DeepSeek, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 20 * time.Second
 	}
-	if cfg.MaxTokens <= 0 || cfg.MaxTokens > 10000 {
-		cfg.MaxTokens = 3500
+	if cfg.MaxTokens <= 0 || cfg.MaxTokens > 40000 {
+		cfg.MaxTokens = 12000
 	}
 	if cfg.MaxAttempts < 1 || cfg.MaxAttempts > 5 {
 		cfg.MaxAttempts = 3
@@ -131,8 +136,11 @@ func NewDeepSeek(cfg DeepSeekConfig, client *http.Client) (*DeepSeek, error) {
 	if cfg.MinInterval < 0 {
 		cfg.MinInterval = 0
 	}
-	if cfg.MaxBatchSize < 1 || cfg.MaxBatchSize > 25 {
+	if cfg.MaxBatchSize < 1 || cfg.MaxBatchSize > 20 {
 		cfg.MaxBatchSize = defaultAIBatchSize
+	}
+	if cfg.MaxConcurrency < 1 || cfg.MaxConcurrency > 4 {
+		cfg.MaxConcurrency = 3
 	}
 	if cfg.InputTokenBudget < 4000 {
 		cfg.InputTokenBudget = defaultAIInputTokenBudget
@@ -153,7 +161,6 @@ func (d *DeepSeek) CompleteDetailed(ctx context.Context, input Request) (MatchOu
 	stats := ProviderCallStats{}
 	var lastErr error
 	for attempt := 1; attempt <= d.cfg.MaxAttempts; attempt++ {
-		d.notifyActivity(ProviderActivity{Phase: "provider_request"})
 		if err := d.waitForSlot(ctx); err != nil {
 			stats.Category = ProviderErrorCanceled
 			stats.Latency = time.Since(started)
@@ -181,6 +188,7 @@ func (d *DeepSeek) CompleteDetailed(ctx context.Context, input Request) (MatchOu
 		retryUntil := time.Now().Add(delay)
 		d.notifyActivity(ProviderActivity{
 			Phase: "backoff", RetryCategory: category, RetryUntil: &retryUntil,
+			ActiveBatches: int(d.active.Load()), Concurrency: d.cfg.MaxConcurrency,
 		})
 		if err := sleepContext(ctx, delay); err != nil {
 			stats.Category = ProviderErrorCanceled
@@ -226,7 +234,9 @@ func (d *DeepSeek) completeOnce(ctx context.Context, input Request) (MatchOutput
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+d.cfg.APIKey)
+	finishActivity := d.beginProviderRequest()
 	resp, err := d.client.Do(req)
+	finishActivity()
 	if err != nil {
 		category := ProviderErrorNetwork
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -271,6 +281,23 @@ func (d *DeepSeek) completeOnce(ctx context.Context, input Request) (MatchOutput
 		return MatchOutput{}, 0, &ProviderError{Category: ProviderErrorInvalidResponse}
 	}
 	return output, 0, nil
+}
+
+func (d *DeepSeek) beginProviderRequest() func() {
+	active := int(d.active.Add(1))
+	d.notifyActivity(ProviderActivity{
+		Phase: "provider_request", ActiveBatches: active, Concurrency: d.cfg.MaxConcurrency,
+	})
+	return func() {
+		active := int(d.active.Add(-1))
+		phase := "processing"
+		if active > 0 {
+			phase = "provider_request"
+		}
+		d.notifyActivity(ProviderActivity{
+			Phase: phase, ActiveBatches: active, Concurrency: d.cfg.MaxConcurrency,
+		})
+	}
 }
 
 func (d *DeepSeek) waitForSlot(ctx context.Context) error {

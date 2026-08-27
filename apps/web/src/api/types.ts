@@ -228,6 +228,8 @@ export interface AssistantStatus {
   ai_eligible?: number
   ai_succeeded?: number
   ai_matches?: number
+  ai_reviews?: number
+  ai_rejects?: number
   ai_failures?: number
   ai_skipped?: number
   ai_http_attempts?: number
@@ -263,6 +265,8 @@ export interface AssistantStatus {
   worker_phase?: 'idle' | 'processing' | 'provider_request' | 'backoff' | 'stopping'
   worker_retry_category?: string
   worker_retry_until?: string
+  worker_active_batches?: number
+  worker_concurrency?: number
   worker_offline: boolean
   worker_stalled: boolean
 }
