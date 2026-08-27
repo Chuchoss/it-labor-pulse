@@ -51,15 +51,16 @@ type analysisPreviewRepository interface {
 }
 
 type assistantPreferencesPayload struct {
-	ID                 string             `json:"id,omitempty"`
-	Version            int                `json:"version"`
-	Note               string             `json:"note"`
-	HardCriteria       map[string]any     `json:"hard_criteria"`
-	SoftCriteria       map[string]any     `json:"soft_criteria"`
-	Weights            map[string]float64 `json:"weights"`
-	ActiveFrom         *time.Time         `json:"active_from,omitempty"`
-	ArchivedAt         *time.Time         `json:"archived_at,omitempty"`
-	LegacyRoleUpgraded bool               `json:"legacy_role_upgraded,omitempty"`
+	ID                             string             `json:"id,omitempty"`
+	Version                        int                `json:"version"`
+	Note                           string             `json:"note"`
+	HardCriteria                   map[string]any     `json:"hard_criteria"`
+	SoftCriteria                   map[string]any     `json:"soft_criteria"`
+	Weights                        map[string]float64 `json:"weights"`
+	ActiveFrom                     *time.Time         `json:"active_from,omitempty"`
+	ArchivedAt                     *time.Time         `json:"archived_at,omitempty"`
+	LegacyRoleUpgraded             bool               `json:"legacy_role_upgraded,omitempty"`
+	LegacySpecializationSuggestion string             `json:"legacy_specialization_suggestion,omitempty"`
 }
 
 type assistantHandler struct {
@@ -192,7 +193,7 @@ func (h *assistantHandler) status(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.opts.Repository == nil {
 		writeJSON(w, 200, assistant.AnalysisStatus{
-			State: "disabled", AIStatus: "not_run", MethodVersion: "deterministic-v1",
+			State: "disabled", AIStatus: "not_run", MethodVersion: assistant.SpecializationRulesVersion,
 		})
 		return
 	}
@@ -524,6 +525,7 @@ func preferencePayload(value assistant.PreferenceRecord) assistantPreferencesPay
 	return assistantPreferencesPayload{
 		ID: value.ID, Version: value.Version, Note: value.Note, HardCriteria: value.HardCriteria,
 		SoftCriteria: value.SoftCriteria, Weights: value.Weights, ActiveFrom: &value.ActiveFrom, ArchivedAt: value.ArchivedAt,
-		LegacyRoleUpgraded: value.LegacyRoleUpgraded,
+		LegacyRoleUpgraded:             value.LegacyRoleUpgraded,
+		LegacySpecializationSuggestion: string(value.LegacySpecializationSuggestion),
 	}
 }

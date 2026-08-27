@@ -161,6 +161,18 @@ Slug ролей — канон в PG (`go-developer`), в API часто удо�
 - alias lookup выполняется до upsert, поэтому одна vacancy × canonical
   language даёт одну строку `vacancy_skills`.
 
+### Специализация assistant (`specialization-v1`, Phase 4)
+
+- официальный HH role `96` задаёт только широкий developer scope;
+- специализация определяется по word-boundary aliases: сначала title, затем
+  key skills, затем очищенное description;
+- `fullstack` проверяется до frontend/backend; конфликтующие или общие
+  developer-сигналы дают `unknown` и решение `review`;
+- `104` или явный team/tech lead, head, руководитель/тимлид задаёт leadership;
+  слово `leading` само по себе не является leadership;
+- strict Frontend отклоняет Backend-only и Fullstack, а leadership отклоняется,
+  если `include_leadership=false`.
+
 ---
 
 ## Region

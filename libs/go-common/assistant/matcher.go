@@ -11,14 +11,16 @@ import (
 )
 
 type Preferences struct {
-	ApprovedRoles  []string
-	MinSalaryRUB   *float64
-	Regions        []string
-	RemoteOnly     bool
-	RequiredSkills []string
-	ExcludedSkills []string
-	MaxAge         time.Duration
-	Weights        Weights
+	ApprovedRoles     []string
+	Specialization    Specialization
+	IncludeLeadership bool
+	MinSalaryRUB      *float64
+	Regions           []string
+	RemoteOnly        bool
+	RequiredSkills    []string
+	ExcludedSkills    []string
+	MaxAge            time.Duration
+	Weights           Weights
 }
 
 type Weights struct {
@@ -28,6 +30,7 @@ type Weights struct {
 type Vacancy struct {
 	ID, Title, RoleID, RegionID string
 	RoleIDs                     []string
+	Description                 string
 	SalaryRUB                   *float64
 	Skills                      []string
 	IsRemote                    *bool
@@ -79,6 +82,17 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 		r.Decision = DecisionReject
 		return r
 	}
+	classification := ClassifyVacancy(v)
+	if classification.Leadership && !p.IncludeLeadership {
+		r.Decision = DecisionReject
+		r.Conflicts = append(r.Conflicts, "leadership_excluded")
+		r.Evidence = append(r.Evidence, "leadership:"+classification.Evidence)
+		return r
+	}
+	if classification.Leadership && p.IncludeLeadership {
+		r.Reasons = append(r.Reasons, "leadership_allowed")
+		r.Evidence = append(r.Evidence, "leadership:"+classification.Evidence)
+	}
 	if len(p.ApprovedRoles) > 0 {
 		if len(v.RoleIDs) == 0 {
 			r.Unknowns = append(r.Unknowns, "role")
@@ -89,6 +103,23 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 		} else {
 			r.Reasons = append(r.Reasons, "approved_role")
 			r.Evidence = append(r.Evidence, "role")
+		}
+	}
+	if p.Specialization != "" {
+		switch {
+		case classification.Specialization == SpecializationUnknown:
+			r.Unknowns = append(r.Unknowns, "specialization")
+		case classification.Specialization != p.Specialization:
+			r.Decision = DecisionReject
+			r.Conflicts = append(r.Conflicts, "specialization:"+string(classification.Specialization))
+			r.Evidence = append(r.Evidence, "specialization:"+classification.Evidence)
+			return r
+		case classification.Confidence == "low":
+			r.Unknowns = append(r.Unknowns, "specialization_description_only")
+			r.Evidence = append(r.Evidence, "specialization:description")
+		default:
+			r.Reasons = append(r.Reasons, "specialization:"+string(p.Specialization))
+			r.Evidence = append(r.Evidence, "specialization:"+classification.Evidence)
 		}
 	}
 	if p.MinSalaryRUB != nil {

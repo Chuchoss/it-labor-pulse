@@ -67,6 +67,7 @@ describe('AssistantPage', () => {
     expect(await screen.findByText('Разработчик')).toBeInTheDocument()
     expect(screen.getByText('Москва')).toBeInTheDocument()
     expect(screen.getByText('React')).toBeInTheDocument()
+    expect(screen.getByText(/«Разработчик» — широкая роль HeadHunter/)).toBeInTheDocument()
     expect(screen.queryByText(/Устаревший критерий роли/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Жёсткие критерии|JSON только|Мягкие критерии|matcher использует/)).not.toBeInTheDocument()
     expect(screen.queryByText(/role:|approved_roles|required_skills|min_salary_rub/)).not.toBeInTheDocument()
@@ -75,6 +76,8 @@ describe('AssistantPage', () => {
     await user.type(regionInput, 'Санкт-Петербург{Enter}')
     const skillsInput = screen.getByRole('combobox', { name: 'Обязательные навыки' })
     await user.type(skillsInput, 'TypeScript{Enter}')
+    await user.click(screen.getByRole('combobox', { name: 'Специализация' }))
+    await user.click(await screen.findByRole('option', { name: 'Frontend' }))
     const salaryInput = screen.getByRole('spinbutton', { name: 'Минимальная зарплата, ₽' })
     await user.clear(salaryInput)
     await user.type(salaryInput, '200000')
@@ -89,6 +92,8 @@ describe('AssistantPage', () => {
     expect(requestMethod).toBe('PATCH')
     expect(requestBody.hard_criteria).toEqual({
       approved_roles: ['96'],
+      specialization: 'frontend',
+      include_leadership: false,
       regions: ['Москва', 'Санкт-Петербург'],
       required_skills: ['React', 'TypeScript'],
       excluded_skills: ['PHP'],
@@ -196,6 +201,8 @@ describe('AssistantPage', () => {
 
     await user.type(screen.getByRole('combobox', { name: 'Роли' }), 'Разработчик')
     await user.click(await screen.findByRole('option', { name: 'Разработчик' }))
+    await user.click(screen.getByRole('combobox', { name: 'Специализация' }))
+    await user.click(await screen.findByRole('option', { name: 'Frontend' }))
     const salaryInput = screen.getByRole('spinbutton', { name: 'Минимальная зарплата, ₽' })
     await user.type(salaryInput, '-1')
     expect(screen.getByText('Введите число не меньше 0')).toBeInTheDocument()
@@ -207,6 +214,8 @@ describe('AssistantPage', () => {
     if (!requestBody) throw new Error('save request was not captured')
     const hardCriteria = requestBody.hard_criteria as Record<string, unknown>
     expect(hardCriteria.approved_roles).toEqual(['96'])
+    expect(hardCriteria.specialization).toBe('frontend')
+    expect(hardCriteria.include_leadership).toBe(false)
     expect(hardCriteria.role).toBeUndefined()
     expect(hardCriteria.min_salary_rub).toBeUndefined()
   })
@@ -425,7 +434,7 @@ describe('AssistantPage', () => {
       })),
       http.get('*/api/v1/assistant/matches', () => HttpResponse.json([{
         VacancyID: 'synthetic-vacancy', Title: 'Тестовая вакансия', SourceURL: null,
-        Decision: 'match', Score: 0.91, Method: 'ai', Confidence: 'high',
+        Decision: 'match', Score: 0.91, Method: 'ai', Stage: 'confirmed', Confidence: 'high',
         Reasons: ['Подходящие навыки'], Unknowns: [], Conflicts: [], Evidence: [],
       }])),
     )
@@ -436,6 +445,33 @@ describe('AssistantPage', () => {
     expect(await screen.findByText(/1007 из 2273/)).toBeInTheDocument()
     expect(screen.getByText(/Тестовая вакансия · 91%/)).toBeInTheDocument()
     expect(screen.getByText('Подходящие навыки')).toBeInTheDocument()
+    expect(screen.getByText('Подтверждено AI')).toBeInTheDocument()
+  })
+
+  it('separates preliminary matches from AI-confirmed results', async () => {
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        id: 'preference-current', version: 3, note: '',
+        hard_criteria: { approved_roles: ['96'], specialization: 'frontend', include_leadership: false },
+        soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/matches', () => HttpResponse.json([
+        {
+          vacancy_id: 'confirmed', title: 'Frontend', decision: 'match', score: 0.9,
+          method: 'ai', stage: 'confirmed', reasons: ['Frontend подтверждён'],
+          unknowns: [], conflicts: [], evidence_ids: [],
+        },
+        {
+          vacancy_id: 'pending', title: 'React Developer', decision: 'match', score: 0.7,
+          method: 'deterministic', stage: 'preliminary', reasons: ['Предварительно подходит по фильтрам'],
+          unknowns: [], conflicts: [], evidence_ids: [],
+        },
+      ])),
+    )
+    renderPage(<AssistantPage />)
+    expect(await screen.findByText('Подтверждено AI')).toBeInTheDocument()
+    expect(screen.getByText('Предварительно подходят по фильтрам')).toBeInTheDocument()
   })
 
   it('keeps missing or null historical telemetry unknown and handles zero batches', async () => {
@@ -460,10 +496,10 @@ describe('AssistantPage', () => {
     renderPage(<AssistantPage />, '/assistant')
 
     expect(await screen.findByText('failed')).toBeInTheDocument()
-    expect(screen.getByText(/Проверено по критериям: — из — · Подходят: —/)).toBeInTheDocument()
+    expect(screen.getByText(/Проверено по критериям: — из — · Предварительно подходят: —/)).toBeInTheDocument()
     expect(screen.getByText(/Пропущено AI:/)).toHaveTextContent('Средний пакет: —')
     expect(screen.getByText(/Историческая вакансия · оценка неизвестна/)).toBeInTheDocument()
-    expect(screen.getByText('Причины не указаны.')).toBeInTheDocument()
+    expect(screen.getByText('Ожидает проверки AI.')).toBeInTheDocument()
     expect(screen.queryByText(/^Токены:/)).not.toBeInTheDocument()
   })
 })

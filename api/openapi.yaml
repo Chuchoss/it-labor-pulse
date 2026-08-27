@@ -1623,6 +1623,14 @@ components:
                 type: string
                 enum: ["96", "104", "148", "150", "156", "164", "124"]
               description: Утверждённые official HH professional role IDs.
+            specialization:
+              type: string
+              enum: [frontend, backend, fullstack, mobile, devops_platform, data_ml, other]
+              description: Явная специализация для широкой роли HH 96; свободная заметка её не задаёт.
+            include_leadership:
+              type: boolean
+              default: false
+              description: Явное разрешение руководящих вакансий; при false lead/team lead/head исключаются.
             role:
               type: string
               deprecated: true
@@ -1660,6 +1668,10 @@ components:
             legacy_role_upgraded:
               type: boolean
               description: Ответ построен из legacy role; сохранение создаст новую нормализованную immutable-версию.
+            legacy_specialization_suggestion:
+              type: string
+              enum: [frontend, backend, fullstack]
+              description: Неподтверждённая подсказка из известного legacy role; клиент должен запросить явный выбор.
 
     AssistantStatus:
       type: object
@@ -1725,7 +1737,7 @@ components:
 
     AssistantMatch:
       type: object
-      required: [vacancy_id, decision, score, method, reasons, unknowns, conflicts, evidence_ids]
+      required: [vacancy_id, decision, score, method, stage, reasons, unknowns, conflicts, evidence_ids]
       properties:
         vacancy_id: { type: string, format: uuid }
         title: { type: string }
@@ -1733,6 +1745,10 @@ components:
         decision: { type: string, enum: [match, reject, review] }
         score: { type: number, minimum: 0, maximum: 1 }
         method: { type: string, enum: [deterministic, ai] }
+        stage:
+          type: string
+          enum: [preliminary, confirmed]
+          description: confirmed только для положительного AI-решения; deterministic match остаётся preliminary.
         confidence: { type: [string, "null"], enum: [low, medium, high, null] }
         reasons: { type: array, items: { type: string } }
         unknowns: { type: array, items: { type: string } }

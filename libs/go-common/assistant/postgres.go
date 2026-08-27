@@ -22,15 +22,16 @@ type DBTX interface {
 }
 
 type PreferenceRecord struct {
-	ID                 string
-	Version            int
-	Note               string
-	HardCriteria       map[string]any
-	SoftCriteria       map[string]any
-	Weights            map[string]float64
-	ActiveFrom         time.Time
-	ArchivedAt         *time.Time
-	LegacyRoleUpgraded bool
+	ID                             string
+	Version                        int
+	Note                           string
+	HardCriteria                   map[string]any
+	SoftCriteria                   map[string]any
+	Weights                        map[string]float64
+	ActiveFrom                     time.Time
+	ArchivedAt                     *time.Time
+	LegacyRoleUpgraded             bool
+	LegacySpecializationSuggestion Specialization
 }
 
 type AnalysisStatus struct {
@@ -130,6 +131,7 @@ type MatchRecord struct {
 	Decision   Decision `json:"decision"`
 	Score      float64  `json:"score"`
 	Method     string   `json:"method"`
+	Stage      string   `json:"stage"`
 	Confidence *string  `json:"confidence"`
 	Reasons    []string `json:"reasons"`
 	Unknowns   []string `json:"unknowns"`
@@ -285,7 +287,7 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 		s.State = "disabled"
 	}
 	s.CursorObservedAt = cursorAt
-	s.MethodVersion = "deterministic-v1"
+	s.MethodVersion = SpecializationRulesVersion
 	return s, nil
 }
 
@@ -465,13 +467,21 @@ func validatePreferences(p PreferenceRecord) ([]byte, []byte, []byte, error) {
 	}
 	for key := range p.HardCriteria {
 		switch key {
-		case "approved_roles", "regions", "required_skills", "excluded_skills", "remote_only", "min_salary_rub":
+		case "approved_roles", "specialization", "include_leadership", "regions", "required_skills", "excluded_skills", "remote_only", "min_salary_rub":
 		default:
 			return nil, nil, nil, fmt.Errorf("%w: hard_criteria.%s is unsupported; use approved_roles", ErrInvalidPreferences, key)
 		}
 	}
 	if err := validateApprovedRoles(p.HardCriteria["approved_roles"]); err != nil {
 		return nil, nil, nil, err
+	}
+	if err := validateSpecialization(p.HardCriteria["specialization"]); err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: hard_criteria.specialization is unsupported", ErrInvalidPreferences)
+	}
+	if value, exists := p.HardCriteria["include_leadership"]; exists {
+		if _, ok := value.(bool); !ok {
+			return nil, nil, nil, fmt.Errorf("%w: hard_criteria.include_leadership must be boolean", ErrInvalidPreferences)
+		}
 	}
 	for key := range p.Weights {
 		switch key {
@@ -585,10 +595,31 @@ func (r *PostgresRepository) ListMatches(ctx context.Context, userID string, lim
 	}
 	rows, err := r.db.Query(ctx, `
 		SELECT m.vacancy_id::text, v.title, v.source_url, m.decision, m.score::float8,
-			m.method, m.confidence, m.rationale, m.unknowns, m.conflicts, m.evidence_ids
+			m.method,
+			CASE WHEN m.method='ai' THEN 'confirmed' ELSE 'preliminary' END,
+			m.confidence, m.rationale, m.unknowns, m.conflicts, m.evidence_ids
 		FROM vacancy_match_results m
 		JOIN vacancies v ON v.id = m.vacancy_id
-		WHERE m.user_id = $1::uuid AND m.decision = 'match'
+		JOIN vacancy_preferences p ON p.id=m.preference_id
+		WHERE m.user_id = $1::uuid
+		  AND p.id = (
+			SELECT id FROM vacancy_preferences
+			WHERE user_id=$1::uuid AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		  )
+		  AND m.decision = 'match'
+		  AND (
+			m.method='ai'
+			OR (
+				m.method='deterministic'
+				AND NOT EXISTS (
+					SELECT 1 FROM vacancy_match_results ai
+					WHERE ai.user_id=m.user_id AND ai.preference_id=m.preference_id
+					  AND ai.vacancy_id=m.vacancy_id AND ai.vacancy_revision=m.vacancy_revision
+					  AND ai.method='ai'
+				)
+			)
+		  )
 		ORDER BY m.created_at DESC LIMIT $2
 	`, userID, limit)
 	if err != nil {
@@ -602,11 +633,10 @@ func (r *PostgresRepository) ListMatches(ctx context.Context, userID string, lim
 		var confidence *string
 		var unknowns, conflicts, evidence []byte
 		if err := rows.Scan(&item.VacancyID, &item.Title, &item.SourceURL, &item.Decision, &item.Score,
-			&item.Method, &confidence, &rationale, &unknowns, &conflicts, &evidence); err != nil {
+			&item.Method, &item.Stage, &confidence, &rationale, &unknowns, &conflicts, &evidence); err != nil {
 			return nil, fmt.Errorf("scan assistant match: %w", err)
 		}
 		item.Confidence = confidence
-		item.Reasons = splitRationale(rationale)
 		if err := json.Unmarshal(unknowns, &item.Unknowns); err != nil {
 			return nil, err
 		}
@@ -616,9 +646,25 @@ func (r *PostgresRepository) ListMatches(ctx context.Context, userID string, lim
 		if err := json.Unmarshal(evidence, &item.Evidence); err != nil {
 			return nil, err
 		}
+		item.Reasons = safeMatchReasons(item.Method, rationale, item.Evidence, item.Conflicts)
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func safeMatchReasons(method, _ string, evidence, conflicts []string) []string {
+	if method == "ai" {
+		return []string{"AI подтвердил соответствие критериям"}
+	}
+	for _, value := range evidence {
+		if strings.HasPrefix(value, "specialization:") {
+			return []string{"Специализация подтверждена"}
+		}
+	}
+	if len(conflicts) == 0 {
+		return []string{"Предварительно подходит по фильтрам"}
+	}
+	return []string{}
 }
 
 func splitRationale(value string) []string {
@@ -862,10 +908,11 @@ func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run Assista
 		FROM vacancies v
 		JOIN sources src ON src.code = v.source AND src.is_active
 		LEFT JOIN role_aliases ra ON ra.role_id = v.role_id AND ra.source = v.source
+			AND ra.pattern ~ '^[0-9]+$'
 		LEFT JOIN vacancy_role_scopes vrs ON vrs.vacancy_id = v.id
 			AND vrs.scope = 'vacancy_listing'
 		LEFT JOIN role_aliases scope_alias ON scope_alias.role_id = vrs.role_id
-			AND scope_alias.source = v.source
+			AND scope_alias.source = v.source AND scope_alias.pattern ~ '^[0-9]+$'
 		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
 		LEFT JOIN skills sk ON sk.id = vs.skill_id
 		WHERE v.is_active AND v.deleted_at IS NULL AND v.created_at <= $1
@@ -905,7 +952,7 @@ func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run Assista
 		}
 		c.Vacancy = Vacancy{
 			ID: c.ID, Title: c.Title, RoleIDs: roleIDs, SalaryRUB: salary,
-			IsRemote: isRemote, PublishedAt: published, Skills: skills,
+			IsRemote: isRemote, PublishedAt: published, Skills: skills, Description: c.Description,
 		}
 		if roleID != nil {
 			c.Vacancy.RoleID = *roleID
@@ -999,10 +1046,11 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, _ ti
 		JOIN claimed w ON w.source = v.source AND w.external_id = v.external_id
 			AND w.vacancy_revision = v.analysis_revision
 		LEFT JOIN role_aliases ra ON ra.role_id = v.role_id AND ra.source = 'hh'
+			AND ra.pattern ~ '^[0-9]+$'
 		LEFT JOIN vacancy_role_scopes vrs ON vrs.vacancy_id = v.id
 			AND vrs.scope = 'vacancy_listing'
 		LEFT JOIN role_aliases scope_alias ON scope_alias.role_id = vrs.role_id
-			AND scope_alias.source = v.source
+			AND scope_alias.source = v.source AND scope_alias.pattern ~ '^[0-9]+$'
 		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
 		LEFT JOIN skills s ON s.id = vs.skill_id
 		WHERE v.source = $1 AND v.is_active AND v.deleted_at IS NULL
@@ -1033,7 +1081,7 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, _ ti
 		}
 		c.Vacancy = Vacancy{
 			ID: c.ID, Title: c.Title, RoleIDs: roleIDs, SalaryRUB: salary,
-			IsRemote: isRemote, PublishedAt: published, Skills: skills,
+			IsRemote: isRemote, PublishedAt: published, Skills: skills, Description: c.Description,
 		}
 		if roleID != nil {
 			c.Vacancy.RoleID = *roleID

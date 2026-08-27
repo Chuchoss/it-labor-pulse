@@ -14,6 +14,7 @@ import {
   FormControl,
   FormControlLabel,
   FormLabel,
+  MenuItem,
   Radio,
   RadioGroup,
   Stack,
@@ -33,6 +34,16 @@ const approvedRoleOptions = [
   { id: '156', label: 'BI-аналитик / аналитик данных', group: 'Аналитика' },
   { id: '164', label: 'Продуктовый аналитик', group: 'Аналитика' },
   { id: '124', label: 'Тестировщик', group: 'Контроль качества' },
+] as const
+
+const specializationOptions = [
+  { id: 'frontend', label: 'Frontend' },
+  { id: 'backend', label: 'Backend' },
+  { id: 'fullstack', label: 'Fullstack' },
+  { id: 'mobile', label: 'Mobile' },
+  { id: 'devops_platform', label: 'DevOps / Platform' },
+  { id: 'data_ml', label: 'Data / ML' },
+  { id: 'other', label: 'Другое' },
 ] as const
 
 const legacyRoleAliases: Record<string, string[]> = {
@@ -139,6 +150,8 @@ export function AssistantPage() {
   const [requiredSkills, setRequiredSkills] = useState<string[]>()
   const [excludedSkills, setExcludedSkills] = useState<string[]>()
   const [remoteOnly, setRemoteOnly] = useState<boolean>()
+  const [specialization, setSpecialization] = useState<string>()
+  const [includeLeadership, setIncludeLeadership] = useState<boolean>()
   const [minSalaryRUB, setMinSalaryRUB] = useState<string>()
   const [legacyRoleResolved, setLegacyRoleResolved] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
@@ -158,6 +171,12 @@ export function AssistantPage() {
   const requiredSkillsValue = requiredSkills ?? stringList(hardCriteriaValue.required_skills)
   const excludedSkillsValue = excludedSkills ?? stringList(hardCriteriaValue.excluded_skills)
   const remoteOnlyValue = remoteOnly ?? hardCriteriaValue.remote_only === true
+  const savedSpecialization = typeof hardCriteriaValue.specialization === 'string'
+    ? hardCriteriaValue.specialization
+    : ''
+  const specializationValue = specialization ?? savedSpecialization
+  const includeLeadershipValue = includeLeadership ?? hardCriteriaValue.include_leadership === true
+  const developerSelected = approvedRoleIDsValue.includes('96')
   const savedSalary = typeof hardCriteriaValue.min_salary_rub === 'number' && Number.isFinite(hardCriteriaValue.min_salary_rub)
     ? String(hardCriteriaValue.min_salary_rub)
     : ''
@@ -172,7 +191,9 @@ export function AssistantPage() {
       const hard: Record<string, unknown> = {
         approved_roles: approvedRoleIDsValue,
         remote_only: remoteOnlyValue,
+        include_leadership: includeLeadershipValue,
       }
+      if (developerSelected && specializationValue) hard.specialization = specializationValue
       if (regionsValue.length > 0) hard.regions = regionsValue
       if (requiredSkillsValue.length > 0) hard.required_skills = requiredSkillsValue
       if (excludedSkillsValue.length > 0) hard.excluded_skills = excludedSkillsValue
@@ -280,6 +301,10 @@ export function AssistantPage() {
     : save.error?.message
   const activeRunID = submittedRunID ?? status.data?.run_id
   const aiCalls = status.data?.ai_calls
+  const aiPending = Math.max(
+    0,
+    (status.data?.ai_eligible ?? 0) - (status.data?.ai_succeeded ?? 0) - (status.data?.ai_failures ?? 0) - (status.data?.ai_skipped ?? 0),
+  )
   const aiBatchCount = status.data?.ai_batches ?? status.data?.ai_http_attempts
   const averageBatch = aiCalls !== undefined && aiBatchCount !== undefined && aiBatchCount > 0
     ? (aiCalls / aiBatchCount).toFixed(1)
@@ -341,7 +366,9 @@ export function AssistantPage() {
           {status.data?.state === 'running' && <Typography>Анализируем все текущие вакансии…</Typography>}
           <Typography>
             Проверено по критериям: {metric(status.data?.processed)} из {metric(status.data?.total)}
-            {' · '}Подходят: {metric(status.data?.matched)}
+            {' · '}Предварительно подходят: {metric(status.data?.matched)}
+            {' · '}Ожидают AI: {aiPending}
+            {' · '}Подтверждено AI: {aiCalls === 0 ? '—' : metric(status.data?.ai_matches)}
           </Typography>
           <Typography>
             {aiCalls === undefined
@@ -417,6 +444,30 @@ export function AssistantPage() {
               if (legacyRoleState === 'unknown' && values.length > 0) setLegacyRoleResolved(true)
             }}
             renderInput={(params) => <TextField {...params} label="Роли" placeholder="Выберите одну или несколько" />} />
+          {developerSelected && <Alert severity="info">
+            «Разработчик» — широкая роль HeadHunter. Выберите специализацию, чтобы сузить результаты.
+          </Alert>}
+          {developerSelected && <TextField
+            select
+            required
+            label="Специализация"
+            value={specializationValue}
+            onChange={(event) => setSpecialization(event.target.value)}
+            helperText="Frontend, Backend и Fullstack проверяются отдельно"
+          >
+            {specializationOptions.map((option) => <MenuItem key={option.id} value={option.id}>{option.label}</MenuItem>)}
+          </TextField>}
+          {preferences.data?.legacy_specialization_suggestion && !savedSpecialization && (
+            <Alert severity="warning">
+              Ранее была указана специализация «{specializationOptions.find(
+                (option) => option.id === preferences.data?.legacy_specialization_suggestion,
+              )?.label}». Выберите её вручную и сохраните новую версию.
+            </Alert>
+          )}
+          {developerSelected && <FormControlLabel
+            control={<Switch checked={includeLeadershipValue} onChange={(event) => setIncludeLeadership(event.target.checked)} />}
+            label="Включать руководящие вакансии"
+          />}
           {legacyRoleState === 'unknown' && <Alert severity="warning">
             Не удалось распознать сохранённую роль. Выберите подходящую роль из списка.
           </Alert>}
@@ -490,7 +541,7 @@ export function AssistantPage() {
               />
             </AccordionDetails>
           </Accordion>
-          <Button variant="contained" disabled={save.isPending || salaryError || legacyRoleState === 'unknown'} onClick={() => void save.mutate()}>
+          <Button variant="contained" disabled={save.isPending || salaryError || legacyRoleState === 'unknown' || (developerSelected && !specializationValue)} onClick={() => void save.mutate()}>
             Сохранить критерии
           </Button>
           {save.isError && <Alert severity="error">Не удалось сохранить критерии: {saveError}</Alert>}
@@ -513,16 +564,27 @@ export function AssistantPage() {
       </CardContent></Card>
       <Card variant="outlined"><CardContent>
         <Stack spacing={2}>
-          <Typography variant="h6">Совпадения</Typography>
+          <Typography variant="h6">Результаты</Typography>
           {matches.isLoading && <Typography>Загрузка…</Typography>}
           {matches.isError && <Alert severity="warning">Assistant API пока не подключён.</Alert>}
           {matches.data?.length === 0 && <Typography color="text.secondary">Новых совпадений нет.</Typography>}
-          {matches.data?.map((match, index) => <Stack key={`${match.vacancy_id ?? 'unknown'}-${index}`} spacing={0.5}>
+          {(matches.data?.some((match) => match.stage === 'confirmed')) && <Typography sx={{ fontWeight: 700 }}>Подтверждено AI</Typography>}
+          {matches.data?.filter((match) => match.stage === 'confirmed').map((match, index) => <Stack key={`confirmed-${match.vacancy_id ?? 'unknown'}-${index}`} spacing={0.5}>
             <Typography sx={{ fontWeight: 700 }}>
               {match.title || 'Вакансия'} · {match.score === undefined ? 'оценка неизвестна' : `${Math.round(match.score * 100)}%`}
             </Typography>
             <Typography variant="body2">
               {match.reasons.length > 0 ? match.reasons.slice(0, 3).join(' · ') : 'Причины не указаны.'}
+            </Typography>
+            <Divider />
+          </Stack>)}
+          {(matches.data?.some((match) => match.stage !== 'confirmed')) && <Typography sx={{ fontWeight: 700 }}>Предварительно подходят по фильтрам</Typography>}
+          {matches.data?.filter((match) => match.stage !== 'confirmed').map((match, index) => <Stack key={`preliminary-${match.vacancy_id ?? 'unknown'}-${index}`} spacing={0.5}>
+            <Typography sx={{ fontWeight: 700 }}>
+              {match.title || 'Вакансия'} · {match.score === undefined ? 'оценка неизвестна' : `${Math.round(match.score * 100)}%`}
+            </Typography>
+            <Typography variant="body2">
+              {match.reasons.length > 0 ? match.reasons.slice(0, 3).join(' · ') : 'Ожидает проверки AI.'}
             </Typography>
             <Divider />
           </Stack>)}

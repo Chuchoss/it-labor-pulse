@@ -15,7 +15,9 @@ evidence совпадений остаются доступны для ауди�
 
 Детерминированный matcher принимает только структурированные hard-критерии
 `approved_roles`, `regions`, `required_skills`, `excluded_skills`,
-`remote_only`, `min_salary_rub`; неизвестные поля возвращают `400`.
+`remote_only`, `min_salary_rub`, `specialization`, `include_leadership`;
+неизвестные поля возвращают `400`. Роль HH `96` шире Frontend/Backend:
+специализация выбирается отдельно. Руководящие вакансии по умолчанию исключены.
 Свободная заметка и неподдержанные soft-критерии не участвуют в matcher.
 
 ### Совместимость legacy role
@@ -36,8 +38,10 @@ evidence совпадений остаются доступны для ауди�
 Другие значения не угадываются и возвращают `400`. Чтение известного legacy
 значения нормализует только модель ответа/worker; исходная версия в PostgreSQL
 остаётся неизменной. Следующее сохранение создаёт новую версию без `role`, с
-`approved_roles`. Free-text заметка может содержать «backend», но не участвует
-в structured role gate.
+`approved_roles`. Free-text заметка может содержать «backend» или «frontend»,
+но не участвует в structured role gate. Известный legacy role даёт только
+видимую подсказку специализации; её нужно явно выбрать и сохранить новой
+версией.
 
 `GET /api/v1/assistant/status` читает последний run из PostgreSQL. Состояния
 `never_run`, `queued`, `running`, `succeeded`, `failed`, `disabled` и счётчики
@@ -117,7 +121,9 @@ matcher. Для защиты от overlap используется отдель�
 Telegram delivery — at-least-once: timeout после принятия Bot API считается
 неопределённым исходом и может привести к повтору; exactly-once не обещается.
 Вакансия отправляется только при глобальном флаге, пользовательском флаге,
-подтверждённой неотозванной связи, opt-in и deterministic/AI `match`.
+подтверждённой неотозванной связи, opt-in и финальном `match`. При включённом
+AI deterministic match остаётся предварительным и не создаёт delivery:
+AI `reject|review` имеет приоритет, delivery создаётся только после AI `match`.
 `activation_at` исключает исторический backlog только из автоматического
 outbox-пути; ручной snapshot намеренно анализирует существующие вакансии.
 Пересечение snapshot/outbox безопасно дедуплицируется unique result key.

@@ -25,6 +25,7 @@ NNNNNN_description.down.sql
 | `000009_fx_and_source_links` | Официальные дневные FX, canonical salary provenance и source-neutral URL |
 | `000012-000015_assistant` | Персональные критерии, AI foundation, bounded worker и lifecycle |
 | `000016_assistant_automation` | Явные AI/Telegram opt-in, activation cutoff, leased outbox и delivery idempotency |
+| `000024_assistant_specialization` | Проверки явной specialization и opt-in руководящих вакансий в immutable preferences |
 
 UUID PK: `DEFAULT gen_random_uuid()` (Supabase / PG 13+). AI / Perspectives tables — не здесь (Phase 4–5).
 

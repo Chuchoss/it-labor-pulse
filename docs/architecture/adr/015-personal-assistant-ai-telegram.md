@@ -25,6 +25,15 @@ production auth. One-candidate DeepSeek validation требует одновре
 `ASSISTANT_AI_ENABLED=true`, `ASSISTANT_AI_LIVE_TEST=true` и CLI
 `-allow-external`; Telegram остаётся выключенным до отдельного opt-in.
 
+Роль HH `96` («Программист, разработчик») остаётся широким официальным scope и
+не означает Frontend. Для неё preference хранит явную `specialization`
+(`frontend|backend|fullstack|mobile|devops_platform|data_ml|other`) и
+`include_leadership`, по умолчанию `false`. Детерминированная классификация
+версируется (`specialization-v1`), предпочитает title, затем key skills и только
+затем description; неоднозначность даёт `review`. Известный legacy role может
+дать только подсказку специализации, но не подтверждает её без нового
+immutable-сохранения.
+
 Lifecycle preferences остаётся append-only: UI показывает содержимое всех
 версий, а archive помечает версию `archived_at` без удаления evidence. При
 архивировании последней активной версии новый запуск не должен обрабатывать
@@ -68,6 +77,12 @@ deterministic assessment дал `reject`; такой результат хран
 `(user, preference, vacancy, vacancy_revision)`; provider failures повторяются
 до пяти раз и затем переходят в dead-letter. Ошибка/отсутствие AI не отменяет
 сохранённый deterministic результат.
+
+В пользовательской выдаче deterministic `match` имеет статус preliminary.
+Завершённое AI-решение той же preference/vacancy revision имеет приоритет:
+AI `reject|review` скрывает предварительное совпадение из положительного списка,
+а `match` становится `confirmed`. Telegram при включённом AI ставится в очередь
+только после AI `match`.
 
 Batch-ответ — JSON-объект с ровно одним решением на каждый opaque
 `vacancy_id`. Duplicate/unknown ID отклоняет пакет; missing item остаётся

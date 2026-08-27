@@ -456,6 +456,15 @@ aliases из [runbook assistant](../runbooks/personal-assistant.md): извес�
 `approved_roles`; неизвестное возвращает `400 VALIDATION_ERROR`. Старая строка
 в `vacancy_preferences` не обновляется.
 
+Для широкой роли `96` клиент сохраняет отдельную `specialization`; отсутствие
+поля означает «не задано», а не Frontend. `include_leadership` по умолчанию
+`false`. Известный legacy role может вернуть
+`legacy_specialization_suggestion`, но это не подтверждённый критерий до нового
+явного сохранения. `/assistant/matches` возвращает `stage=preliminary` для
+deterministic match без финального AI-решения и `stage=confirmed` только для AI
+match; AI reject/review той же ревизии имеет приоритет и не попадает в
+положительный список.
+
 #### `/api/v1/assistant/analyze` и `/api/v1/assistant/status` (Phase 4)
 
 `GET /analyze` возвращает `snapshot_total` для подтверждения стоимости в UI.

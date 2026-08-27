@@ -43,8 +43,10 @@ func TestPostgresPreferencesRoundTripAcrossConnections(t *testing.T) {
 	}()
 
 	want := PreferenceRecord{
-		Note:         "synthetic integration profile",
-		HardCriteria: map[string]any{"approved_roles": []any{"96"}},
+		Note: "synthetic integration profile",
+		HardCriteria: map[string]any{
+			"approved_roles": []any{"96"}, "specialization": "frontend", "include_leadership": false,
+		},
 		SoftCriteria: map[string]any{},
 		Weights:      map[string]float64{"salary": 1},
 	}
@@ -109,6 +111,67 @@ func TestPostgresLegacyPreferenceCreatesNormalizedImmutableVersion(t *testing.T)
 	require.NotContains(t, oldHard, `"approved_roles"`)
 	require.NotContains(t, newHard, `"role"`)
 	require.Contains(t, newHard, `"approved_roles"`)
+}
+
+func TestPostgresListMatchesAppliesAIFinalPrecedence(t *testing.T) {
+	_ = godotenv.Load("../../../.env")
+	databaseURL := os.Getenv("ASSISTANT_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		databaseURL = os.Getenv("DATABASE_URL")
+	}
+	if databaseURL == "" {
+		t.Skip("ASSISTANT_TEST_DATABASE_URL or DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, databaseURL)
+	require.NoError(t, err)
+	defer conn.Close(context.Background())
+	repo := NewPostgresRepository(conn)
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID, err := repo.EnsureUser(ctx, "assistant-precedence-"+suffix)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = conn.Exec(context.Background(), `DELETE FROM assistant_users WHERE id=$1::uuid`, userID)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM vacancies WHERE source='hh' AND external_id LIKE $1`, "synthetic-precedence-"+suffix+"%")
+	}()
+	preference, err := repo.SavePreferences(ctx, userID, "precedence", PreferenceRecord{
+		HardCriteria: map[string]any{"approved_roles": []any{"96"}, "specialization": "frontend"},
+		SoftCriteria: map[string]any{}, Weights: map[string]float64{},
+	})
+	require.NoError(t, err)
+	vacancyIDs := make([]string, 3)
+	for i := range vacancyIDs {
+		require.NoError(t, conn.QueryRow(ctx, `
+			INSERT INTO vacancies (source, external_id, title, collected_at, is_active)
+			VALUES ('hh', $1, $2, now(), true) RETURNING id::text
+		`, fmt.Sprintf("synthetic-precedence-%s-%d", suffix, i), fmt.Sprintf("Synthetic frontend %d", i)).
+			Scan(&vacancyIDs[i]))
+		_, err = repo.SaveMatch(ctx, WorkerMatch{
+			UserID: userID, VacancyID: vacancyIDs[i], PreferenceVersion: preference.Version,
+			VacancyRevision: 1, Result: Result{Decision: DecisionMatch, Score: .8},
+		})
+		require.NoError(t, err)
+	}
+	require.NoError(t, repo.SaveAIResult(ctx, WorkerMatch{
+		UserID: userID, VacancyID: vacancyIDs[0], PreferenceVersion: preference.Version,
+		VacancyRevision: 1, Method: "ai", Provider: "fake", Model: "fake", PromptVersion: "test",
+	}, MatchOutput{Decision: "reject", Score: .1, Confidence: "high"}))
+	require.NoError(t, repo.SaveAIResult(ctx, WorkerMatch{
+		UserID: userID, VacancyID: vacancyIDs[1], PreferenceVersion: preference.Version,
+		VacancyRevision: 1, Method: "ai", Provider: "fake", Model: "fake", PromptVersion: "test",
+	}, MatchOutput{Decision: "match", Score: .9, Confidence: "high"}))
+
+	matches, err := repo.ListMatches(ctx, userID, 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 2)
+	stages := map[string]string{}
+	for _, match := range matches {
+		stages[match.VacancyID] = match.Stage
+	}
+	require.NotContains(t, stages, vacancyIDs[0])
+	require.Equal(t, "confirmed", stages[vacancyIDs[1]])
+	require.Equal(t, "preliminary", stages[vacancyIDs[2]])
 }
 
 func TestPostgresManualSnapshotScansEligibleVacanciesAndDeduplicatesOutbox(t *testing.T) {

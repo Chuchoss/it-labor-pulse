@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -66,6 +67,74 @@ func TestMatchRemoteTriState(t *testing.T) {
 	}
 }
 
+func TestFrontendSpecializationAndLeadershipSemantics(t *testing.T) {
+	preferences := Preferences{
+		ApprovedRoles: []string{"96"}, Specialization: SpecializationFrontend,
+	}
+	tests := []struct {
+		name    string
+		vacancy Vacancy
+		include bool
+		want    Decision
+	}{
+		{"frontend title", Vacancy{Title: "Senior Frontend Developer", RoleIDs: []string{"96"}}, false, DecisionMatch},
+		{"backend rejects", Vacancy{Title: "Backend Developer", RoleIDs: []string{"96"}}, false, DecisionReject},
+		{"fullstack rejects", Vacancy{Title: "Full-stack Developer", RoleIDs: []string{"96"}}, false, DecisionReject},
+		{"frontend lead rejects", Vacancy{Title: "Frontend Team Lead", RoleIDs: []string{"96", "104"}}, false, DecisionReject},
+		{"frontend lead allowed", Vacancy{Title: "Frontend Team Lead", RoleIDs: []string{"96", "104"}}, true, DecisionMatch},
+		{"generic developer reviews", Vacancy{Title: "Software Developer", RoleIDs: []string{"96"}}, false, DecisionReview},
+		{"description only reviews", Vacancy{Title: "Developer", RoleIDs: []string{"96"}, Description: "React and TypeScript"}, false, DecisionReview},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := preferences
+			p.IncludeLeadership = tt.include
+			if got := Match(tt.vacancy, p, time.Now()); got.Decision != tt.want {
+				t.Fatalf("decision=%s reasons=%v conflicts=%v unknowns=%v", got.Decision, got.Reasons, got.Conflicts, got.Unknowns)
+			}
+		})
+	}
+}
+
+func TestSpecializationAliasesBoundariesAndEvidencePrecedence(t *testing.T) {
+	tests := []struct {
+		name, title, description string
+		skills                   []string
+		want                     Specialization
+		evidence                 string
+	}{
+		{"english", "React Front-end Engineer", "", nil, SpecializationFrontend, "title"},
+		{"russian", "Фронтенд-разработчик", "", nil, SpecializationFrontend, "title"},
+		{"skills", "Developer", "", []string{"Vue.js", "TypeScript"}, SpecializationFrontend, "skills"},
+		{"title wins", "Backend Developer", "React frontend", nil, SpecializationBackend, "title"},
+		{"leading boundary", "Leading Frontend Developer", "", nil, SpecializationFrontend, "title"},
+		{"typescript boundary", "Typescript Developer", "", nil, SpecializationFrontend, "title"},
+		{"ts false positive", "Events Developer", "", nil, SpecializationUnknown, "none"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClassifyVacancy(Vacancy{Title: tt.title, Description: tt.description, Skills: tt.skills})
+			if got.Specialization != tt.want || got.Evidence != tt.evidence {
+				t.Fatalf("classification=%+v", got)
+			}
+			if tt.name == "leading boundary" && got.Leadership {
+				t.Fatal("leading must not be classified as leadership")
+			}
+		})
+	}
+}
+
+func TestHHDeveloperRoleIsBroadAndMultiRoleSignalsLeadership(t *testing.T) {
+	generic := ClassifyVacancy(Vacancy{Title: "Developer", RoleIDs: []string{"96"}})
+	if generic.Specialization != SpecializationUnknown || generic.Leadership {
+		t.Fatalf("role 96 must remain broad: %+v", generic)
+	}
+	multi := ClassifyVacancy(Vacancy{Title: "Frontend Developer", RoleIDs: []string{"96", "104"}})
+	if multi.Specialization != SpecializationFrontend || !multi.Leadership {
+		t.Fatalf("96+104 classification=%+v", multi)
+	}
+}
+
 func TestLegacyRoleAliasesUseOfficialRoleIDs(t *testing.T) {
 	tests := map[string]string{
 		"backend": "96", "frontend": "96", "full-stack": "96", "developer": "96",
@@ -104,6 +173,27 @@ func TestPreferenceRoleNormalizationDoesNotMutateOldVersion(t *testing.T) {
 	if len(roles) != 1 || roles[0] != "96" {
 		t.Fatalf("approved_roles = %v", roles)
 	}
+	if normalized.LegacySpecializationSuggestion != SpecializationBackend {
+		t.Fatalf("specialization suggestion=%q", normalized.LegacySpecializationSuggestion)
+	}
+	if _, exists := normalized.HardCriteria["specialization"]; exists {
+		t.Fatal("legacy alias silently became confirmed specialization")
+	}
+}
+
+func TestPreferenceSpecializationValidation(t *testing.T) {
+	_, _, _, err := validatePreferences(PreferenceRecord{HardCriteria: map[string]any{
+		"approved_roles": []any{"96"}, "specialization": "frontend", "include_leadership": false,
+	}})
+	if err != nil {
+		t.Fatalf("valid specialization: %v", err)
+	}
+	_, _, _, err = validatePreferences(PreferenceRecord{HardCriteria: map[string]any{
+		"specialization": "frontend-ish",
+	}})
+	if err == nil {
+		t.Fatal("unsupported specialization accepted")
+	}
 }
 
 func TestApprovedRolesRejectUnknownCanonicalID(t *testing.T) {
@@ -140,6 +230,36 @@ func TestDeepSeekValidatesEvidence(t *testing.T) {
 	}
 	if _, err := provider.Complete(context.Background(), Request{InputSnapshot: "DATA", Evidence: map[string]bool{"title": true}}); err == nil {
 		t.Fatal("expected evidence validation error")
+	}
+}
+
+func TestDeepSeekPromptIncludesSpecializationAndLeadershipSemantics(t *testing.T) {
+	var systemPrompt string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Messages []struct {
+				Role, Content string
+			}
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		systemPrompt = payload.Messages[0].Content
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"decision\":\"review\",\"score\":0.5,\"confidence\":\"medium\",\"evidence_ids\":[]}"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	provider, err := NewDeepSeek(DeepSeekConfig{APIKey: "secret", BaseURL: server.URL, MaxAttempts: 1}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Complete(context.Background(), Request{InputSnapshot: `{"specialization":"frontend","include_leadership":false}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"specialization", "include_leadership", "fullstack", "team lead"} {
+		if !strings.Contains(systemPrompt, required) {
+			t.Fatalf("prompt missing %q", required)
+		}
 	}
 }
 

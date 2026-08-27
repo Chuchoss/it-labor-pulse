@@ -207,6 +207,7 @@ export interface AssistantPreferences {
   active_from?: string
   archived_at?: string | null
   legacy_role_upgraded?: boolean
+  legacy_specialization_suggestion?: 'frontend' | 'backend' | 'fullstack' | 'mobile' | 'devops_platform' | 'data_ml' | 'other'
 }
 
 export interface AssistantStatus {
@@ -263,6 +264,7 @@ export interface AssistantMatch {
   decision?: 'match' | 'reject' | 'review'
   score?: number
   method?: 'deterministic' | 'ai'
+  stage?: 'preliminary' | 'confirmed'
   confidence?: 'low' | 'medium' | 'high' | null
   reasons: string[]
   unknowns: string[]

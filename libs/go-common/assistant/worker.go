@@ -84,6 +84,7 @@ type aiJob struct {
 	match     WorkerMatch
 	request   Request
 	shared    string
+	settings  AutomationSettings
 }
 
 type WorkerOptions struct {
@@ -314,7 +315,7 @@ func processCandidates(
 					return err
 				}
 				stats.Matched++
-				if created && opts.TelegramEnabled && settings.TelegramEnabled {
+				if created && !settings.AIEnabled && opts.TelegramEnabled && settings.TelegramEnabled {
 					eligible := true
 					if eligibility, ok := store.(TelegramEligibilityStore); ok {
 						eligible, err = eligibility.TelegramEligible(ctx, user.ID)
@@ -364,26 +365,28 @@ func processCandidates(
 			}
 			evidence := map[string]bool{"vacancy:title": true, "vacancy:description": true, "preferences": true}
 			facts := map[string]string{
-				"salary":                 candidate.SalaryText,
-				"deterministic_decision": string(result.Decision),
-				"deterministic_score":    strconv.FormatFloat(result.Score, 'f', 2, 64),
-				"description_truncated":  strconv.FormatBool(candidate.DescriptionTruncated),
+				"salary":                   candidate.SalaryText,
+				"deterministic_decision":   string(result.Decision),
+				"deterministic_score":      strconv.FormatFloat(result.Score, 'f', 2, 64),
+				"description_truncated":    strconv.FormatBool(candidate.DescriptionTruncated),
+				"requested_specialization": stringValue(user.Preference.HardCriteria["specialization"]),
+				"include_leadership":       strconv.FormatBool(boolValue(user.Preference.HardCriteria["include_leadership"])),
 			}
 			input := MinimizedInput(candidate.Title, candidate.Description, facts, evidence)
 			shared := "PREFERENCES_JSON:\n" + preferenceSnapshot(user.Preference)
 			match := WorkerMatch{
 				UserID: user.ID, VacancyID: candidate.ID, PreferenceVersion: user.Preference.Version,
 				VacancyRevision: candidate.Revision, Result: result, Method: "ai", Provider: "deepseek",
-				PromptVersion: "batch-v2", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
+				PromptVersion: "batch-v3-specialization", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
 			}
 			jobs = append(jobs, aiJob{
-				candidate: candidate, user: user, match: match, shared: shared,
+				candidate: candidate, user: user, match: match, shared: shared, settings: settings,
 				request: Request{InputSnapshot: input, Evidence: evidence},
 			})
 		}
 	}
 	if len(jobs) > 0 {
-		if err := processAIJobs(ctx, store.(AIStore), opts, jobs, stats, candidateFailed); err != nil {
+		if err := processAIJobs(ctx, store, opts, jobs, stats, candidateFailed); err != nil {
 			return err
 		}
 	}
@@ -408,7 +411,7 @@ func processCandidates(
 
 func processAIJobs(
 	ctx context.Context,
-	store AIStore,
+	store WorkerStore,
 	opts WorkerOptions,
 	jobs []aiJob,
 	stats *WorkerStats,
@@ -437,9 +440,9 @@ func processAIJobs(
 			if opts.Log != nil {
 				opts.Log.Warn("assistant_ai_inference_failed", "run_id", stats.RunID, "category", category)
 			}
-			return store.SaveAIFailure(ctx, job.match, category)
+			return store.(AIStore).SaveAIFailure(ctx, job.match, category)
 		}
-		if err := store.SaveAIResult(ctx, job.match, output); err != nil {
+		if err := store.(AIStore).SaveAIResult(ctx, job.match, output); err != nil {
 			return err
 		}
 		if job.candidate.AIRetry && stats.AIFailures > 0 {
@@ -448,6 +451,28 @@ func processAIJobs(
 		stats.AISucceeded++
 		if output.Decision == string(DecisionMatch) {
 			stats.AIMatches++
+			if opts.TelegramEnabled && job.settings.TelegramEnabled {
+				eligible := true
+				if eligibility, ok := store.(TelegramEligibilityStore); ok {
+					var err error
+					eligible, err = eligibility.TelegramEligible(ctx, job.user.ID)
+					if err != nil {
+						return err
+					}
+				}
+				if eligible {
+					created, err := store.SaveDelivery(ctx, WorkerDelivery{
+						UserID: job.user.ID, VacancyID: job.candidate.ID,
+						PreferenceVersion: job.user.Preference.Version,
+					})
+					if err != nil {
+						return err
+					}
+					if created {
+						stats.Notified++
+					}
+				}
+			}
 		}
 		return nil
 	}
@@ -584,13 +609,20 @@ func sha256Bytes(value string) []byte {
 
 func toPreferences(p PreferenceRecord) Preferences {
 	return Preferences{
-		ApprovedRoles:  stringSlice(p.HardCriteria["approved_roles"]),
-		Regions:        stringSlice(p.HardCriteria["regions"]),
-		RequiredSkills: stringSlice(p.HardCriteria["required_skills"]),
-		ExcludedSkills: stringSlice(p.HardCriteria["excluded_skills"]),
-		RemoteOnly:     boolValue(p.HardCriteria["remote_only"]),
-		MinSalaryRUB:   floatPointer(p.HardCriteria["min_salary_rub"]),
+		ApprovedRoles:     stringSlice(p.HardCriteria["approved_roles"]),
+		Specialization:    Specialization(stringValue(p.HardCriteria["specialization"])),
+		IncludeLeadership: boolValue(p.HardCriteria["include_leadership"]),
+		Regions:           stringSlice(p.HardCriteria["regions"]),
+		RequiredSkills:    stringSlice(p.HardCriteria["required_skills"]),
+		ExcludedSkills:    stringSlice(p.HardCriteria["excluded_skills"]),
+		RemoteOnly:        boolValue(p.HardCriteria["remote_only"]),
+		MinSalaryRUB:      floatPointer(p.HardCriteria["min_salary_rub"]),
 	}
+}
+
+func stringValue(value any) string {
+	result, _ := value.(string)
+	return result
 }
 
 func stringSlice(value any) []string {

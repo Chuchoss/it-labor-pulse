@@ -50,6 +50,13 @@ var legacyRoleAliases = map[string][]string{
 	"product analyst":     {"164"},
 }
 
+var legacySpecializationSuggestions = map[string]Specialization{
+	"backend": SpecializationBackend, "backend developer": SpecializationBackend,
+	"frontend": SpecializationFrontend, "frontend developer": SpecializationFrontend,
+	"fullstack": SpecializationFullstack, "full stack": SpecializationFullstack,
+	"fullstack developer": SpecializationFullstack,
+}
+
 // ApprovedRoles returns the stable official assistant role policy.
 func ApprovedRoles() []ApprovedRole {
 	order := []string{"96", "104", "148", "150", "156", "164", "124"}
@@ -96,6 +103,10 @@ func NormalizePreferenceRoles(p PreferenceRecord) (PreferenceRecord, bool, error
 	normalized.HardCriteria["approved_roles"] = stringValues(mergeRoleIDs(current, mapped))
 	delete(normalized.HardCriteria, "role")
 	normalized.LegacyRoleUpgraded = true
+	alias := strings.ToLower(strings.TrimSpace(value))
+	alias = strings.NewReplacer("_", " ", "-", " ").Replace(alias)
+	alias = strings.Join(strings.Fields(alias), " ")
+	normalized.LegacySpecializationSuggestion = legacySpecializationSuggestions[alias]
 	return normalized, true, nil
 }
 

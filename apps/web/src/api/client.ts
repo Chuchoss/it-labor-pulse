@@ -81,6 +81,7 @@ export function normalizeAssistantMatches(value: unknown): AssistantMatch[] {
       decision: optionalString(source.decision ?? source.Decision) as AssistantMatch['decision'],
       score: score !== undefined && score <= 1 ? score : undefined,
       method: optionalString(source.method ?? source.Method) as AssistantMatch['method'],
+      stage: optionalString(source.stage ?? source.Stage) as AssistantMatch['stage'],
       confidence: optionalString(source.confidence ?? source.Confidence) as AssistantMatch['confidence'],
       reasons: stringArray(source.reasons ?? source.Reasons),
       unknowns: stringArray(source.unknowns ?? source.Unknowns),
