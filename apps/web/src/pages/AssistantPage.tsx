@@ -68,6 +68,10 @@ function stringList(value: unknown) {
     .filter(Boolean))]
 }
 
+function metric(value: number | undefined) {
+  return value === undefined ? '—' : String(value)
+}
+
 function TagsField({
   label,
   placeholder,
@@ -275,6 +279,11 @@ export function AssistantPage() {
     ? `${save.error.message} (${save.error.code ?? 'API_ERROR'}${save.error.requestId ? `, request_id: ${save.error.requestId}` : ''})`
     : save.error?.message
   const activeRunID = submittedRunID ?? status.data?.run_id
+  const aiCalls = status.data?.ai_calls
+  const aiBatchCount = status.data?.ai_batches ?? status.data?.ai_http_attempts
+  const averageBatch = aiCalls !== undefined && aiBatchCount !== undefined && aiBatchCount > 0
+    ? (aiCalls / aiBatchCount).toFixed(1)
+    : '—'
   const aiFailureSummary = [
     ['ограничение скорости', status.data?.ai_rate_limit],
     ['таймауты', status.data?.ai_timeouts],
@@ -322,7 +331,7 @@ export function AssistantPage() {
         <Stack ref={statusSectionRef} tabIndex={-1} spacing={2} aria-live="polite" aria-busy={run.isPending || status.data?.state === 'queued' || status.data?.state === 'running'}>
           <Typography variant="h6">Статус анализа</Typography>
           <Stack direction="row" spacing={1}>
-            <Chip label={status.data?.state ?? 'загрузка'} color={status.data?.state === 'succeeded' ? 'success' : status.data?.state === 'failed' ? 'error' : 'default'} />
+            <Chip label={status.data?.state === 'unknown' ? 'неизвестно' : status.data?.state ?? 'загрузка'} color={status.data?.state === 'succeeded' ? 'success' : status.data?.state === 'failed' ? 'error' : 'default'} />
             <Button size="small" onClick={() => void status.refetch()}>Обновить</Button>
           </Stack>
           {(run.isPending || status.data?.state === 'queued') && <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
@@ -331,15 +340,17 @@ export function AssistantPage() {
           </Stack>}
           {status.data?.state === 'running' && <Typography>Анализируем все текущие вакансии…</Typography>}
           <Typography>
-            Проверено по критериям: {status.data?.processed ?? 0}
-            {status.data?.total !== undefined ? ` из ${status.data.total}` : ''} · Подходят: {status.data?.matched ?? 0}
+            Проверено по критериям: {metric(status.data?.processed)} из {metric(status.data?.total)}
+            {' · '}Подходят: {metric(status.data?.matched)}
           </Typography>
           <Typography>
-            {(status.data?.ai_calls ?? 0) === 0
+            {aiCalls === undefined
+              ? 'AI-анализ: телеметрия недоступна · Совпадения: —'
+              : aiCalls === 0
               ? 'AI-анализ: не выполнялся · Совпадения: —'
-              : `AI проверено: ${status.data?.ai_succeeded ?? 0} вакансий · DeepSeek HTTP-запросов: ${status.data?.ai_http_attempts ?? status.data?.ai_calls ?? 0} · Средний пакет: ${((status.data?.ai_calls ?? 0) / Math.max(status.data?.ai_batches ?? status.data?.ai_http_attempts ?? 1, 1)).toFixed(1)} · Повторы: ${status.data?.ai_retries ?? 0} · Ошибки: ${status.data?.ai_failures ?? 0} · Совпадения: ${status.data?.ai_matches ?? 0}`}
-            {(status.data?.ai_calls ?? 0) === 0 && ` · Ошибки: ${status.data?.ai_failures ?? 0}`}
-            {' · '}Пропущено AI: {status.data?.ai_skipped ?? 0}
+              : `AI проверено: ${metric(status.data?.ai_succeeded)} вакансий · DeepSeek HTTP-запросов: ${metric(status.data?.ai_http_attempts)} · Средний пакет: ${averageBatch} · Повторы: ${metric(status.data?.ai_retries)} · Ошибки: ${metric(status.data?.ai_failures)} · Совпадения: ${metric(status.data?.ai_matches)}`}
+            {aiCalls === 0 && ` · Ошибки: ${metric(status.data?.ai_failures)}`}
+            {' · '}Пропущено AI: {metric(status.data?.ai_skipped)}
           </Typography>
           {(status.data?.ai_prompt_tokens ?? 0) + (status.data?.ai_completion_tokens ?? 0) > 0 && (
             <Typography variant="body2" color="text.secondary">
@@ -355,10 +366,12 @@ export function AssistantPage() {
           {status.data?.state === 'paused' && (
             <Alert severity="warning">Анализ приостановлен: новые платные запросы не выполняются. Прогресс сохранён.</Alert>
           )}
-          {(status.data?.ai_calls ?? 0) === 0 && status.data?.ai_skip_reason && (
-            <Alert severity="info">{aiSkipReasonText[status.data.ai_skip_reason]}</Alert>
+          {aiCalls === 0 && status.data?.ai_skip_reason && (
+            <Alert severity="info">
+              {aiSkipReasonText[status.data.ai_skip_reason] ?? 'AI-анализ не выполнялся; причина недоступна.'}
+            </Alert>
           )}
-          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключён; проверка по критериям ещё не запускалась.' : status.data?.state === 'never_run' ? 'Проверка ещё не запускалась.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала проверки.' : status.data?.state === 'running' ? (status.data?.ai_retries ? 'Проверка идёт; временные ошибки провайдера повторяются с задержкой.' : 'Проверка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.') : status.data?.state === 'paused' ? 'Проверка безопасно приостановлена и может быть продолжена тем же запуском.' : status.data?.state === 'failed' ? 'Проверка по критериям завершилась с безопасной ошибкой; повторите запуск.' : status.data?.ai_status === 'completed' ? 'Проверка по критериям и AI-анализ завершены.' : status.data?.ai_status === 'partial' || status.data?.ai_status === 'failed' ? 'Проверка по критериям завершена; AI-анализ завершён частично или с ошибкой.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Проверка по критериям завершена.'}</Typography>
+          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключён; проверка по критериям ещё не запускалась.' : status.data?.state === 'never_run' ? 'Проверка ещё не запускалась.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала проверки.' : status.data?.state === 'running' ? (status.data?.ai_retries ? 'Проверка идёт; временные ошибки провайдера повторяются с задержкой.' : 'Проверка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.') : status.data?.state === 'paused' ? 'Проверка безопасно приостановлена и может быть продолжена тем же запуском.' : status.data?.state === 'unknown' || status.data?.ai_status === 'unknown' ? 'Статус старого запуска недоступен; данные показаны без предположений.' : status.data?.state === 'failed' ? 'Проверка по критериям завершилась с безопасной ошибкой; повторите запуск.' : status.data?.ai_status === 'completed' ? 'Проверка по критериям и AI-анализ завершены.' : status.data?.ai_status === 'partial' || status.data?.ai_status === 'failed' ? 'Проверка по критериям завершена; AI-анализ завершён частично или с ошибкой.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Проверка по критериям завершена.'}</Typography>
           {status.data?.finished_at && <Typography variant="body2">Последний анализ: {new Date(status.data.finished_at).toLocaleString('ru-RU')}</Typography>}
           {status.data?.last_checked_at && <Typography variant="caption" color="text.secondary">
             Обновлено: {new Date(status.data.last_checked_at).toLocaleTimeString('ru-RU')}
@@ -504,9 +517,13 @@ export function AssistantPage() {
           {matches.isLoading && <Typography>Загрузка…</Typography>}
           {matches.isError && <Alert severity="warning">Assistant API пока не подключён.</Alert>}
           {matches.data?.length === 0 && <Typography color="text.secondary">Новых совпадений нет.</Typography>}
-          {matches.data?.map((match) => <Stack key={match.vacancy_id} spacing={0.5}>
-            <Typography sx={{ fontWeight: 700 }}>{match.title || 'Вакансия'} · {Math.round(match.score * 100)}%</Typography>
-            <Typography variant="body2">{match.reasons.slice(0, 3).join(' · ')}</Typography>
+          {matches.data?.map((match, index) => <Stack key={`${match.vacancy_id ?? 'unknown'}-${index}`} spacing={0.5}>
+            <Typography sx={{ fontWeight: 700 }}>
+              {match.title || 'Вакансия'} · {match.score === undefined ? 'оценка неизвестна' : `${Math.round(match.score * 100)}%`}
+            </Typography>
+            <Typography variant="body2">
+              {match.reasons.length > 0 ? match.reasons.slice(0, 3).join(' · ') : 'Причины не указаны.'}
+            </Typography>
             <Divider />
           </Stack>)}
         </Stack>

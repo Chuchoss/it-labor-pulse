@@ -124,17 +124,17 @@ type ScopedWorkerStore interface {
 var ErrInvalidPreferences = errors.New("invalid assistant preferences")
 
 type MatchRecord struct {
-	VacancyID  string
-	Title      string
-	SourceURL  *string
-	Decision   Decision
-	Score      float64
-	Method     string
-	Confidence *string
-	Reasons    []string
-	Unknowns   []string
-	Conflicts  []string
-	Evidence   []string
+	VacancyID  string   `json:"vacancy_id"`
+	Title      string   `json:"title"`
+	SourceURL  *string  `json:"source_url"`
+	Decision   Decision `json:"decision"`
+	Score      float64  `json:"score"`
+	Method     string   `json:"method"`
+	Confidence *string  `json:"confidence"`
+	Reasons    []string `json:"reasons"`
+	Unknowns   []string `json:"unknowns"`
+	Conflicts  []string `json:"conflicts"`
+	Evidence   []string `json:"evidence_ids"`
 }
 
 type TelegramStatus struct {

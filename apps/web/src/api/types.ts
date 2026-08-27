@@ -211,24 +211,24 @@ export interface AssistantPreferences {
 
 export interface AssistantStatus {
   run_id?: string
-  ai_configured: boolean
-  ai_status: 'not_run' | 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'skipped'
+  ai_configured?: boolean
+  ai_status: 'not_run' | 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'skipped' | 'unknown'
   ai_skip_reason?: 'server_disabled' | 'user_opt_out' | 'run_predates_ai' | 'no_eligible'
     | 'budget_exhausted' | 'already_analyzed' | 'provider_unavailable' | 'unknown'
-  state: 'never_run' | 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'disabled'
+  state: 'never_run' | 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'disabled' | 'unknown'
   started_at?: string
   finished_at?: string
   last_checked_at?: string
-  processed: number
-  total: number
-  eligible: number
-  matched: number
-  ai_calls: number
-  ai_eligible: number
-  ai_succeeded: number
-  ai_matches: number
-  ai_failures: number
-  ai_skipped: number
+  processed?: number
+  total?: number
+  eligible?: number
+  matched?: number
+  ai_calls?: number
+  ai_eligible?: number
+  ai_succeeded?: number
+  ai_matches?: number
+  ai_failures?: number
+  ai_skipped?: number
   ai_http_attempts?: number
   ai_retries?: number
   ai_batches?: number
@@ -245,11 +245,11 @@ export interface AssistantStatus {
   ai_context_limit?: number
   ai_content_filter?: number
   ai_invalid_request?: number
-  skipped: number
+  skipped?: number
   error_category?: string
   cursor_source?: string
   cursor_observed_at?: string
-  pending_candidates: boolean
+  pending_candidates?: boolean
   provider?: string
   model?: string
   prompt_version?: string
@@ -257,12 +257,12 @@ export interface AssistantStatus {
 }
 
 export interface AssistantMatch {
-  vacancy_id: string
+  vacancy_id?: string
   title?: string
   source_url?: string | null
-  decision: 'match' | 'reject' | 'review'
-  score: number
-  method: 'deterministic' | 'ai'
+  decision?: 'match' | 'reject' | 'review'
+  score?: number
+  method?: 'deterministic' | 'ai'
   confidence?: 'low' | 'medium' | 'high' | null
   reasons: string[]
   unknowns: string[]

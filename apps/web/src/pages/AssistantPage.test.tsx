@@ -408,4 +408,62 @@ describe('AssistantPage', () => {
     expect(screen.getByText('Проверка по критериям завершена.')).toBeInTheDocument()
     expect(screen.queryByText(/AI-совпадения: 0/)).not.toBeInTheDocument()
   })
+
+  it('renders the current failed partial payload with legacy match field casing', async () => {
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        id: 'preference-current', version: 1, note: '', hard_criteria: {},
+        soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        run_id: 'run-current', ai_configured: true, ai_status: 'partial', state: 'failed',
+        processed: 1007, total: 2273, eligible: 1007, matched: 5,
+        ai_calls: 949, ai_eligible: 985, ai_succeeded: 938, ai_matches: 9,
+        ai_failures: 10, ai_skipped: 40, ai_http_attempts: 436, ai_retries: 109,
+        skipped: 980, pending_candidates: false,
+      })),
+      http.get('*/api/v1/assistant/matches', () => HttpResponse.json([{
+        VacancyID: 'synthetic-vacancy', Title: 'Тестовая вакансия', SourceURL: null,
+        Decision: 'match', Score: 0.91, Method: 'ai', Confidence: 'high',
+        Reasons: ['Подходящие навыки'], Unknowns: [], Conflicts: [], Evidence: [],
+      }])),
+    )
+
+    renderPage(<AssistantPage />, '/assistant')
+
+    expect(await screen.findByRole('heading', { name: 'Мои вакансии' })).toBeInTheDocument()
+    expect(await screen.findByText(/1007 из 2273/)).toBeInTheDocument()
+    expect(screen.getByText(/Тестовая вакансия · 91%/)).toBeInTheDocument()
+    expect(screen.getByText('Подходящие навыки')).toBeInTheDocument()
+  })
+
+  it('keeps missing or null historical telemetry unknown and handles zero batches', async () => {
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        id: 'preference-historical', version: 1, note: '', hard_criteria: {},
+        soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        ai_configured: true, ai_status: 'partial', state: 'failed',
+        processed: null, total: null, matched: null, ai_calls: 4, ai_succeeded: null,
+        ai_matches: null, ai_failures: null, ai_skipped: null, ai_batches: 0,
+        ai_prompt_tokens: 0, ai_completion_tokens: 0, skipped: null,
+      })),
+      http.get('*/api/v1/assistant/matches', () => HttpResponse.json([{
+        VacancyID: 'historical-vacancy', Title: 'Историческая вакансия',
+        Decision: 'match', Score: null, Method: 'deterministic',
+      }])),
+    )
+
+    renderPage(<AssistantPage />, '/assistant')
+
+    expect(await screen.findByText('failed')).toBeInTheDocument()
+    expect(screen.getByText(/Проверено по критериям: — из — · Подходят: —/)).toBeInTheDocument()
+    expect(screen.getByText(/Пропущено AI:/)).toHaveTextContent('Средний пакет: —')
+    expect(screen.getByText(/Историческая вакансия · оценка неизвестна/)).toBeInTheDocument()
+    expect(screen.getByText('Причины не указаны.')).toBeInTheDocument()
+    expect(screen.queryByText(/^Токены:/)).not.toBeInTheDocument()
+  })
 })

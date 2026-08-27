@@ -16,6 +16,7 @@ import (
 
 type assistantRepositoryFake struct {
 	preference assistant.PreferenceRecord
+	matches    []assistant.MatchRecord
 	subject    string
 	saves      int
 }
@@ -50,7 +51,7 @@ func (f *assistantRepositoryFake) AnalysisSnapshotTotal(context.Context) (int, e
 	return 2073, nil
 }
 func (f *assistantRepositoryFake) ListMatches(context.Context, string, int) ([]assistant.MatchRecord, error) {
-	return []assistant.MatchRecord{}, nil
+	return f.matches, nil
 }
 func (f *assistantRepositoryFake) TelegramStatus(context.Context, string, bool) (assistant.TelegramStatus, error) {
 	return assistant.TelegramStatus{}, nil
@@ -72,6 +73,31 @@ func TestAssistantAnalysisPreviewShowsSnapshotTotal(t *testing.T) {
 	srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/assistant/analyze", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.JSONEq(t, `{"snapshot_total":2073}`, rec.Body.String())
+}
+
+func TestAssistantMatchesFollowOpenAPIFieldNames(t *testing.T) {
+	repo := &assistantRepositoryFake{matches: []assistant.MatchRecord{{
+		VacancyID: "00000000-0000-0000-0000-000000000001",
+		Title:     "Synthetic vacancy",
+		Decision:  assistant.DecisionMatch,
+		Score:     0.9,
+		Method:    "deterministic",
+		Reasons:   []string{"synthetic reason"},
+		Unknowns:  []string{},
+		Conflicts: []string{},
+		Evidence:  []string{},
+	}}}
+	srv := New(Options{Assistant: AssistantOptions{
+		Enabled: true, DevAuthEnabled: true, DevSubject: "local-dev-user", Repository: repo,
+	}})
+	rec := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/assistant/matches", nil))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"vacancy_id"`)
+	require.Contains(t, rec.Body.String(), `"evidence_ids"`)
+	require.NotContains(t, rec.Body.String(), `"VacancyID"`)
+	require.NotContains(t, rec.Body.String(), `"Evidence"`)
 }
 
 func TestAssistantPreferencesUseStableDevSubjectAndSupportPatch(t *testing.T) {

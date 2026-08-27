@@ -10,6 +10,8 @@ import type {
   RolePage,
   RoleStat,
   SalaryTrends,
+  AssistantMatch,
+  AssistantStatus,
   SkillStat,
   TopSkills,
   TrendsCoverage,
@@ -19,6 +21,74 @@ import type {
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/$/, '')
 const REQUEST_TIMEOUT_MS = 10_000
 const ASSISTANT_DEV_SUBJECT = import.meta.env.VITE_ASSISTANT_DEV_SUBJECT || 'local-dev-user'
+
+const assistantStates = new Set([
+  'never_run', 'queued', 'running', 'paused', 'succeeded', 'failed', 'disabled',
+])
+const assistantAIStates = new Set([
+  'not_run', 'pending', 'running', 'completed', 'partial', 'failed', 'skipped',
+])
+const assistantCounterFields = [
+  'processed', 'total', 'eligible', 'matched', 'ai_calls', 'ai_eligible', 'ai_succeeded',
+  'ai_matches', 'ai_failures', 'ai_skipped', 'ai_http_attempts', 'ai_retries', 'ai_batches',
+  'ai_prompt_tokens', 'ai_completion_tokens', 'ai_cached_tokens', 'ai_rate_limit', 'ai_timeouts',
+  'ai_invalid_responses', 'ai_auth', 'ai_quota', 'ai_server', 'ai_network', 'ai_context_limit',
+  'ai_content_filter', 'ai_invalid_request', 'skipped',
+] as const
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {}
+}
+
+function optionalString(value: unknown) {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function optionalNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+export function normalizeAssistantStatus(value: unknown): AssistantStatus {
+  const source = asRecord(value)
+  const normalized: Record<string, unknown> = { ...source }
+  normalized.state = typeof source.state === 'string' && assistantStates.has(source.state)
+    ? source.state
+    : 'unknown'
+  normalized.ai_status = typeof source.ai_status === 'string' && assistantAIStates.has(source.ai_status)
+    ? source.ai_status
+    : 'unknown'
+  normalized.ai_configured = typeof source.ai_configured === 'boolean' ? source.ai_configured : undefined
+  normalized.pending_candidates = typeof source.pending_candidates === 'boolean'
+    ? source.pending_candidates
+    : undefined
+  for (const field of assistantCounterFields) normalized[field] = optionalNumber(source[field])
+  return normalized as unknown as AssistantStatus
+}
+
+export function normalizeAssistantMatches(value: unknown): AssistantMatch[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => {
+    const source = asRecord(item)
+    const score = optionalNumber(source.score ?? source.Score)
+    return {
+      vacancy_id: optionalString(source.vacancy_id ?? source.VacancyID),
+      title: optionalString(source.title ?? source.Title),
+      source_url: optionalString(source.source_url ?? source.SourceURL) ?? null,
+      decision: optionalString(source.decision ?? source.Decision) as AssistantMatch['decision'],
+      score: score !== undefined && score <= 1 ? score : undefined,
+      method: optionalString(source.method ?? source.Method) as AssistantMatch['method'],
+      confidence: optionalString(source.confidence ?? source.Confidence) as AssistantMatch['confidence'],
+      reasons: stringArray(source.reasons ?? source.Reasons),
+      unknowns: stringArray(source.unknowns ?? source.Unknowns),
+      conflicts: stringArray(source.conflicts ?? source.Conflicts),
+      evidence_ids: stringArray(source.evidence_ids ?? source.Evidence),
+    }
+  })
+}
 
 function headersFor(path: string, headers: Record<string, string> = {}) {
   return path.startsWith('/assistant/')
@@ -260,10 +330,10 @@ export const api = {
     mutate<import('./types').AssistantPreferences>('/assistant/preferences', 'PATCH', value, crypto.randomUUID()),
   archiveAssistantPreference: (id: string) =>
     mutate<void>('/assistant/preferences/archive', 'POST', { id }),
-  assistantStatus: () => get<import('./types').AssistantStatus>('/assistant/status', {}),
+  assistantStatus: () => get<unknown>('/assistant/status', {}).then(normalizeAssistantStatus),
   assistantAnalysisPreview: () => get<{ snapshot_total: number }>('/assistant/analyze', {}),
   runAssistantAnalysis: () => mutate<{ run_id: string; status: string }>('/assistant/analyze', 'POST', undefined, crypto.randomUUID()),
-  assistantMatches: () => get<import('./types').AssistantMatch[]>('/assistant/matches', {}),
+  assistantMatches: () => get<unknown>('/assistant/matches', {}).then(normalizeAssistantMatches),
   telegramStatus: () => get<import('./types').TelegramStatus>('/assistant/telegram', {}),
   assistantAutomation: () => get<import('./types').AssistantAutomationSettings>('/assistant/automation', {}),
   updateAssistantAutomation: (value: Partial<import('./types').AssistantAutomationSettings>) =>

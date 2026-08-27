@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
+import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 import {
   CurrencyProvider,
   readStoredCurrency,
@@ -67,7 +68,7 @@ export default function App() {
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/market" element={<MarketPage />} />
                 <Route path="/vacancies" element={<VacanciesPage />} />
-                <Route path="/assistant" element={<AssistantPage />} />
+                <Route path="/assistant" element={<RouteErrorBoundary><AssistantPage /></RouteErrorBoundary>} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </AppShell>
