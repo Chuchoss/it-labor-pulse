@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestMatchRejectsHardConflictAndReviewsUnknown(t *testing.T) {
+func TestMatchRejectsHardConflictAndExplicitlyMissingSkill(t *testing.T) {
 	salary := 100000.0
 	v := Vacancy{ID: "v1", Title: "Go developer", SalaryRUB: &salary, Skills: []string{"Go"}}
 	result := Match(v, Preferences{MinSalaryRUB: ptr(120000)}, time.Now())
@@ -20,7 +20,7 @@ func TestMatchRejectsHardConflictAndReviewsUnknown(t *testing.T) {
 		t.Fatalf("decision = %s", result.Decision)
 	}
 	result = Match(v, Preferences{RequiredSkills: []string{"Postgres"}}, time.Now())
-	if result.Decision != DecisionReview {
+	if result.Decision != DecisionReject {
 		t.Fatalf("decision = %s", result.Decision)
 	}
 }
@@ -873,3 +873,65 @@ func TestManualAIHasNoRequestCountCap(t *testing.T) {
 func ptr(v float64) *float64 { return &v }
 
 func boolPointerForTest(value bool) *bool { return &value }
+
+func TestLeadershipHardGateAliases(t *testing.T) {
+	titles := []string{
+		"Технический директор", "CTO", "Chief Technology Officer",
+		"Engineering Director", "Director of Development", "Head of Engineering",
+		"Руководитель разработки", "Frontend Team Lead", "Frontend Tech Lead",
+		"Ведущий фронтенд-разработчик", "Lead Frontend Developer",
+	}
+	for _, title := range titles {
+		got := Match(Vacancy{Title: title, RoleIDs: []string{"96"}}, Preferences{
+			Specialization: SpecializationFrontend, IncludeLeadership: false,
+		}, time.Now())
+		if got.Decision != DecisionReject || !contains(got.Conflicts, "leadership_excluded") {
+			t.Errorf("title %q did not hard reject: %+v", title, got)
+		}
+	}
+	if ClassifyVacancy(Vacancy{Title: "Frontend developer at a leading company"}).Leadership {
+		t.Fatal("leading company must not imply leadership")
+	}
+}
+
+func TestRequiredReactUsesExplicitAliasesOnly(t *testing.T) {
+	preferences := Preferences{RequiredSkills: []string{"React"}}
+	for _, title := range []string{"Frontend Developer (Next.js)", "JavaScript JSX Developer"} {
+		if got := Match(Vacancy{Title: title}, preferences, time.Now()); got.Decision != DecisionReject {
+			t.Errorf("%q decision=%s, want reject", title, got.Decision)
+		}
+	}
+	for _, skill := range []string{"React", "React.js", "ReactJS"} {
+		if got := Match(Vacancy{Title: "Frontend Developer", Skills: []string{skill}}, preferences, time.Now()); got.Decision != DecisionMatch {
+			t.Errorf("skill=%q decision=%s, want match", skill, got.Decision)
+		}
+	}
+	if got := Match(Vacancy{}, preferences, time.Now()); got.Decision != DecisionReview {
+		t.Fatalf("missing content decision=%s, want review", got.Decision)
+	}
+}
+
+func TestAIHardGatePrecedence(t *testing.T) {
+	aiMatch := MatchOutput{
+		Decision: "match", Confidence: "high",
+		CriterionEvidence: map[string]CriterionProof{"remote": {Pass: true, Source: "description"}},
+	}
+	hardReject := Result{Decision: DecisionReject, Conflicts: []string{"leadership_excluded"}}
+	if got := ApplyHardGatePrecedence(hardReject, aiMatch); got.Decision != "reject" {
+		t.Fatalf("hard reject was weakened: %+v", got)
+	}
+	for _, conflict := range []string{"remote_only", "specialization:backend", "specialization:fullstack"} {
+		deterministic := Result{Decision: DecisionReject, Conflicts: []string{conflict}}
+		if got := ApplyHardGatePrecedence(deterministic, aiMatch); got.Decision != "reject" {
+			t.Errorf("conflict %s was weakened: %+v", conflict, got)
+		}
+	}
+	unknown := Result{Decision: DecisionReview, Unknowns: []string{"remote"}}
+	if got := ApplyHardGatePrecedence(unknown, aiMatch); got.Decision != "match" {
+		t.Fatalf("explicit proof did not resolve unknown: %+v", got)
+	}
+	aiMatch.CriterionEvidence = nil
+	if got := ApplyHardGatePrecedence(unknown, aiMatch); got.Decision != "review" {
+		t.Fatalf("unknown without proof=%s, want review", got.Decision)
+	}
+}

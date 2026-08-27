@@ -160,7 +160,7 @@ func TestDeepSeekBatchSplitsDuplicateUnknownAndMissingOutputs(t *testing.T) {
 				_ = json.Unmarshal([]byte(payload.Messages[1].Content), &user)
 				if len(user.Vacancies) == 0 {
 					_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
-						"message":       map[string]any{"content": `{"decision":"match","score":0.8,"confidence":"high","evidence_ids":[]}`},
+						"message":       map[string]any{"content": `{"decision":"match","score":0.8,"confidence":"high","evidence_ids":[],"criterion_evidence":{"specialization":{"pass":true,"source":"title"}}}`},
 						"finish_reason": "stop",
 					}}})
 					return
@@ -184,6 +184,9 @@ func TestDeepSeekBatchSplitsDuplicateUnknownAndMissingOutputs(t *testing.T) {
 					decisions = append(decisions, map[string]any{
 						"vacancy_id": id, "decision": "match", "score": .8,
 						"confidence": "high", "evidence_ids": []string{},
+						"criterion_evidence": map[string]any{
+							"specialization": map[string]any{"pass": true, "source": "title"},
+						},
 					})
 				}
 				content, _ := json.Marshal(map[string]any{"decisions": decisions})
@@ -247,6 +250,9 @@ func TestProductionBatchPromptSemanticFixtures(t *testing.T) {
 			decisions = append(decisions, map[string]any{
 				"vacancy_id": vacancy.ID, "decision": expected[vacancy.ID], "score": .8,
 				"confidence": "high", "evidence_ids": []string{"vacancy:title"},
+				"criterion_evidence": map[string]any{
+					"specialization": map[string]any{"pass": true, "source": "title"},
+				},
 			})
 		}
 		content, _ := json.Marshal(map[string]any{"decisions": decisions})

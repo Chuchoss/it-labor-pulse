@@ -443,9 +443,9 @@ describe('AssistantPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Мои вакансии' })).toBeInTheDocument()
     expect(await screen.findByText(/1007 из 2273/)).toBeInTheDocument()
-    expect(screen.getByText(/Тестовая вакансия · 91%/)).toBeInTheDocument()
+    expect(screen.getByText(/Тестовая вакансия · уверенность AI: высокая/)).toBeInTheDocument()
     expect(screen.getByText('Подходящие навыки')).toBeInTheDocument()
-    expect(screen.getByText('Подтверждено AI')).toBeInTheDocument()
+    expect(screen.getByText('Подходящие')).toBeInTheDocument()
   })
 
   it('explains a superseded run and offers a new manual run', async () => {
@@ -466,7 +466,7 @@ describe('AssistantPage', () => {
     expect(screen.getByRole('button', { name: 'Проверить текущие вакансии' })).toBeInTheDocument()
   })
 
-  it('separates preliminary matches from AI-confirmed results', async () => {
+  it('renders only AI-confirmed results', async () => {
     useSupportingAssistantHandlers()
     server.use(
       http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
@@ -488,8 +488,9 @@ describe('AssistantPage', () => {
       ])),
     )
     renderPage(<AssistantPage />)
-    expect(await screen.findByText('Подтверждено AI')).toBeInTheDocument()
-    expect(screen.getByText('Предварительно подходят по фильтрам')).toBeInTheDocument()
+    expect(await screen.findByText('Подходящие')).toBeInTheDocument()
+    expect(screen.getByText('Frontend')).toBeInTheDocument()
+    expect(screen.queryByText('React Developer')).not.toBeInTheDocument()
   })
 
   it('keeps missing or null historical telemetry unknown and handles zero batches', async () => {
@@ -516,8 +517,7 @@ describe('AssistantPage', () => {
     expect(await screen.findByText('failed')).toBeInTheDocument()
     expect(screen.getByText(/Проверено по критериям: — из — · Предварительно подходят: —/)).toBeInTheDocument()
     expect(screen.getByText(/Пропущено AI:/)).toHaveTextContent('Средний пакет: —')
-    expect(screen.getByText(/Историческая вакансия · оценка неизвестна/)).toBeInTheDocument()
-    expect(screen.getByText('Ожидает проверки AI.')).toBeInTheDocument()
+    expect(screen.queryByText(/Историческая вакансия/)).not.toBeInTheDocument()
     expect(screen.queryByText(/^Токены:/)).not.toBeInTheDocument()
   })
 })

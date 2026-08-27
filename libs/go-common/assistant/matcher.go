@@ -5,6 +5,7 @@ package assistant
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -71,7 +72,7 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 	r := Result{Decision: DecisionMatch, Reasons: []string{}, Unknowns: []string{}, Conflicts: []string{}, Evidence: []string{}}
 	skills := make(map[string]bool, len(v.Skills))
 	for _, s := range v.Skills {
-		skills[strings.ToLower(strings.TrimSpace(s))] = true
+		skills[normalizeSkill(s)] = true
 	}
 	for _, excluded := range p.ExcludedSkills {
 		if skills[strings.ToLower(strings.TrimSpace(excluded))] {
@@ -159,11 +160,16 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 		}
 	}
 	for _, required := range p.RequiredSkills {
-		if skills[strings.ToLower(strings.TrimSpace(required))] {
+		normalized := normalizeSkill(required)
+		if hasExplicitSkill(v, normalized, skills) {
 			r.Reasons = append(r.Reasons, "required_skill:"+required)
 			r.Evidence = append(r.Evidence, "skill:"+required)
-		} else {
+		} else if strings.TrimSpace(v.Title) == "" && len(v.Skills) == 0 && strings.TrimSpace(v.Description) == "" {
 			r.Unknowns = append(r.Unknowns, "required_skill:"+required)
+		} else {
+			r.Decision = DecisionReject
+			r.Conflicts = append(r.Conflicts, "required_skill_missing:"+required)
+			return r
 		}
 	}
 	if p.MaxAge > 0 {
@@ -191,6 +197,53 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 	return r
 }
 
+// ApplyHardGatePrecedence combines an untrusted AI classification with the
+// authoritative deterministic result.
+func ApplyHardGatePrecedence(deterministic Result, ai MatchOutput) MatchOutput {
+	if deterministic.Decision == DecisionReject {
+		ai.Decision = string(DecisionReject)
+		ai.Conflicts = appendUnique(ai.Conflicts, deterministic.Conflicts...)
+		return ai
+	}
+	if ai.Decision != string(DecisionMatch) {
+		return ai
+	}
+	for criterion, proof := range ai.CriterionEvidence {
+		if proof.Pass {
+			ai.Evidence = appendUnique(ai.Evidence, "criterion:"+criterion+":"+proof.Source)
+		}
+	}
+	for _, unknown := range deterministic.Unknowns {
+		key := unknown
+		switch {
+		case unknown == "specialization_description_only":
+			key = "specialization"
+		case strings.HasPrefix(unknown, "required_skill:"):
+			key = "required_skill:" + normalizeSkill(strings.TrimPrefix(unknown, "required_skill:"))
+		}
+		proof, ok := ai.CriterionEvidence[key]
+		if !ok || !proof.Pass || strings.TrimSpace(proof.Source) == "" {
+			ai.Decision = string(DecisionReview)
+			ai.Unknowns = appendUnique(ai.Unknowns, unknown)
+		}
+	}
+	return ai
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		seen[value] = true
+	}
+	for _, value := range additions {
+		if value != "" && !seen[value] {
+			values = append(values, value)
+			seen[value] = true
+		}
+	}
+	return values
+}
+
 func boolScore(known, passes bool) float64 {
 	if !known {
 		return 0
@@ -206,11 +259,36 @@ func skillScore(required []string, skills map[string]bool) float64 {
 	}
 	hit := 0
 	for _, s := range required {
-		if skills[strings.ToLower(strings.TrimSpace(s))] {
+		if skills[normalizeSkill(s)] {
 			hit++
 		}
 	}
 	return float64(hit) / float64(len(required))
+}
+
+func normalizeSkill(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "react", "react.js", "reactjs":
+		return "react"
+	default:
+		return value
+	}
+}
+
+func hasExplicitSkill(v Vacancy, skill string, normalizedSkills map[string]bool) bool {
+	if normalizedSkills[skill] {
+		return true
+	}
+	if skill == "" {
+		return false
+	}
+	aliases := []string{regexp.QuoteMeta(skill)}
+	if skill == "react" {
+		aliases = []string{`react`, `react\.js`, `reactjs`}
+	}
+	rule := regexp.MustCompile(`(?i)(?:^|[^\pL\pN])(?:` + strings.Join(aliases, "|") + `)(?:$|[^\pL\pN])`)
+	return rule.MatchString(v.Title) || rule.MatchString(v.Description)
 }
 func contains(values []string, needle string) bool {
 	for _, value := range values {

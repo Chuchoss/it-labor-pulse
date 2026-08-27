@@ -140,6 +140,13 @@ func TestPostgresListMatchesAppliesAIFinalPrecedence(t *testing.T) {
 		SoftCriteria: map[string]any{}, Weights: map[string]float64{},
 	})
 	require.NoError(t, err)
+	var runID string
+	require.NoError(t, conn.QueryRow(ctx, `
+		INSERT INTO assistant_runs
+			(user_id, preference_id, state, snapshot_cutoff, ruleset_version)
+		VALUES ($1::uuid, $2::uuid, 'succeeded', now(), $3)
+		RETURNING id::text
+	`, userID, preference.ID, SpecializationRulesVersion).Scan(&runID))
 	vacancyIDs := make([]string, 3)
 	for i := range vacancyIDs {
 		require.NoError(t, conn.QueryRow(ctx, `
@@ -149,29 +156,29 @@ func TestPostgresListMatchesAppliesAIFinalPrecedence(t *testing.T) {
 			Scan(&vacancyIDs[i]))
 		_, err = repo.SaveMatch(ctx, WorkerMatch{
 			UserID: userID, VacancyID: vacancyIDs[i], PreferenceVersion: preference.Version,
-			VacancyRevision: 1, Result: Result{Decision: DecisionMatch, Score: .8},
+			RunID: runID, VacancyRevision: 1, Result: Result{Decision: DecisionMatch, Score: .8},
 		})
 		require.NoError(t, err)
 	}
 	require.NoError(t, repo.SaveAIResult(ctx, WorkerMatch{
 		UserID: userID, VacancyID: vacancyIDs[0], PreferenceVersion: preference.Version,
-		VacancyRevision: 1, Method: "ai", Provider: "fake", Model: "fake", PromptVersion: "test",
+		RunID: runID, VacancyRevision: 1, Method: "ai", Provider: "fake", Model: "fake", PromptVersion: "test",
 	}, MatchOutput{Decision: "reject", Score: .1, Confidence: "high"}))
 	require.NoError(t, repo.SaveAIResult(ctx, WorkerMatch{
 		UserID: userID, VacancyID: vacancyIDs[1], PreferenceVersion: preference.Version,
-		VacancyRevision: 1, Method: "ai", Provider: "fake", Model: "fake", PromptVersion: "test",
+		RunID: runID, VacancyRevision: 1, Method: "ai", Provider: "fake", Model: "fake", PromptVersion: "test",
 	}, MatchOutput{Decision: "match", Score: .9, Confidence: "high"}))
 
 	matches, err := repo.ListMatches(ctx, userID, 10)
 	require.NoError(t, err)
-	require.Len(t, matches, 2)
+	require.Len(t, matches, 1)
 	stages := map[string]string{}
 	for _, match := range matches {
 		stages[match.VacancyID] = match.Stage
 	}
 	require.NotContains(t, stages, vacancyIDs[0])
 	require.Equal(t, "confirmed", stages[vacancyIDs[1]])
-	require.Equal(t, "preliminary", stages[vacancyIDs[2]])
+	require.NotContains(t, stages, vacancyIDs[2])
 }
 
 func TestPostgresManualSnapshotScansEligibleVacanciesAndDeduplicatesOutbox(t *testing.T) {

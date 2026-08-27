@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const SpecializationRulesVersion = "specialization-v1"
+const SpecializationRulesVersion = "assistant-hard-gates-v2"
 
 type Specialization string
 
@@ -50,7 +50,11 @@ var specializationAliases = aliasRules{
 	other:     compileAliases(`embedded`, `firmware`, `game[\s-]?developer\w*`, `unity`, `1c`, `1с`),
 	leadership: compileAliases(
 		`team[\s-]?lead(?:er)?`, `tech(?:nical)?[\s-]?lead`, `lead[\s-]?(?:developer|engineer)`,
-		`lead`, `тим[\s-]?лид`, `тех[\s-]?лид`, `руководител\w*`, `head[\s-]?of`,
+		`lead[\s-]?front[\s-]?end`, `тим[\s-]?лид`, `тех[\s-]?лид`, `руководител[\pL]*`, `head[\s-]?of`,
+		`chief[\s-]+technology[\s-]+officer`, `cto`, `engineering[\s-]+director`,
+		`director[\s-]+of[\s-]+(?:engineering|development)`,
+		`техническ[\pL]*[\s-]+директор[\pL]*`, `директор[\pL]*[\s-]+по[\s-]+разработк[\pL]*`,
+		`руководител[\pL]*[\s-]+(?:разработк[\pL]*|отдел[\pL]*)`, `ведущ[\pL]*`,
 	),
 }
 

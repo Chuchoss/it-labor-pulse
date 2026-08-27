@@ -81,17 +81,24 @@ deterministic assessment дал `reject`; такой результат хран
 до пяти раз и затем переходят в dead-letter. Ошибка/отсутствие AI не отменяет
 сохранённый deterministic результат.
 
-В пользовательской выдаче deterministic `match` имеет статус preliminary.
-Завершённое AI-решение той же preference/vacancy revision имеет приоритет:
-AI `reject|review` скрывает предварительное совпадение из положительного списка,
-а `match` становится `confirmed`. Telegram при включённом AI ставится в очередь
-только после AI `match`.
+Начиная с ruleset `assistant-hard-gates-v2`, deterministic hard-критерии имеют
+безусловный приоритет. Доказанное нарушение всегда даёт `reject`, даже если AI
+вернул `match`. Неизвестный hard-критерий остаётся `review`, пока AI не вернёт
+валидированное явное доказательство по каждому неизвестному критерию. В
+«Подходящие» попадают только `confirmed`-результаты текущей preference, текущего
+несуперседированного run и текущего ruleset. Старые результаты сохраняются для
+аудита, но из текущей выдачи исключаются.
 
 AI получает только `hard_criteria`; свободная заметка и дополнительные пожелания
 не превращаются в обязательные условия. Неизвестные salary/remote/region/skills
 дают `review`, если известные данные не опровергают hard-критерий. Для строгого
 Frontend ясный Frontend IC может дать `match`, Backend/Fullstack и leadership
-при `include_leadership=false` дают `reject`.
+при `include_leadership=false` дают `reject`. Руководство определяется прежде
+всего по title, включая director/CTO/head/team lead/tech lead/lead и русские
+«технический директор», «руководитель», «тимлид», «техлид», «ведущий».
+Обязательный React подтверждается только явными `React`, `React.js` или
+`ReactJS`; Next.js/JS/TS/JSX не считаются доказательством. `remote_only=true`
+требует официальный remote-сигнал либо явное описание удалённого формата.
 
 Batch-ответ — JSON-объект с ровно одним решением на каждый opaque
 `vacancy_id`. Duplicate/unknown ID отклоняет пакет; missing item остаётся

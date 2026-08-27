@@ -155,6 +155,17 @@ timeout, context-limit или invalid response concurrency уменьшаетс�
 Неизвестные salary/remote/region/skills не являются доказанным конфликтом:
 решение должно быть `review`, если другие данные не дают hard reject.
 
+## Приоритет hard-критериев
+
+Ruleset `assistant-hard-gates-v2` не позволяет AI ослабить deterministic
+`reject`. Для `match` должны быть доказаны все hard-критерии: Frontend,
+явный React (`React`, `React.js`, `ReactJS`), удалённый формат и отсутствие
+руководящей роли. Next.js не доказывает React. Неизвестный remote или иной
+hard-факт остаётся `review`, пока AI не укажет валидный источник явного
+доказательства. Выдача `/assistant/matches` показывает только подтверждённые
+результаты текущих preference, run и ruleset; суперседированные запуски
+остаются в истории.
+
 Чтобы немедленно остановить новые расходы, завершите единственный worker.
 После аварийной остановки зафиксируйте resumable-состояние:
 

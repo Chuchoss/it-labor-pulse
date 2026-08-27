@@ -628,23 +628,13 @@ export function AssistantPage() {
           {matches.data?.length === 0 && <Typography color="text.secondary">
             {status.data?.state === 'running' ? 'Подтверждено на текущем этапе: 0.' : 'Новых совпадений нет.'}
           </Typography>}
-          {(matches.data?.some((match) => match.stage === 'confirmed')) && <Typography sx={{ fontWeight: 700 }}>Подтверждено AI</Typography>}
+          {(matches.data?.some((match) => match.stage === 'confirmed')) && <Typography sx={{ fontWeight: 700 }}>Подходящие</Typography>}
           {matches.data?.filter((match) => match.stage === 'confirmed').map((match, index) => <Stack key={`confirmed-${match.vacancy_id ?? 'unknown'}-${index}`} spacing={0.5}>
             <Typography sx={{ fontWeight: 700 }}>
-              {match.title || 'Вакансия'} · {match.score === undefined ? 'оценка неизвестна' : `${Math.round(match.score * 100)}%`}
+              {match.title || 'Вакансия'} · уверенность AI: {match.confidence === 'high' ? 'высокая' : match.confidence === 'medium' ? 'средняя' : 'низкая'}
             </Typography>
             <Typography variant="body2">
               {match.reasons.length > 0 ? match.reasons.slice(0, 3).join(' · ') : 'Причины не указаны.'}
-            </Typography>
-            <Divider />
-          </Stack>)}
-          {(matches.data?.some((match) => match.stage !== 'confirmed')) && <Typography sx={{ fontWeight: 700 }}>Предварительно подходят по фильтрам</Typography>}
-          {matches.data?.filter((match) => match.stage !== 'confirmed').map((match, index) => <Stack key={`preliminary-${match.vacancy_id ?? 'unknown'}-${index}`} spacing={0.5}>
-            <Typography sx={{ fontWeight: 700 }}>
-              {match.title || 'Вакансия'} · {match.score === undefined ? 'оценка неизвестна' : `${Math.round(match.score * 100)}%`}
-            </Typography>
-            <Typography variant="body2">
-              {match.reasons.length > 0 ? match.reasons.slice(0, 3).join(' · ') : 'Ожидает проверки AI.'}
             </Typography>
             <Divider />
           </Stack>)}

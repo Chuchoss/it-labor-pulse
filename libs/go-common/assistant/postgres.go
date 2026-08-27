@@ -358,11 +358,12 @@ func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestI
 		), inserted AS (
 			INSERT INTO assistant_runs
 				(user_id, state, request_id, preference_id, snapshot_cutoff, snapshot_total,
-				 ai_status, ai_skip_reason)
+				 ai_status, ai_skip_reason, ruleset_version)
 			SELECT $1::uuid, 'queued', NULLIF($2, ''), preference.id, scope.cutoff, scope.total,
 				CASE WHEN NOT $3 THEN 'skipped' WHEN NOT automation.ai_enabled THEN 'skipped' ELSE 'pending' END,
 				CASE WHEN NOT $3 THEN 'server_disabled'
-				     WHEN NOT automation.ai_enabled THEN 'user_opt_out' END
+				     WHEN NOT automation.ai_enabled THEN 'user_opt_out' END,
+				$4
 			FROM preference CROSS JOIN scope CROSS JOIN automation
 			WHERE NOT EXISTS (SELECT 1 FROM existing_request)
 			  AND NOT EXISTS (SELECT 1 FROM active)
@@ -371,7 +372,7 @@ func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestI
 		SELECT id::text FROM existing_request
 		UNION ALL SELECT id::text FROM inserted
 		LIMIT 1
-	`, userID, requestID, aiConfigured).Scan(&id)
+	`, userID, requestID, aiConfigured, SpecializationRulesVersion).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("analysis already running")
 	}
@@ -478,7 +479,10 @@ func (r *PostgresRepository) SupersedeAssistantRun(ctx context.Context, userID, 
 			finished_at=COALESCE(ar.finished_at, now()), superseded_at=now(),
 			superseded_by_preference_id=current_preference.id,
 			lease_until=NULL, last_checked_at=now(),
-			error_category='preferences_changed',
+			error_category=CASE
+				WHEN ar.preference_id <> current_preference.id THEN 'preferences_changed'
+				ELSE 'ruleset_changed'
+			END,
 			ai_status=CASE
 				WHEN ar.state='succeeded' THEN ar.ai_status
 				WHEN ar.ai_calls > 0 THEN 'partial' ELSE 'skipped'
@@ -489,10 +493,10 @@ func (r *PostgresRepository) SupersedeAssistantRun(ctx context.Context, userID, 
 			END
 		FROM current_preference
 		WHERE ar.id=$2::uuid AND ar.user_id=$1::uuid
-		  AND ar.preference_id <> current_preference.id
+		  AND (ar.preference_id <> current_preference.id OR ar.ruleset_version <> $3)
 		  AND ar.state IN ('queued','running','paused','failed','succeeded')
 		  AND (ar.state='succeeded' OR ar.processed < ar.snapshot_total)
-	`, userID, runID)
+	`, userID, runID, SpecializationRulesVersion)
 	if err != nil {
 		return fmt.Errorf("supersede assistant run: %w", err)
 	}
@@ -713,6 +717,7 @@ func (r *PostgresRepository) ListMatches(ctx context.Context, userID string, lim
 		FROM vacancy_match_results m
 		JOIN vacancies v ON v.id = m.vacancy_id
 		JOIN vacancy_preferences p ON p.id=m.preference_id
+		JOIN assistant_runs ar ON ar.id=m.run_id
 		WHERE m.user_id = $1::uuid
 		  AND p.id = (
 			SELECT id FROM vacancy_preferences
@@ -720,20 +725,27 @@ func (r *PostgresRepository) ListMatches(ctx context.Context, userID string, lim
 			ORDER BY version DESC LIMIT 1
 		  )
 		  AND m.decision = 'match'
-		  AND (
-			m.method='ai'
-			OR (
-				m.method='deterministic'
-				AND NOT EXISTS (
-					SELECT 1 FROM vacancy_match_results ai
-					WHERE ai.user_id=m.user_id AND ai.preference_id=m.preference_id
-					  AND ai.vacancy_id=m.vacancy_id AND ai.vacancy_revision=m.vacancy_revision
-					  AND ai.method='ai'
-				)
-			)
+		  AND m.method='ai'
+		  AND m.ruleset_version=$3
+		  AND ar.ruleset_version=$3
+		  AND ar.state NOT IN ('superseded','disabled','failed')
+		  AND ar.id = (
+			SELECT latest.id FROM assistant_runs latest
+			WHERE latest.user_id=$1::uuid
+			  AND latest.preference_id=p.id
+			  AND latest.ruleset_version=$3
+			  AND latest.state NOT IN ('superseded','disabled','failed')
+			ORDER BY latest.created_at DESC LIMIT 1
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM vacancy_match_results hard
+			WHERE hard.user_id=m.user_id AND hard.preference_id=m.preference_id
+			  AND hard.vacancy_id=m.vacancy_id AND hard.vacancy_revision=m.vacancy_revision
+			  AND hard.run_id=m.run_id AND hard.method='deterministic'
+			  AND hard.decision <> 'match'
 		  )
 		ORDER BY m.created_at DESC LIMIT $2
-	`, userID, limit)
+	`, userID, limit, SpecializationRulesVersion)
 	if err != nil {
 		return nil, fmt.Errorf("list assistant matches: %w", err)
 	}
@@ -766,7 +778,25 @@ func (r *PostgresRepository) ListMatches(ctx context.Context, userID string, lim
 
 func safeMatchReasons(method, _ string, evidence, conflicts []string) []string {
 	if method == "ai" {
-		return []string{"AI подтвердил соответствие критериям"}
+		labels := []struct{ prefix, text string }{
+			{"criterion:specialization:", "Frontend подтверждён"},
+			{"criterion:required_skill:react:", "React подтверждён явно"},
+			{"criterion:remote:", "Удалённый формат подтверждён"},
+			{"criterion:leadership:", "Руководящая роль исключена"},
+		}
+		reasons := make([]string, 0, len(labels))
+		for _, label := range labels {
+			for _, value := range evidence {
+				if strings.HasPrefix(value, label.prefix) {
+					reasons = append(reasons, label.text)
+					break
+				}
+			}
+		}
+		if len(reasons) > 0 {
+			return reasons
+		}
+		return []string{"AI подтвердил hard-критерии"}
 	}
 	for _, value := range evidence {
 		if strings.HasPrefix(value, "specialization:") {
@@ -1262,16 +1292,17 @@ func (r *PostgresRepository) SaveMatch(ctx context.Context, match WorkerMatch) (
 		INSERT INTO vacancy_match_results
 			(user_id, preference_id, vacancy_id, decision, method, score, rationale,
 			 evidence_ids, conflicts, unknowns, provider, model, prompt_version, input_snapshot_hash,
-			 vacancy_revision)
+			 vacancy_revision, run_id, ruleset_version)
 		SELECT $1::uuid, p.id, $2::uuid, $3, COALESCE(NULLIF($10, ''), 'deterministic'), $4, $5,
-			$6::jsonb, $7::jsonb, $8::jsonb, NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), $14, $15
+			$6::jsonb, $7::jsonb, $8::jsonb, NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), $14, $15,
+			NULLIF($16, '')::uuid, $17
 		FROM vacancy_preferences p
 		WHERE p.user_id = $1::uuid AND p.version = $9
 		ON CONFLICT DO NOTHING
 	`, match.UserID, match.VacancyID, string(match.Result.Decision), match.Result.Score,
 		strings.Join(match.Result.Reasons, "; "), string(evidence), string(conflicts), string(unknowns),
 		match.PreferenceVersion, match.Method, match.Provider, match.Model, match.PromptVersion,
-		match.InputSnapshotHash, max(match.VacancyRevision, 1))
+		match.InputSnapshotHash, max(match.VacancyRevision, 1), match.RunID, SpecializationRulesVersion)
 	if err != nil {
 		return false, fmt.Errorf("save assistant match: %w", err)
 	}
@@ -1300,16 +1331,16 @@ func (r *PostgresRepository) SaveAIResult(ctx context.Context, match WorkerMatch
 		INSERT INTO vacancy_match_results
 			(user_id, preference_id, vacancy_id, decision, method, score, confidence,
 			 rationale, evidence_ids, conflicts, unknowns, provider, model, prompt_version,
-			 input_snapshot_hash, vacancy_revision)
+			 input_snapshot_hash, vacancy_revision, run_id, ruleset_version)
 		SELECT $1::uuid, p.id, $2::uuid, $3, 'ai', $4, $5, $6, $7::jsonb, $8::jsonb,
-			$9::jsonb, $10, $11, $12, $13, $15
+			$9::jsonb, $10, $11, $12, $13, $15, NULLIF($16, '')::uuid, $17
 		FROM vacancy_preferences p
 		WHERE p.user_id = $1::uuid AND p.version = $14
 		ON CONFLICT DO NOTHING
 	`, match.UserID, match.VacancyID, output.Decision, output.Score, output.Confidence,
 		output.Rationale, jsonArray(output.Evidence), jsonArray(output.Conflicts),
 		jsonArray(output.Unknowns), match.Provider, match.Model, match.PromptVersion, inputHash,
-		match.PreferenceVersion, max(match.VacancyRevision, 1))
+		match.PreferenceVersion, max(match.VacancyRevision, 1), match.RunID, SpecializationRulesVersion)
 	if err != nil {
 		return fmt.Errorf("save assistant AI result: %w", err)
 	}
@@ -1444,7 +1475,18 @@ func (r *PostgresRepository) ClaimDeliveries(ctx context.Context, workerID strin
 			JOIN assistant_automation_settings a ON a.user_id = d.user_id AND a.telegram_enabled
 			JOIN vacancy_match_results m ON m.user_id = d.user_id AND m.vacancy_id = d.vacancy_id
 			    AND m.preference_id = d.preference_id AND m.decision = 'match'
+			    AND m.method='ai' AND m.ruleset_version=$4
 			WHERE d.user_id = c.user_id AND c.linked_at IS NOT NULL AND c.revoked_at IS NULL AND c.opted_in
+			  AND d.preference_id=(
+				SELECT p.id FROM vacancy_preferences p
+				WHERE p.user_id=d.user_id AND p.archived_at IS NULL
+				ORDER BY p.version DESC LIMIT 1
+			  )
+			  AND (m.run_id IS NULL OR EXISTS (
+				SELECT 1 FROM assistant_runs ar
+				WHERE ar.id=m.run_id AND ar.ruleset_version=$4
+				  AND ar.state NOT IN ('superseded','disabled','failed')
+			  ))
 			  AND d.status IN ('pending','failed') AND d.dead_letter_at IS NULL
 			  AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= now())
 			  AND (d.cooldown_until IS NULL OR d.cooldown_until <= now())
@@ -1454,7 +1496,7 @@ func (r *PostgresRepository) ClaimDeliveries(ctx context.Context, workerID strin
 				  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
 				ORDER BY created_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
 			  )
-			RETURNING d.id, d.user_id, d.vacancy_id, d.attempts, c.chat_id
+			RETURNING d.id, d.user_id, d.preference_id, d.vacancy_id, d.attempts, c.chat_id
 		)
 		SELECT x.id::text, x.user_id::text, x.vacancy_id::text, x.attempts, x.chat_id,
 		       v.title, v.source_url, v.salary_from, v.salary_to, m.score::float8,
@@ -1462,8 +1504,9 @@ func (r *PostgresRepository) ClaimDeliveries(ctx context.Context, workerID strin
 		FROM claimed x
 		JOIN vacancies v ON v.id = x.vacancy_id
 		JOIN vacancy_match_results m ON m.user_id = x.user_id AND m.vacancy_id = x.vacancy_id
-		    AND m.decision = 'match'
-	`, workerID, limit, fmt.Sprintf("%d seconds", int(lease.Seconds())))
+		    AND m.preference_id=x.preference_id AND m.decision = 'match'
+		    AND m.method='ai' AND m.ruleset_version=$4
+	`, workerID, limit, fmt.Sprintf("%d seconds", int(lease.Seconds())), SpecializationRulesVersion)
 	if err != nil {
 		return nil, fmt.Errorf("claim telegram deliveries: %w", err)
 	}

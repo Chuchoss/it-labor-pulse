@@ -4,7 +4,10 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +62,11 @@ func TestSafeCurrentFrontendAudit(t *testing.T) {
 	counts := map[string]int{}
 	seen := map[string]bool{}
 	classifications := map[string]Classification{}
+	citedCandidates := map[string]WorkerCandidate{}
+	citedHashes := map[string]string{
+		"bfd8a96417e13d39ed234f382391b4338503900274f5108d8a6ef88e38b52d6b": "cited_technical_director",
+		"9e23df3bdf8ee9baa1a27a599deb9a0d48dc8ad5f351fb61fb69df244b4cc3d6": "cited_lead_frontend",
+	}
 	for {
 		candidates, err := repo.SnapshotCandidates(ctx, run, 100)
 		if err != nil {
@@ -72,11 +80,64 @@ func TestSafeCurrentFrontendAudit(t *testing.T) {
 				continue
 			}
 			seen[candidate.ID] = true
+			sum := sha256.Sum256([]byte(candidate.Title))
+			if label, ok := citedHashes[hex.EncodeToString(sum[:])]; ok {
+				citedCandidates[label] = candidate
+			}
 			classification := ClassifyVacancy(candidate.Vacancy)
 			classifications[candidate.ID] = classification
 			counts["derived_"+string(classification.Specialization)]++
+			if len(candidate.Vacancy.RoleIDs) == 0 {
+				counts["role_unknown"]++
+			} else if overlaps(p.ApprovedRoles, candidate.Vacancy.RoleIDs) {
+				counts["role_pass"]++
+			} else {
+				counts["role_reject"]++
+			}
+			switch classification.Specialization {
+			case SpecializationFrontend:
+				counts["frontend_match"]++
+			case SpecializationUnknown:
+				counts["frontend_review"]++
+			default:
+				counts["frontend_reject"]++
+			}
 			if classification.Leadership {
 				counts["derived_lead"]++
+			}
+			if candidate.Vacancy.IsRemote == nil {
+				counts["remote_unknown"]++
+			} else if *candidate.Vacancy.IsRemote {
+				counts["remote_true"]++
+			} else {
+				counts["remote_false"]++
+			}
+			skillMap := make(map[string]bool, len(candidate.Vacancy.Skills))
+			for _, skill := range candidate.Vacancy.Skills {
+				skillMap[normalizeSkill(skill)] = true
+			}
+			react := hasExplicitSkill(candidate.Vacancy, "react", skillMap)
+			contentMissing := strings.TrimSpace(candidate.Vacancy.Title) == "" &&
+				len(candidate.Vacancy.Skills) == 0 && strings.TrimSpace(candidate.Vacancy.Description) == ""
+			if react {
+				counts["react_explicit"]++
+			} else if contentMissing {
+				counts["react_unknown"]++
+			} else {
+				counts["react_missing"]++
+			}
+			rolePass := len(p.ApprovedRoles) == 0 || len(candidate.Vacancy.RoleIDs) == 0 ||
+				overlaps(p.ApprovedRoles, candidate.Vacancy.RoleIDs)
+			frontendPlausible := classification.Specialization == SpecializationFrontend ||
+				classification.Specialization == SpecializationUnknown
+			remotePlausible := candidate.Vacancy.IsRemote == nil || *candidate.Vacancy.IsRemote
+			if rolePass && frontendPlausible && !classification.Leadership && remotePlausible && (react || contentMissing) {
+				if classification.Specialization == SpecializationFrontend && candidate.Vacancy.IsRemote != nil &&
+					*candidate.Vacancy.IsRemote && react {
+					counts["plausible_confirmed"]++
+				} else {
+					counts["plausible_review"]++
+				}
 			}
 			result := Match(candidate.Vacancy, p, time.Now().UTC())
 			counts["decision_"+string(result.Decision)]++
@@ -168,6 +229,12 @@ func TestSafeCurrentFrontendAudit(t *testing.T) {
 		counts["derived_frontend"], counts["derived_backend"], counts["derived_fullstack"],
 		counts["derived_mobile"], counts["derived_other"], counts["derived_unknown"],
 		counts["derived_lead"], role96, role96And104)
+	t.Logf("SAFE_HARD_GATES role_pass=%d role_unknown=%d role_reject=%d frontend_match=%d frontend_review=%d frontend_reject=%d leadership_excluded=%d remote_true=%d remote_false=%d remote_unknown=%d react_explicit=%d react_missing=%d react_unknown=%d plausible_confirmed=%d plausible_review=%d",
+		counts["role_pass"], counts["role_unknown"], counts["role_reject"],
+		counts["frontend_match"], counts["frontend_review"], counts["frontend_reject"],
+		counts["derived_lead"], counts["remote_true"], counts["remote_false"], counts["remote_unknown"],
+		counts["react_explicit"], counts["react_missing"], counts["react_unknown"],
+		counts["plausible_confirmed"], counts["plausible_review"])
 	t.Logf("SAFE_OLD_RESULTS deterministic_match=%d ai_match=%d ai_reject_or_review_over_deterministic=%d",
 		deterministicMatches, aiMatches, aiRejectedOverDeterministic)
 	t.Logf("SAFE_RESULT_TAXONOMY match_det_frontend=%d match_det_backend=%d match_det_fullstack=%d match_det_unknown=%d match_det_lead=%d match_det_nonlead=%d match_ai_frontend=%d match_ai_backend=%d match_ai_fullstack=%d match_ai_unknown=%d match_ai_lead=%d match_ai_nonlead=%d review_ai_frontend=%d review_ai_backend=%d review_ai_fullstack=%d review_ai_unknown=%d review_ai_lead=%d review_ai_nonlead=%d",
@@ -210,6 +277,35 @@ func TestSafeCurrentFrontendAudit(t *testing.T) {
 		legacyVisible["deterministic_nonlead"], legacyVisible["ai_frontend"],
 		legacyVisible["ai_backend"], legacyVisible["ai_fullstack"], legacyVisible["ai_other"],
 		legacyVisible["ai_unknown"], legacyVisible["ai_lead"], legacyVisible["ai_nonlead"])
+	for _, label := range []string{"cited_technical_director", "cited_lead_frontend"} {
+		candidate, ok := citedCandidates[label]
+		if !ok {
+			t.Logf("SAFE_CITED label=%s found=false", label)
+			continue
+		}
+		classification := ClassifyVacancy(candidate.Vacancy)
+		result := Match(candidate.Vacancy, p, time.Now().UTC())
+		skillMap := map[string]bool{}
+		for _, skill := range candidate.Vacancy.Skills {
+			skillMap[normalizeSkill(skill)] = true
+		}
+		remote := "unknown"
+		if candidate.Vacancy.IsRemote != nil {
+			remote = strconv.FormatBool(*candidate.Vacancy.IsRemote)
+		}
+		var aiDecision, aiConfidence, promptVersion string
+		var resultRunID *string
+		_ = pool.QueryRow(ctx, `
+			SELECT decision, COALESCE(confidence, ''), COALESCE(prompt_version, ''), run_id::text
+			FROM vacancy_match_results
+			WHERE user_id=$1::uuid AND preference_id=$2::uuid AND vacancy_id=$3::uuid AND method='ai'
+			ORDER BY created_at DESC LIMIT 1
+		`, userID, preferenceID, candidate.ID).Scan(&aiDecision, &aiConfidence, &promptVersion, &resultRunID)
+		t.Logf("SAFE_CITED label=%s found=true preference_version=%d result_run_linked=%t specialization=%s leadership=%t remote=%s react_explicit=%t deterministic=%s conflicts=%v unknowns=%v ai_decision=%s ai_confidence=%s prompt_version=%s",
+			label, preference.Version, resultRunID != nil, classification.Specialization,
+			classification.Leadership, remote, hasExplicitSkill(candidate.Vacancy, "react", skillMap),
+			result.Decision, result.Conflicts, result.Unknowns, aiDecision, aiConfidence, promptVersion)
+	}
 }
 
 func TestSafeRunDecisionAudit(t *testing.T) {

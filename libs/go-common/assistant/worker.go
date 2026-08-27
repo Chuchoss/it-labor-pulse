@@ -47,6 +47,7 @@ type WorkerCandidate struct {
 
 type WorkerMatch struct {
 	UserID, VacancyID, Source, ExternalID  string
+	RunID                                  string
 	PreferenceVersion                      int
 	Result                                 Result
 	Method, Provider, Model, PromptVersion string
@@ -399,7 +400,7 @@ func processCandidates(
 				created, err := store.SaveMatch(ctx, WorkerMatch{
 					UserID: user.ID, VacancyID: candidate.ID, Source: candidate.Source,
 					ExternalID: candidate.ExternalID, PreferenceVersion: user.Preference.Version,
-					VacancyRevision: candidate.Revision, Result: result,
+					RunID: stats.RunID, VacancyRevision: candidate.Revision, Result: result,
 				})
 				if err != nil {
 					return err
@@ -467,7 +468,7 @@ func processCandidates(
 			match := WorkerMatch{
 				UserID: user.ID, VacancyID: candidate.ID, PreferenceVersion: user.Preference.Version,
 				VacancyRevision: candidate.Revision, Result: result, Method: "ai", Provider: "deepseek",
-				PromptVersion: "batch-v4-hard-semantics", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
+				RunID: stats.RunID, PromptVersion: "batch-v5-hard-gates", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
 			}
 			jobs = append(jobs, aiJob{
 				candidate: candidate, user: user, match: match, shared: shared, settings: settings,
@@ -532,6 +533,7 @@ func processAIJobs(
 			}
 			return store.(AIStore).SaveAIFailure(ctx, job.match, category)
 		}
+		output = ApplyHardGatePrecedence(job.match.Result, output)
 		if err := store.(AIStore).SaveAIResult(ctx, job.match, output); err != nil {
 			return err
 		}
