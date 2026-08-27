@@ -1663,7 +1663,7 @@ components:
 
     AssistantStatus:
       type: object
-      required: [ai_configured, ai_status, state, processed, total, eligible, matched, ai_eligible, ai_calls, ai_succeeded, ai_matches, ai_failures, ai_skipped, skipped, pending_candidates]
+      required: [ai_configured, ai_status, state, processed, total, eligible, matched, ai_eligible, ai_calls, ai_succeeded, ai_matches, ai_failures, ai_skipped, ai_http_attempts, ai_retries, ai_rate_limit, ai_timeouts, ai_invalid_responses, ai_auth, ai_quota, ai_server, ai_network, ai_context_limit, ai_content_filter, ai_invalid_request, skipped, pending_candidates]
       properties:
         run_id: { type: string, format: uuid }
         ai_configured: { type: boolean }
@@ -1673,7 +1673,7 @@ components:
         ai_skip_reason:
           type: [string, "null"]
           enum: [server_disabled, user_opt_out, run_predates_ai, no_eligible, budget_exhausted, already_analyzed, provider_unavailable, unknown, null]
-        state: { type: string, enum: [never_run, queued, running, succeeded, failed, disabled] }
+        state: { type: string, enum: [never_run, queued, running, paused, succeeded, failed, disabled] }
         started_at: { type: [string, "null"], format: date-time }
         finished_at: { type: [string, "null"], format: date-time }
         last_checked_at: { type: [string, "null"], format: date-time }
@@ -1682,11 +1682,26 @@ components:
         eligible: { type: integer, minimum: 0 }
         matched: { type: integer, minimum: 0 }
         ai_eligible: { type: integer, minimum: 0 }
-        ai_calls: { type: integer, minimum: 0 }
+        ai_calls:
+          type: integer
+          minimum: 0
+          description: Число вакансий, отправленных AI-провайдеру; HTTP retries не включены.
         ai_succeeded: { type: integer, minimum: 0 }
         ai_matches: { type: integer, minimum: 0 }
         ai_failures: { type: integer, minimum: 0 }
         ai_skipped: { type: integer, minimum: 0 }
+        ai_http_attempts: { type: integer, minimum: 0 }
+        ai_retries: { type: integer, minimum: 0 }
+        ai_rate_limit: { type: integer, minimum: 0 }
+        ai_timeouts: { type: integer, minimum: 0 }
+        ai_invalid_responses: { type: integer, minimum: 0 }
+        ai_auth: { type: integer, minimum: 0 }
+        ai_quota: { type: integer, minimum: 0 }
+        ai_server: { type: integer, minimum: 0 }
+        ai_network: { type: integer, minimum: 0 }
+        ai_context_limit: { type: integer, minimum: 0 }
+        ai_content_filter: { type: integer, minimum: 0 }
+        ai_invalid_request: { type: integer, minimum: 0 }
         skipped: { type: integer, minimum: 0 }
         error_category: { type: [string, "null"] }
         request_id: { type: [string, "null"] }

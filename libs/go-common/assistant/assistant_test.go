@@ -143,6 +143,96 @@ func TestDeepSeekValidatesEvidence(t *testing.T) {
 	}
 }
 
+func TestDeepSeekClassifiesProviderStatuses(t *testing.T) {
+	tests := map[int]string{
+		400: ProviderErrorInvalidRequest,
+		401: ProviderErrorAuth,
+		402: ProviderErrorQuota,
+		403: ProviderErrorAuth,
+		422: ProviderErrorInvalidRequest,
+		429: ProviderErrorRateLimit,
+		500: ProviderErrorServer,
+		503: ProviderErrorServer,
+	}
+	for status, want := range tests {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+			provider, err := NewDeepSeek(DeepSeekConfig{
+				APIKey: "secret", BaseURL: server.URL, MaxAttempts: 1,
+			}, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, stats, err := provider.CompleteDetailed(context.Background(), Request{})
+			if err == nil || stats.Category != want || stats.HTTPAttempts != 1 {
+				t.Fatalf("category=%q attempts=%d err=%v", stats.Category, stats.HTTPAttempts, err)
+			}
+		})
+	}
+}
+
+func TestDeepSeekRetriesTemporaryAndRepairsMalformedJSON(t *testing.T) {
+	valid := `{"choices":[{"message":{"content":"{\"decision\":\"review\",\"score\":0.5,\"confidence\":\"medium\",\"evidence_ids\":[]}"},"finish_reason":"stop"}]}`
+	for _, tt := range []struct {
+		name  string
+		first func(http.ResponseWriter)
+	}{
+		{name: "rate limit", first: func(w http.ResponseWriter) { w.WriteHeader(http.StatusTooManyRequests) }},
+		{name: "malformed JSON", first: func(w http.ResponseWriter) {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"not-json"},"finish_reason":"stop"}]}`))
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				if calls == 1 {
+					tt.first(w)
+					return
+				}
+				_, _ = w.Write([]byte(valid))
+			}))
+			defer server.Close()
+			provider, err := NewDeepSeek(DeepSeekConfig{
+				APIKey: "secret", BaseURL: server.URL, MaxAttempts: 2,
+			}, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, stats, err := provider.CompleteDetailed(context.Background(), Request{})
+			if err != nil || calls != 2 || stats.HTTPAttempts != 2 || stats.Retries != 1 {
+				t.Fatalf("calls=%d stats=%+v err=%v", calls, stats, err)
+			}
+		})
+	}
+}
+
+func TestDeepSeekClassifiesFinishReasons(t *testing.T) {
+	tests := map[string]string{
+		"length":                       ProviderErrorContextLimit,
+		"content_filter":               ProviderErrorContentFilter,
+		"insufficient_system_resource": ProviderErrorServer,
+	}
+	for reason, want := range tests {
+		t.Run(reason, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":""},"finish_reason":"` + reason + `"}]}`))
+			}))
+			defer server.Close()
+			provider, _ := NewDeepSeek(DeepSeekConfig{
+				APIKey: "secret", BaseURL: server.URL, MaxAttempts: 1,
+			}, server.Client())
+			_, stats, err := provider.CompleteDetailed(context.Background(), Request{})
+			if err == nil || stats.Category != want {
+				t.Fatalf("category=%q err=%v", stats.Category, err)
+			}
+		})
+	}
+}
+
 func TestTelegramHTMLDoesNotAllowMarkupInjection(t *testing.T) {
 	message := TelegramHTML(`<script>`, "", "https://example.com/v/1", .5, "high", []string{"a < b"})
 	if strings.Contains(message, "<script>") || !strings.Contains(message, "&lt;script&gt;") {

@@ -35,9 +35,17 @@ func main() {
 	once := flag.Bool("once", false, "run one bounded scan and exit")
 	allowExternal := flag.Bool("allow-external", false, "allow explicitly enabled external AI validation")
 	allowTelegram := flag.Bool("allow-telegram", false, "allow explicitly enabled Telegram delivery")
+	pauseRun := flag.String("pause-run", "", "pause an active assistant run without completing it")
+	resumeRun := flag.String("resume-run", "", "queue the same paused assistant run for resumption")
+	probeExternal := flag.Bool("probe-external", false, "make exactly one synthetic provider health call")
+	providerTimeout := flag.Duration("provider-timeout", 0, "override provider timeout for this worker")
+	batchSize := flag.Int("batch-size", 0, "override durable processing batch size")
 	flag.Parse()
-	_ = godotenv.Load()
+	_ = godotenv.Overload()
 	log := logging.New(logging.Options{Service: "assistant-worker", Env: envOr("APP_ENV", "local"), Level: envOr("LOG_LEVEL", "info")})
+	envFile, _ := godotenv.Read()
+	log.Info("assistant_worker_environment", "env_file_database_selected",
+		envFile["DATABASE_URL"] != "" && os.Getenv("DATABASE_URL") == envFile["DATABASE_URL"])
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -47,6 +55,9 @@ func main() {
 		Log:             log,
 		Cutoff:          time.Now().UTC().Add(-24 * time.Hour),
 		TelegramEnabled: envBool("ASSISTANT_TELEGRAM_ENABLED", false) && *allowTelegram,
+	}
+	if *batchSize > 0 && *batchSize <= 100 {
+		opts.BatchSize = *batchSize
 	}
 	var store assistant.WorkerStore = localStore{}
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -72,15 +83,44 @@ func main() {
 		log.Error("assistant_worker_store_missing", "kind", "persistent_store_required")
 		os.Exit(1)
 	}
+	if *pauseRun != "" || *resumeRun != "" {
+		if *pauseRun != "" && *resumeRun != "" {
+			log.Error("assistant_worker_run_control_failed", "kind", "conflicting_flags")
+			os.Exit(1)
+		}
+		control, ok := store.(assistant.AssistantRunControlStore)
+		if !ok {
+			log.Error("assistant_worker_run_control_failed", "kind", "persistent_store_required")
+			os.Exit(1)
+		}
+		var err error
+		action, runID := "pause", *pauseRun
+		if *resumeRun != "" {
+			action, runID = "resume", *resumeRun
+			err = control.ResumeAssistantRun(ctx, runID)
+		} else {
+			err = control.PauseAssistantRun(ctx, runID)
+		}
+		if err != nil {
+			log.Error("assistant_worker_run_control_failed", "kind", action)
+			os.Exit(1)
+		}
+		log.Info("assistant_worker_run_control_complete", "action", action, "run_id", runID)
+		return
+	}
 	if *allowExternal && (!envBool("ASSISTANT_AI_LIVE_TEST", false) || !envBool("ASSISTANT_AI_ENABLED", false)) {
 		log.Error("assistant_worker_external_gate_denied", "kind", "requires_ai_enabled_and_live_test")
 		os.Exit(1)
 	}
 	if envBool("ASSISTANT_AI_ENABLED", false) && *allowExternal {
 		cfg := assistant.LoadConfig()
+		if *providerTimeout > 0 {
+			cfg.Timeout = *providerTimeout
+		}
 		provider, err := assistant.NewDeepSeek(assistant.DeepSeekConfig{
 			APIKey: cfg.DeepSeekAPIKey, BaseURL: cfg.DeepSeekBaseURL,
-			Model: cfg.DeepSeekModel, Timeout: cfg.Timeout, MaxTokens: 600,
+			Model: cfg.DeepSeekModel, Timeout: cfg.Timeout, MaxTokens: 1800,
+			MaxAttempts: 3, MinInterval: time.Second,
 		}, nil)
 		if err != nil {
 			log.Error("assistant_worker_ai_config_failed", "kind", "provider_not_configured")
@@ -88,6 +128,26 @@ func main() {
 		}
 		opts.AIProvider = provider
 		log.Warn("assistant_worker_external_ai_enabled", "request_count", "unlimited")
+	}
+	if *probeExternal {
+		detailed, ok := opts.AIProvider.(assistant.DetailedAIProvider)
+		if !ok {
+			log.Error("assistant_worker_ai_probe_failed", "category", "provider_unavailable")
+			os.Exit(1)
+		}
+		_, stats, err := detailed.CompleteDetailed(ctx, assistant.Request{
+			InputSnapshot: "VACANCY_DATA_BEGIN\nSynthetic provider health check\nVACANCY_DATA_END\nFACTS:\nEVIDENCE_IDS:\nvacancy:title\n",
+			Evidence:      map[string]bool{"vacancy:title": true},
+		})
+		if err != nil {
+			log.Error("assistant_worker_ai_probe_failed", "category", stats.Category,
+				"http_attempts", stats.HTTPAttempts, "retries", stats.Retries,
+				"latency_ms", stats.Latency.Milliseconds())
+			os.Exit(1)
+		}
+		log.Info("assistant_worker_ai_probe_complete", "http_attempts", stats.HTTPAttempts,
+			"retries", stats.Retries, "latency_ms", stats.Latency.Milliseconds())
+		return
 	}
 	run := func() error {
 		runCtx, cancel := context.WithTimeout(ctx, durationEnv("ASSISTANT_RUN_TIMEOUT", 10*time.Minute))

@@ -37,6 +37,7 @@ type WorkerCandidate struct {
 	Vacancy                                  Vacancy
 	Description                              string
 	DescriptionTruncated                     bool
+	AIRetry                                  bool
 	Revision                                 int
 	SalaryText                               string
 	ObservedAt                               time.Time
@@ -91,6 +92,10 @@ type WorkerOptions struct {
 type WorkerStats struct {
 	Users, Processed, Eligible, Matched, Notified, Skipped, AICalls int
 	AIEligible, AISucceeded, AIMatches, AIFailures, AISkipped       int
+	AIHTTPAttempts, AIRetries                                       int
+	AIRateLimit, AITimeouts, AIInvalidResponses, AIAuth             int
+	AIQuota, AIServer, AINetwork, AIContextLimit, AIContentFilter   int
+	AIInvalidRequest                                                int
 	RunID, AIStatus, AISkipReason                                   string
 }
 
@@ -102,6 +107,9 @@ func (s WorkerStats) LogValue() slog.Value {
 		slog.Int("ai_eligible", s.AIEligible), slog.Int("ai_succeeded", s.AISucceeded),
 		slog.Int("ai_matches", s.AIMatches), slog.Int("ai_failures", s.AIFailures),
 		slog.Int("ai_skipped", s.AISkipped), slog.String("ai_status", s.AIStatus),
+		slog.Int("ai_http_attempts", s.AIHTTPAttempts), slog.Int("ai_retries", s.AIRetries),
+		slog.Int("ai_rate_limit", s.AIRateLimit), slog.Int("ai_timeouts", s.AITimeouts),
+		slog.Int("ai_invalid_responses", s.AIInvalidResponses),
 		slog.String("ai_skip_reason", s.AISkipReason),
 	)
 }
@@ -159,6 +167,11 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 				Eligible: run.Eligible, Matched: run.Matched, AICalls: run.AICalls, Skipped: run.Skipped,
 				AIEligible: run.AIEligible, AISucceeded: run.AISucceeded,
 				AIMatches: run.AIMatches, AIFailures: run.AIFailures, AISkipped: run.AISkipped,
+				AIHTTPAttempts: run.AIHTTPAttempts, AIRetries: run.AIRetries,
+				AIRateLimit: run.AIRateLimit, AITimeouts: run.AITimeouts,
+				AIInvalidResponses: run.AIInvalidResponses, AIAuth: run.AIAuth, AIQuota: run.AIQuota,
+				AIServer: run.AIServer, AINetwork: run.AINetwork, AIContextLimit: run.AIContextLimit,
+				AIContentFilter: run.AIContentFilter, AIInvalidRequest: run.AIInvalidRequest,
 				AIStatus: run.AIStatus, AISkipReason: run.AISkipReason,
 			}
 			if len(users) == 0 {
@@ -179,12 +192,19 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 				if err = processCandidates(ctx, store, opts, users, candidates, &stats, true); err != nil {
 					return stats, err
 				}
-				last := candidates[len(candidates)-1]
-				if err = snapshot.UpdateAssistantRunProgress(ctx, run.ID, stats, &last); err != nil {
+				var last *WorkerCandidate
+				for i := range candidates {
+					if !candidates[i].AIRetry {
+						last = &candidates[i]
+					}
+				}
+				if err = snapshot.UpdateAssistantRunProgress(ctx, run.ID, stats, last); err != nil {
 					return stats, err
 				}
-				run.CursorCreatedAt = &last.CreatedAt
-				run.CursorVacancyID = last.ID
+				if last != nil {
+					run.CursorCreatedAt = &last.CreatedAt
+					run.CursorVacancyID = last.ID
+				}
 			}
 			return stats, nil
 		}
@@ -233,7 +253,9 @@ func processCandidates(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		stats.Processed++
+		if !candidate.AIRetry {
+			stats.Processed++
+		}
 		candidateFailed := false
 		for _, user := range users {
 			settings := AutomationSettings{}
@@ -248,9 +270,13 @@ func processCandidates(
 				stats.Skipped++
 				continue
 			}
-			stats.Eligible++
+			if !candidate.AIRetry {
+				stats.Eligible++
+			}
 			result := Match(candidate.Vacancy, toPreferences(user.Preference), opts.Now)
-			if result.Decision == DecisionMatch {
+			if candidate.AIRetry {
+				// Deterministic state and counters were persisted on the first pass.
+			} else if result.Decision == DecisionMatch {
 				created, err := store.SaveMatch(ctx, WorkerMatch{
 					UserID: user.ID, VacancyID: candidate.ID, Source: candidate.Source,
 					ExternalID: candidate.ExternalID, PreferenceVersion: user.Preference.Version,
@@ -291,7 +317,9 @@ func processCandidates(
 				setAISkipReason(stats, "user_opt_out")
 				continue
 			}
-			stats.AIEligible++
+			if !candidate.AIRetry {
+				stats.AIEligible++
+			}
 			if opts.AIProvider == nil || !ok {
 				stats.AISkipped++
 				setAISkipReason(stats, "provider_unavailable")
@@ -320,18 +348,52 @@ func processCandidates(
 				VacancyRevision: candidate.Revision, Result: result, Method: "ai", Provider: "deepseek",
 				PromptVersion: "description-v1", InputSnapshotHash: sha256Bytes(input),
 			}
-			output, providerErr := opts.AIProvider.Complete(ctx, Request{InputSnapshot: input, Evidence: evidence})
-			stats.AICalls++
+			request := Request{InputSnapshot: input, Evidence: evidence}
+			var output MatchOutput
+			providerStats := ProviderCallStats{HTTPAttempts: 1}
+			var providerErr error
+			if detailed, ok := opts.AIProvider.(DetailedAIProvider); ok {
+				output, providerStats, providerErr = detailed.CompleteDetailed(ctx, request)
+			} else {
+				output, providerErr = opts.AIProvider.Complete(ctx, request)
+			}
+			if candidate.AIRetry {
+				stats.AIRetries += providerStats.HTTPAttempts
+			} else {
+				stats.AICalls++
+				stats.AIRetries += providerStats.Retries
+			}
+			stats.AIHTTPAttempts += providerStats.HTTPAttempts
 			if providerErr != nil {
-				stats.AIFailures++
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if !candidate.AIRetry {
+					stats.AIFailures++
+				}
 				candidateFailed = true
-				if err := durable.SaveAIFailure(ctx, match, "provider_failed"); err != nil {
+				category := providerStats.Category
+				if category == "" {
+					category = providerErrorCategory(providerErr)
+				}
+				countProviderFailure(stats, category)
+				if opts.Log != nil {
+					opts.Log.Warn("assistant_ai_inference_failed",
+						"run_id", stats.RunID, "category", category,
+						"http_attempts", providerStats.HTTPAttempts,
+						"retries", providerStats.Retries,
+						"latency_ms", providerStats.Latency.Milliseconds())
+				}
+				if err := durable.SaveAIFailure(ctx, match, category); err != nil {
 					return err
 				}
 				continue
 			}
 			if err := durable.SaveAIResult(ctx, match, output); err != nil {
 				return err
+			}
+			if candidate.AIRetry && stats.AIFailures > 0 {
+				stats.AIFailures--
 			}
 			stats.AISucceeded++
 			if output.Decision == string(DecisionMatch) {
@@ -356,6 +418,31 @@ func processCandidates(
 		}
 	}
 	return nil
+}
+
+func countProviderFailure(stats *WorkerStats, category string) {
+	switch category {
+	case ProviderErrorRateLimit:
+		stats.AIRateLimit++
+	case ProviderErrorTimeout:
+		stats.AITimeouts++
+	case ProviderErrorInvalidResponse:
+		stats.AIInvalidResponses++
+	case ProviderErrorAuth:
+		stats.AIAuth++
+	case ProviderErrorQuota:
+		stats.AIQuota++
+	case ProviderErrorServer:
+		stats.AIServer++
+	case ProviderErrorNetwork:
+		stats.AINetwork++
+	case ProviderErrorContextLimit:
+		stats.AIContextLimit++
+	case ProviderErrorContentFilter:
+		stats.AIContentFilter++
+	case ProviderErrorInvalidRequest:
+		stats.AIInvalidRequest++
+	}
 }
 
 func setAISkipReason(stats *WorkerStats, reason string) {

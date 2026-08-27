@@ -266,7 +266,7 @@ describe('AssistantPage', () => {
 
     releaseRequest()
     expect(await screen.findByText(/10 из 22/)).toBeInTheDocument()
-    expect(screen.getByText(/AI: попыток 4 · Успешно 3 · Ошибок 1/)).toBeInTheDocument()
+    expect(screen.getByText(/AI-вакансий отправлено: 4 .* Успешно: 3 · Финальных ошибок: 1/)).toBeInTheDocument()
     expect(await screen.findByText('Проверка завершена, но часть AI-запросов не удалась.')).toBeInTheDocument()
     expect(screen.getByText(/22 из 22/)).toBeInTheDocument()
     expect(requests).toBe(1)

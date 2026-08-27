@@ -248,7 +248,7 @@ export function AssistantPage() {
     section?.focus({ preventScroll: true })
   }
   const startRun = () => {
-    if (status.data?.state === 'queued' || status.data?.state === 'running') {
+    if (status.data?.state === 'queued' || status.data?.state === 'running' || status.data?.state === 'paused') {
       focusSection(statusSectionRef.current)
       return
     }
@@ -275,6 +275,18 @@ export function AssistantPage() {
     ? `${save.error.message} (${save.error.code ?? 'API_ERROR'}${save.error.requestId ? `, request_id: ${save.error.requestId}` : ''})`
     : save.error?.message
   const activeRunID = submittedRunID ?? status.data?.run_id
+  const aiFailureSummary = [
+    ['ограничение скорости', status.data?.ai_rate_limit],
+    ['таймауты', status.data?.ai_timeouts],
+    ['некорректный ответ', status.data?.ai_invalid_responses],
+    ['авторизация', status.data?.ai_auth],
+    ['баланс/квота', status.data?.ai_quota],
+    ['ошибки DeepSeek', status.data?.ai_server],
+    ['сеть', status.data?.ai_network],
+    ['лимит контекста', status.data?.ai_context_limit],
+    ['фильтрация контента', status.data?.ai_content_filter],
+    ['параметры запроса', status.data?.ai_invalid_request],
+  ].filter((item): item is [string, number] => typeof item[1] === 'number' && item[1] > 0)
 
   return (
     <Stack spacing={3}>
@@ -324,14 +336,22 @@ export function AssistantPage() {
           <Typography>
             {(status.data?.ai_calls ?? 0) === 0
               ? 'AI-анализ: не выполнялся · Совпадения: —'
-              : `AI: попыток ${status.data?.ai_calls ?? 0} · Успешно ${status.data?.ai_succeeded ?? 0} · Ошибок ${status.data?.ai_failures ?? 0} · Совпадений ${status.data?.ai_matches ?? 0}`}
+              : `AI-вакансий отправлено: ${status.data?.ai_calls ?? 0} · HTTP-запросов: ${status.data?.ai_http_attempts ?? status.data?.ai_calls ?? 0} · Повторных запросов: ${status.data?.ai_retries ?? 0} · Успешно: ${status.data?.ai_succeeded ?? 0} · Финальных ошибок: ${status.data?.ai_failures ?? 0} · Совпадений: ${status.data?.ai_matches ?? 0}`}
             {(status.data?.ai_calls ?? 0) === 0 && ` · Ошибки: ${status.data?.ai_failures ?? 0}`}
             {' · '}Пропущено AI: {status.data?.ai_skipped ?? 0}
           </Typography>
+          {aiFailureSummary.length > 0 && (
+            <Alert severity="warning">
+              Категории финальных ошибок: {aiFailureSummary.map(([label, count]) => `${label} — ${count}`).join('; ')}.
+            </Alert>
+          )}
+          {status.data?.state === 'paused' && (
+            <Alert severity="warning">Анализ приостановлен: новые платные запросы не выполняются. Прогресс сохранён.</Alert>
+          )}
           {(status.data?.ai_calls ?? 0) === 0 && status.data?.ai_skip_reason && (
             <Alert severity="info">{aiSkipReasonText[status.data.ai_skip_reason]}</Alert>
           )}
-          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключён; проверка по критериям ещё не запускалась.' : status.data?.state === 'never_run' ? 'Проверка ещё не запускалась.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала проверки.' : status.data?.state === 'running' ? 'Проверка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.' : status.data?.state === 'failed' ? 'Проверка по критериям завершилась с безопасной ошибкой; повторите запуск.' : status.data?.ai_status === 'completed' ? 'Проверка по критериям и AI-анализ завершены.' : status.data?.ai_status === 'partial' || status.data?.ai_status === 'failed' ? 'Проверка по критериям завершена; AI-анализ завершён частично или с ошибкой.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Проверка по критериям завершена.'}</Typography>
+          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключён; проверка по критериям ещё не запускалась.' : status.data?.state === 'never_run' ? 'Проверка ещё не запускалась.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала проверки.' : status.data?.state === 'running' ? (status.data?.ai_retries ? 'Проверка идёт; временные ошибки провайдера повторяются с задержкой.' : 'Проверка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.') : status.data?.state === 'paused' ? 'Проверка безопасно приостановлена и может быть продолжена тем же запуском.' : status.data?.state === 'failed' ? 'Проверка по критериям завершилась с безопасной ошибкой; повторите запуск.' : status.data?.ai_status === 'completed' ? 'Проверка по критериям и AI-анализ завершены.' : status.data?.ai_status === 'partial' || status.data?.ai_status === 'failed' ? 'Проверка по критериям завершена; AI-анализ завершён частично или с ошибкой.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Проверка по критериям завершена.'}</Typography>
           {status.data?.finished_at && <Typography variant="body2">Последний анализ: {new Date(status.data.finished_at).toLocaleString('ru-RU')}</Typography>}
           {status.data?.last_checked_at && <Typography variant="caption" color="text.secondary">
             Обновлено: {new Date(status.data.last_checked_at).toLocaleTimeString('ru-RU')}
@@ -339,11 +359,11 @@ export function AssistantPage() {
           <Button type="button" variant="contained" disabled={run.isPending || preferences.isLoading} onClick={startRun}>
             {run.isPending
               ? 'Подготавливаем список вакансий…'
-              : status.data?.state === 'queued' || status.data?.state === 'running'
+              : status.data?.state === 'queued' || status.data?.state === 'running' || status.data?.state === 'paused'
                 ? 'Показать текущий анализ'
                 : 'Проверить текущие вакансии'}
           </Button>
-          {(status.data?.state === 'queued' || status.data?.state === 'running') && (
+          {(status.data?.state === 'queued' || status.data?.state === 'running' || status.data?.state === 'paused') && (
             <Alert severity="info">
               {submittedRunID ? 'Проверка запущена.' : 'Активная проверка восстановлена.'} Прогресс обновляется автоматически.
               {activeRunID && <> ID запуска: {activeRunID}.</>}

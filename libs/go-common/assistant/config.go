@@ -25,7 +25,7 @@ func LoadConfig() Config {
 		DeepSeekModel:    strings.TrimSpace(os.Getenv("DEEPSEEK_MODEL")),
 		TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
 		BatchSize:        envInt("ASSISTANT_BATCH_SIZE", 25, 1, 100),
-		Timeout:          time.Duration(envInt("ASSISTANT_TIMEOUT_SEC", 20, 1, 120)) * time.Second,
+		Timeout:          time.Duration(envInt("ASSISTANT_TIMEOUT_SEC", 90, 10, 300)) * time.Second,
 	}
 }
 func envBool(key string, fallback bool) bool {

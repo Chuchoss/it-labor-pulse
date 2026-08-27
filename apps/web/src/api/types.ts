@@ -215,7 +215,7 @@ export interface AssistantStatus {
   ai_status: 'not_run' | 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'skipped'
   ai_skip_reason?: 'server_disabled' | 'user_opt_out' | 'run_predates_ai' | 'no_eligible'
     | 'budget_exhausted' | 'already_analyzed' | 'provider_unavailable' | 'unknown'
-  state: 'never_run' | 'queued' | 'running' | 'succeeded' | 'failed' | 'disabled'
+  state: 'never_run' | 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'disabled'
   started_at?: string
   finished_at?: string
   last_checked_at?: string
@@ -229,6 +229,18 @@ export interface AssistantStatus {
   ai_matches: number
   ai_failures: number
   ai_skipped: number
+  ai_http_attempts?: number
+  ai_retries?: number
+  ai_rate_limit?: number
+  ai_timeouts?: number
+  ai_invalid_responses?: number
+  ai_auth?: number
+  ai_quota?: number
+  ai_server?: number
+  ai_network?: number
+  ai_context_limit?: number
+  ai_content_filter?: number
+  ai_invalid_request?: number
   skipped: number
   error_category?: string
   cursor_source?: string

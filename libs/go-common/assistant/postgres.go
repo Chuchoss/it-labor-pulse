@@ -34,61 +34,82 @@ type PreferenceRecord struct {
 }
 
 type AnalysisStatus struct {
-	RunID             string     `json:"run_id,omitempty"`
-	AIConfigured      bool       `json:"ai_configured"`
-	AIStatus          string     `json:"ai_status"`
-	AISkipReason      *string    `json:"ai_skip_reason,omitempty"`
-	State             string     `json:"state"`
-	StartedAt         *time.Time `json:"started_at,omitempty"`
-	FinishedAt        *time.Time `json:"finished_at,omitempty"`
-	LastCheckedAt     time.Time  `json:"last_checked_at"`
-	Processed         int        `json:"processed"`
-	Total             int        `json:"total"`
-	Eligible          int        `json:"eligible"`
-	Matched           int        `json:"matched"`
-	AICalls           int        `json:"ai_calls"`
-	AIEligible        int        `json:"ai_eligible"`
-	AISucceeded       int        `json:"ai_succeeded"`
-	AIMatches         int        `json:"ai_matches"`
-	AIFailures        int        `json:"ai_failures"`
-	AISkipped         int        `json:"ai_skipped"`
-	Skipped           int        `json:"skipped"`
-	ErrorCategory     *string    `json:"error_category,omitempty"`
-	RequestID         *string    `json:"request_id,omitempty"`
-	CursorSource      string     `json:"cursor_source"`
-	CursorObservedAt  *time.Time `json:"cursor_observed_at,omitempty"`
-	PendingCandidates bool       `json:"pending_candidates"`
-	Provider          *string    `json:"provider,omitempty"`
-	Model             *string    `json:"model,omitempty"`
-	PromptVersion     *string    `json:"prompt_version,omitempty"`
-	MethodVersion     string     `json:"method_version"`
+	RunID              string     `json:"run_id,omitempty"`
+	AIConfigured       bool       `json:"ai_configured"`
+	AIStatus           string     `json:"ai_status"`
+	AISkipReason       *string    `json:"ai_skip_reason,omitempty"`
+	State              string     `json:"state"`
+	StartedAt          *time.Time `json:"started_at,omitempty"`
+	FinishedAt         *time.Time `json:"finished_at,omitempty"`
+	LastCheckedAt      time.Time  `json:"last_checked_at"`
+	Processed          int        `json:"processed"`
+	Total              int        `json:"total"`
+	Eligible           int        `json:"eligible"`
+	Matched            int        `json:"matched"`
+	AICalls            int        `json:"ai_calls"`
+	AIEligible         int        `json:"ai_eligible"`
+	AISucceeded        int        `json:"ai_succeeded"`
+	AIMatches          int        `json:"ai_matches"`
+	AIFailures         int        `json:"ai_failures"`
+	AISkipped          int        `json:"ai_skipped"`
+	AIHTTPAttempts     int        `json:"ai_http_attempts"`
+	AIRetries          int        `json:"ai_retries"`
+	AIRateLimit        int        `json:"ai_rate_limit"`
+	AITimeouts         int        `json:"ai_timeouts"`
+	AIInvalidResponses int        `json:"ai_invalid_responses"`
+	AIAuth             int        `json:"ai_auth"`
+	AIQuota            int        `json:"ai_quota"`
+	AIServer           int        `json:"ai_server"`
+	AINetwork          int        `json:"ai_network"`
+	AIContextLimit     int        `json:"ai_context_limit"`
+	AIContentFilter    int        `json:"ai_content_filter"`
+	AIInvalidRequest   int        `json:"ai_invalid_request"`
+	Skipped            int        `json:"skipped"`
+	ErrorCategory      *string    `json:"error_category,omitempty"`
+	RequestID          *string    `json:"request_id,omitempty"`
+	CursorSource       string     `json:"cursor_source"`
+	CursorObservedAt   *time.Time `json:"cursor_observed_at,omitempty"`
+	PendingCandidates  bool       `json:"pending_candidates"`
+	Provider           *string    `json:"provider,omitempty"`
+	Model              *string    `json:"model,omitempty"`
+	PromptVersion      *string    `json:"prompt_version,omitempty"`
+	MethodVersion      string     `json:"method_version"`
 }
 
 type AssistantRun struct {
-	ID              string
-	UserID          string
-	PreferenceID    string
-	SnapshotCutoff  time.Time
-	Total           int
-	Processed       int
-	Eligible        int
-	Matched         int
-	AICalls         int
-	AIEligible      int
-	AISucceeded     int
-	AIMatches       int
-	AIFailures      int
-	AISkipped       int
-	AIStatus        string
-	AISkipReason    string
-	Skipped         int
-	CursorCreatedAt *time.Time
-	CursorVacancyID string
+	ID                                                           string
+	UserID                                                       string
+	PreferenceID                                                 string
+	SnapshotCutoff                                               time.Time
+	Total                                                        int
+	Processed                                                    int
+	Eligible                                                     int
+	Matched                                                      int
+	AICalls                                                      int
+	AIEligible                                                   int
+	AISucceeded                                                  int
+	AIMatches                                                    int
+	AIFailures                                                   int
+	AISkipped                                                    int
+	AIHTTPAttempts, AIRetries                                    int
+	AIRateLimit, AITimeouts, AIInvalidResponses, AIAuth, AIQuota int
+	AIServer, AINetwork, AIContextLimit, AIContentFilter         int
+	AIInvalidRequest                                             int
+	AIStatus                                                     string
+	AISkipReason                                                 string
+	Skipped                                                      int
+	CursorCreatedAt                                              *time.Time
+	CursorVacancyID                                              string
 }
 
 type AssistantRunStore interface {
 	ClaimAssistantRun(context.Context) (AssistantRun, bool, error)
 	CompleteAssistantRun(context.Context, string, string, WorkerStats, string) error
+}
+
+type AssistantRunControlStore interface {
+	PauseAssistantRun(context.Context, string) error
+	ResumeAssistantRun(context.Context, string) error
 }
 
 type ScopedWorkerStore interface {
@@ -232,12 +253,17 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 	err := r.db.QueryRow(ctx, `SELECT id::text, state, started_at, finished_at, last_checked_at,
 		processed, snapshot_total, eligible, matched, ai_calls, ai_eligible, ai_succeeded,
 		ai_matches, ai_failures, ai_skipped, ai_status, ai_skip_reason,
+		ai_http_attempts, ai_retries, ai_rate_limit, ai_timeouts, ai_invalid_responses,
+		ai_auth, ai_quota, ai_server, ai_network, ai_context_limit, ai_content_filter, ai_invalid_request,
 		skipped, error_category, request_id,
 		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version
 		FROM assistant_runs WHERE user_id = $1::uuid ORDER BY created_at DESC LIMIT 1`, userID).Scan(
 		&s.RunID, &s.State, &s.StartedAt, &s.FinishedAt, &s.LastCheckedAt, &s.Processed, &s.Total, &s.Eligible,
 		&s.Matched, &s.AICalls, &s.AIEligible, &s.AISucceeded,
 		&s.AIMatches, &s.AIFailures, &s.AISkipped, &s.AIStatus, &s.AISkipReason,
+		&s.AIHTTPAttempts, &s.AIRetries, &s.AIRateLimit, &s.AITimeouts, &s.AIInvalidResponses,
+		&s.AIAuth, &s.AIQuota, &s.AIServer, &s.AINetwork, &s.AIContextLimit, &s.AIContentFilter,
+		&s.AIInvalidRequest,
 		&s.Skipped, &s.ErrorCategory, &s.RequestID, &s.CursorSource,
 		&cursorAt, &s.PendingCandidates, &s.Provider, &s.Model, &s.PromptVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -266,7 +292,7 @@ func (r *PostgresRepository) QueueAnalysis(ctx context.Context, userID, requestI
 			WHERE user_id = $1::uuid AND request_id = NULLIF($2, '')
 		), active AS (
 			SELECT id FROM assistant_runs
-			WHERE user_id = $1::uuid AND state IN ('queued','running')
+			WHERE user_id = $1::uuid AND state IN ('queued','running','paused')
 		), preference AS (
 			SELECT id FROM vacancy_preferences
 			WHERE user_id = $1::uuid AND archived_at IS NULL
@@ -334,11 +360,16 @@ func (r *PostgresRepository) ClaimAssistantRun(ctx context.Context) (AssistantRu
 		RETURNING id::text, user_id::text, preference_id::text, snapshot_cutoff,
 			snapshot_total, processed, eligible, matched, ai_calls, ai_eligible, ai_succeeded,
 			ai_matches, ai_failures, ai_skipped, skipped, ai_status, COALESCE(ai_skip_reason, ''),
+			ai_http_attempts, ai_retries, ai_rate_limit, ai_timeouts, ai_invalid_responses,
+			ai_auth, ai_quota, ai_server, ai_network, ai_context_limit, ai_content_filter, ai_invalid_request,
 			snapshot_cursor_created_at, COALESCE(snapshot_cursor_vacancy_id::text, '')
 	`).Scan(&run.ID, &run.UserID, &run.PreferenceID, &run.SnapshotCutoff, &run.Total,
 		&run.Processed, &run.Eligible, &run.Matched, &run.AICalls, &run.AIEligible,
 		&run.AISucceeded, &run.AIMatches, &run.AIFailures, &run.AISkipped, &run.Skipped,
 		&run.AIStatus, &run.AISkipReason,
+		&run.AIHTTPAttempts, &run.AIRetries, &run.AIRateLimit, &run.AITimeouts,
+		&run.AIInvalidResponses, &run.AIAuth, &run.AIQuota, &run.AIServer, &run.AINetwork,
+		&run.AIContextLimit, &run.AIContentFilter, &run.AIInvalidRequest,
 		&run.CursorCreatedAt, &run.CursorVacancyID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssistantRun{}, false, nil
@@ -347,6 +378,36 @@ func (r *PostgresRepository) ClaimAssistantRun(ctx context.Context) (AssistantRu
 		return AssistantRun{}, false, fmt.Errorf("claim assistant run: %w", err)
 	}
 	return run, true, nil
+}
+
+func (r *PostgresRepository) PauseAssistantRun(ctx context.Context, runID string) error {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE assistant_runs
+		SET state='paused', lease_until=NULL, last_checked_at=now()
+		WHERE id=$1::uuid AND state IN ('queued', 'running')
+	`, runID)
+	if err != nil {
+		return fmt.Errorf("pause assistant run: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("assistant run is not active")
+	}
+	return nil
+}
+
+func (r *PostgresRepository) ResumeAssistantRun(ctx context.Context, runID string) error {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE assistant_runs
+		SET state='queued', lease_until=NULL, finished_at=NULL, last_checked_at=now()
+		WHERE id=$1::uuid AND state='paused'
+	`, runID)
+	if err != nil {
+		return fmt.Errorf("resume assistant run: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("assistant run is not paused")
+	}
+	return nil
 }
 
 func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, state string, stats WorkerStats, errorCategory string) error {
@@ -360,11 +421,17 @@ func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, st
 			ai_matches = $7, ai_failures = $8, ai_skipped = $9,
 			skipped = $10, error_category = NULLIF($11, ''), lease_until = NULL,
 			ai_eligible = $12, ai_succeeded = $13, ai_status = $14,
-			ai_skip_reason = NULLIF($15, '')
+			ai_skip_reason = NULLIF($15, ''), ai_http_attempts=$16, ai_retries=$17,
+			ai_rate_limit=$18, ai_timeouts=$19, ai_invalid_responses=$20, ai_auth=$21,
+			ai_quota=$22, ai_server=$23, ai_network=$24, ai_context_limit=$25,
+			ai_content_filter=$26, ai_invalid_request=$27
 		WHERE id = $1::uuid
 	`, runID, state, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls,
 		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, errorCategory,
-		stats.AIEligible, stats.AISucceeded, stats.AIStatus, stats.AISkipReason)
+		stats.AIEligible, stats.AISucceeded, stats.AIStatus, stats.AISkipReason,
+		stats.AIHTTPAttempts, stats.AIRetries, stats.AIRateLimit, stats.AITimeouts,
+		stats.AIInvalidResponses, stats.AIAuth, stats.AIQuota, stats.AIServer, stats.AINetwork,
+		stats.AIContextLimit, stats.AIContentFilter, stats.AIInvalidRequest)
 	if err != nil {
 		return fmt.Errorf("complete assistant run: %w", err)
 	}
@@ -773,7 +840,13 @@ func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run Assista
 			v.region_id::text, v.is_remote,
 			v.published_at, v.collected_at, v.created_at, COALESCE(v.description_text, ''),
 			v.description_truncated, v.analysis_revision,
-			COALESCE(array_agg(DISTINCT sk.slug) FILTER (WHERE sk.slug IS NOT NULL), '{}')
+			COALESCE(array_agg(DISTINCT sk.slug) FILTER (WHERE sk.slug IS NOT NULL), '{}'),
+			EXISTS (
+				SELECT 1 FROM assistant_ai_jobs j
+				WHERE j.user_id=$5::uuid AND j.preference_id=$6::uuid AND j.vacancy_id=v.id
+				  AND j.vacancy_revision=v.analysis_revision AND j.status='failed'
+				  AND j.error_code='provider_failed' AND j.attempts < 5
+			) AS ai_retry
 		FROM vacancies v
 		JOIN sources src ON src.code = v.source AND src.is_active
 		LEFT JOIN role_aliases ra ON ra.role_id = v.role_id AND ra.source = v.source
@@ -784,12 +857,20 @@ func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run Assista
 		LEFT JOIN vacancy_skills vs ON vs.vacancy_id = v.id
 		LEFT JOIN skills sk ON sk.id = vs.skill_id
 		WHERE v.is_active AND v.deleted_at IS NULL AND v.created_at <= $1
-		  AND ($2::timestamptz IS NULL OR (v.created_at, v.id) >
-		      ($2::timestamptz, NULLIF($3, '')::uuid))
+		  AND (
+			$2::timestamptz IS NULL OR (v.created_at, v.id) >
+				($2::timestamptz, NULLIF($3, '')::uuid)
+			OR EXISTS (
+				SELECT 1 FROM assistant_ai_jobs j
+				WHERE j.user_id=$5::uuid AND j.preference_id=$6::uuid AND j.vacancy_id=v.id
+				  AND j.vacancy_revision=v.analysis_revision AND j.status='failed'
+				  AND j.error_code='provider_failed' AND j.attempts < 5
+			)
+		  )
 		GROUP BY v.id, ra.pattern
 		ORDER BY v.created_at, v.id
 		LIMIT $4
-	`, run.SnapshotCutoff, run.CursorCreatedAt, run.CursorVacancyID, limit)
+	`, run.SnapshotCutoff, run.CursorCreatedAt, run.CursorVacancyID, limit, run.UserID, run.PreferenceID)
 	if err != nil {
 		return nil, fmt.Errorf("list assistant snapshot candidates: %w", err)
 	}
@@ -804,7 +885,7 @@ func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run Assista
 		var roleIDs, skills []string
 		if err := rows.Scan(&c.ID, &c.Source, &c.ExternalID, &c.Title, &sourceURL,
 			&salary, &roleID, &roleIDs, &regionID, &isRemote, &published, &c.ObservedAt, &c.CreatedAt,
-			&c.Description, &c.DescriptionTruncated, &c.Revision, &skills); err != nil {
+			&c.Description, &c.DescriptionTruncated, &c.Revision, &skills, &c.AIRetry); err != nil {
 			return nil, fmt.Errorf("scan assistant snapshot candidate: %w", err)
 		}
 		if sourceURL != nil {
@@ -844,11 +925,17 @@ func (r *PostgresRepository) UpdateAssistantRunProgress(
 			snapshot_cursor_vacancy_id=COALESCE($11::uuid, snapshot_cursor_vacancy_id),
 			last_checked_at=now(), lease_until=now() + interval '10 minutes',
 			ai_eligible=$12, ai_succeeded=$13, ai_status=$14,
-			ai_skip_reason=NULLIF($15, '')
+			ai_skip_reason=NULLIF($15, ''), ai_http_attempts=$16, ai_retries=$17,
+			ai_rate_limit=$18, ai_timeouts=$19, ai_invalid_responses=$20, ai_auth=$21,
+			ai_quota=$22, ai_server=$23, ai_network=$24, ai_context_limit=$25,
+			ai_content_filter=$26, ai_invalid_request=$27
 		WHERE id=$1::uuid AND state='running'
 	`, runID, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls,
 		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, cursorAt, cursorID,
-		stats.AIEligible, stats.AISucceeded, stats.AIStatus, stats.AISkipReason)
+		stats.AIEligible, stats.AISucceeded, stats.AIStatus, stats.AISkipReason,
+		stats.AIHTTPAttempts, stats.AIRetries, stats.AIRateLimit, stats.AITimeouts,
+		stats.AIInvalidResponses, stats.AIAuth, stats.AIQuota, stats.AIServer, stats.AINetwork,
+		stats.AIContextLimit, stats.AIContentFilter, stats.AIInvalidRequest)
 	if err != nil {
 		return fmt.Errorf("update assistant run progress: %w", err)
 	}

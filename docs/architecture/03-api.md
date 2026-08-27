@@ -469,7 +469,12 @@ outbox. Один активный run на пользователя; повто�
 `GET /status` возвращает `run_id`, чтобы UI восстанавливал активный запуск после
 refresh, `processed/total`, deterministic `matched`, а отдельно
 `ai_status`, `ai_skip_reason`, `ai_eligible`, `ai_calls`, `ai_succeeded`,
-`ai_matches`, `ai_failures` и `ai_skipped`. Нулевые `ai_calls` означают
+`ai_matches`, `ai_failures` и `ai_skipped`. `ai_calls` означает уникальные
+отправки вакансий, `ai_http_attempts` — все HTTP-попытки, а `ai_retries` —
+повторные запросы. `ai_failures` считает только вакансии с финальной ошибкой;
+категории `rate_limit`, `timeout`, `invalid_response`, auth/quota/5xx/network,
+context/content-filter и invalid-request возвращаются отдельными счётчиками.
+Состояние `paused` сохраняет cursor и разрешает продолжить тот же run. Нулевые `ai_calls` означают
 «не выполнялся», а не нулевой результат AI; причина фиксируется при создании
 run и уточняется worker. Старые запуски до появления AI помечаются
 `run_predates_ai`, без догадки о runtime-конфигурации. AI выключенный или
