@@ -32,6 +32,7 @@ type AssistantRepository interface {
 	ArchivePreference(context.Context, string, string) error
 	AnalysisStatus(context.Context, string, bool) (assistant.AnalysisStatus, error)
 	QueueAnalysis(context.Context, string, string, bool) (string, error)
+	SupersedeAssistantRun(context.Context, string, string) error
 	ListMatches(context.Context, string, int) ([]assistant.MatchRecord, error)
 	TelegramStatus(context.Context, string, bool) (assistant.TelegramStatus, error)
 	AutomationSettings(context.Context, string) (assistant.AutomationSettings, error)
@@ -83,6 +84,7 @@ func (h *assistantHandler) register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/assistant/preferences/archive", h.archivePreference)
 	mux.HandleFunc("/api/v1/assistant/status", h.status)
 	mux.HandleFunc("/api/v1/assistant/analyze", h.analyze)
+	mux.HandleFunc("/api/v1/assistant/analyze/supersede", h.supersedeAnalysis)
 	mux.HandleFunc("/api/v1/assistant/matches", h.matches)
 	mux.HandleFunc("/api/v1/assistant/telegram/link", h.link)
 	mux.HandleFunc("/api/v1/assistant/telegram", h.telegram)
@@ -244,6 +246,37 @@ func (h *assistantHandler) analyze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "status": "queued"})
+}
+
+func (h *assistantHandler) supersedeAnalysis(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	userID, err := h.user(r.Context(), r)
+	if err != nil {
+		h.error(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required", nil)
+		return
+	}
+	var body struct {
+		RunID string `json:"run_id"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024)).Decode(&body) != nil || strings.TrimSpace(body.RunID) == "" {
+		h.error(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Run id is required", nil)
+		return
+	}
+	if h.opts.Repository == nil {
+		h.error(w, r, http.StatusServiceUnavailable, "DEPENDENCY_UNAVAILABLE", "Analysis store is not configured", nil)
+		return
+	}
+	if err := h.opts.Repository.SupersedeAssistantRun(r.Context(), userID, body.RunID); err != nil {
+		h.error(w, r, http.StatusConflict, "RUN_NOT_SUPERSEDED", "Запуск нельзя остановить: новая версия критериев не найдена", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"run_id": body.RunID, "state": "superseded"})
 }
 
 func (h *assistantHandler) preferences(w http.ResponseWriter, r *http.Request) {

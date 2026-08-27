@@ -19,6 +19,7 @@ type assistantRepositoryFake struct {
 	matches    []assistant.MatchRecord
 	subject    string
 	saves      int
+	superseded string
 }
 
 func (f *assistantRepositoryFake) EnsureUser(_ context.Context, subject string) (string, error) {
@@ -47,6 +48,10 @@ func (f *assistantRepositoryFake) AnalysisStatus(context.Context, string, bool) 
 func (f *assistantRepositoryFake) QueueAnalysis(context.Context, string, string, bool) (string, error) {
 	return "run-1", nil
 }
+func (f *assistantRepositoryFake) SupersedeAssistantRun(_ context.Context, _, runID string) error {
+	f.superseded = runID
+	return nil
+}
 func (f *assistantRepositoryFake) AnalysisSnapshotTotal(context.Context) (int, error) {
 	return 2073, nil
 }
@@ -73,6 +78,20 @@ func TestAssistantAnalysisPreviewShowsSnapshotTotal(t *testing.T) {
 	srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/assistant/analyze", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.JSONEq(t, `{"snapshot_total":2073}`, rec.Body.String())
+}
+
+func TestAssistantSupersedesOldRunThroughPublicAPI(t *testing.T) {
+	repo := &assistantRepositoryFake{}
+	srv := New(Options{Assistant: AssistantOptions{
+		Enabled: true, DevAuthEnabled: true, DevSubject: "local-dev-user", Repository: repo,
+	}})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/assistant/analyze/supersede",
+		strings.NewReader(`{"run_id":"run-old"}`))
+	rec := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "run-old", repo.superseded)
+	require.JSONEq(t, `{"run_id":"run-old","state":"superseded"}`, rec.Body.String())
 }
 
 func TestAssistantMatchesFollowOpenAPIFieldNames(t *testing.T) {

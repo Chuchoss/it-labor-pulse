@@ -23,7 +23,7 @@ const REQUEST_TIMEOUT_MS = 10_000
 const ASSISTANT_DEV_SUBJECT = import.meta.env.VITE_ASSISTANT_DEV_SUBJECT || 'local-dev-user'
 
 const assistantStates = new Set([
-  'never_run', 'queued', 'running', 'paused', 'succeeded', 'failed', 'disabled',
+  'never_run', 'queued', 'running', 'paused', 'succeeded', 'failed', 'disabled', 'superseded',
 ])
 const assistantAIStates = new Set([
   'not_run', 'pending', 'running', 'completed', 'partial', 'failed', 'skipped',
@@ -34,6 +34,7 @@ const assistantCounterFields = [
   'ai_prompt_tokens', 'ai_completion_tokens', 'ai_cached_tokens', 'ai_rate_limit', 'ai_timeouts',
   'ai_invalid_responses', 'ai_auth', 'ai_quota', 'ai_server', 'ai_network', 'ai_context_limit',
   'ai_content_filter', 'ai_invalid_request', 'skipped',
+  'preference_version', 'current_preference_version', 'superseded_by_preference_version',
 ] as const
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -334,6 +335,8 @@ export const api = {
   assistantStatus: () => get<unknown>('/assistant/status', {}).then(normalizeAssistantStatus),
   assistantAnalysisPreview: () => get<{ snapshot_total: number }>('/assistant/analyze', {}),
   runAssistantAnalysis: () => mutate<{ run_id: string; status: string }>('/assistant/analyze', 'POST', undefined, crypto.randomUUID()),
+  supersedeAssistantAnalysis: (runId: string) =>
+    mutate<{ run_id: string; state: 'superseded' }>('/assistant/analyze/supersede', 'POST', { run_id: runId }),
   assistantMatches: () => get<unknown>('/assistant/matches', {}).then(normalizeAssistantMatches),
   telegramStatus: () => get<import('./types').TelegramStatus>('/assistant/telegram', {}),
   assistantAutomation: () => get<import('./types').AssistantAutomationSettings>('/assistant/automation', {}),

@@ -59,6 +59,7 @@ const aiSkipReasonText: Record<string, string> = {
   server_disabled: 'AI-анализ не запускался: выключен на сервере.',
   user_opt_out: 'AI-анализ не запускался: не включён пользователем.',
   run_predates_ai: 'AI-анализ не запускался: запуск создан до включения AI.',
+  preferences_changed: 'AI-анализ не запускался: критерии были обновлены.',
   no_eligible: 'AI-анализ не запускался: нет вакансий для AI.',
   budget_exhausted: 'Старый запуск остановлен историческим лимитом вызовов; новые запуски выполняются без лимита количества.',
   already_analyzed: 'AI-анализ не запускался: вакансии уже были обработаны AI.',
@@ -266,6 +267,13 @@ export function AssistantPage() {
       runSubmissionRef.current = false
     },
   })
+  const supersedeRun = useMutation({
+    mutationFn: (runID: string) => api.supersedeAssistantAnalysis(runID),
+    onSuccess: () => {
+      setSubmittedRunID(undefined)
+      void status.refetch()
+    },
+  })
   const focusSection = (section: HTMLDivElement | null) => {
     if (typeof section?.scrollIntoView === 'function') {
       section.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -393,12 +401,20 @@ export function AssistantPage() {
           {status.data?.state === 'paused' && (
             <Alert severity="warning">Анализ приостановлен: новые платные запросы не выполняются. Прогресс сохранён.</Alert>
           )}
+          {status.data?.state === 'superseded' && (
+            <Alert severity="warning">
+              {status.data.superseded_from_state === 'succeeded'
+                ? 'Старый анализ успел завершиться по прежним критериям и помечен устаревшим.'
+                : 'Старый анализ остановлен, потому что критерии изменились.'} Исторические результаты сохранены.
+              При необходимости запустите новую ручную проверку.
+            </Alert>
+          )}
           {aiCalls === 0 && status.data?.ai_skip_reason && (
             <Alert severity="info">
               {aiSkipReasonText[status.data.ai_skip_reason] ?? 'AI-анализ не выполнялся; причина недоступна.'}
             </Alert>
           )}
-          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключён; проверка по критериям ещё не запускалась.' : status.data?.state === 'never_run' ? 'Проверка ещё не запускалась.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала проверки.' : status.data?.state === 'running' ? (status.data?.ai_retries ? 'Проверка идёт; временные ошибки провайдера повторяются с задержкой.' : 'Проверка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.') : status.data?.state === 'paused' ? 'Проверка безопасно приостановлена и может быть продолжена тем же запуском.' : status.data?.state === 'unknown' || status.data?.ai_status === 'unknown' ? 'Статус старого запуска недоступен; данные показаны без предположений.' : status.data?.state === 'failed' ? 'Проверка по критериям завершилась с безопасной ошибкой; повторите запуск.' : status.data?.ai_status === 'completed' ? 'Проверка по критериям и AI-анализ завершены.' : status.data?.ai_status === 'partial' || status.data?.ai_status === 'failed' ? 'Проверка по критериям завершена; AI-анализ завершён частично или с ошибкой.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Проверка по критериям завершена.'}</Typography>
+          <Typography variant="body2" color="text.secondary">{status.data?.state === 'disabled' ? 'AI отключён; проверка по критериям ещё не запускалась.' : status.data?.state === 'never_run' ? 'Проверка ещё не запускалась.' : status.data?.state === 'queued' ? 'Снимок зафиксирован и ожидает начала проверки.' : status.data?.state === 'running' ? (status.data?.ai_retries ? 'Проверка идёт; временные ошибки провайдера повторяются с задержкой.' : 'Проверка идёт небольшими пакетами; новые вакансии попадут в следующий запуск.') : status.data?.state === 'paused' ? 'Проверка безопасно приостановлена и может быть продолжена тем же запуском.' : status.data?.state === 'superseded' ? 'Этот снимок завершён без изменения его исторических результатов.' : status.data?.state === 'unknown' || status.data?.ai_status === 'unknown' ? 'Статус старого запуска недоступен; данные показаны без предположений.' : status.data?.state === 'failed' ? 'Проверка по критериям завершилась с безопасной ошибкой; повторите запуск.' : status.data?.ai_status === 'completed' ? 'Проверка по критериям и AI-анализ завершены.' : status.data?.ai_status === 'partial' || status.data?.ai_status === 'failed' ? 'Проверка по критериям завершена; AI-анализ завершён частично или с ошибкой.' : status.data?.pending_candidates ? 'Есть новые вакансии для автоматической обработки.' : 'Проверка по критериям завершена.'}</Typography>
           {status.data?.finished_at && <Typography variant="body2">Последний анализ: {new Date(status.data.finished_at).toLocaleString('ru-RU')}</Typography>}
           {status.data?.last_checked_at && <Typography variant="caption" color="text.secondary">
             Обновлено: {new Date(status.data.last_checked_at).toLocaleTimeString('ru-RU')}
@@ -410,6 +426,14 @@ export function AssistantPage() {
                 ? 'Показать текущий анализ'
                 : 'Проверить текущие вакансии'}
           </Button>
+          {activeRunID
+            && (status.data?.state === 'queued' || status.data?.state === 'running' || status.data?.state === 'paused')
+            && (status.data?.current_preference_version ?? 0) > (status.data?.preference_version ?? 0) && (
+            <Button type="button" color="warning" variant="outlined" disabled={supersedeRun.isPending}
+              onClick={() => supersedeRun.mutate(activeRunID)}>
+              {supersedeRun.isPending ? 'Останавливаем…' : 'Остановить старый анализ'}
+            </Button>
+          )}
           {(status.data?.state === 'queued' || status.data?.state === 'running' || status.data?.state === 'paused') && (
             <Alert severity="info">
               {submittedRunID ? 'Проверка запущена.' : 'Активная проверка восстановлена.'} Прогресс обновляется автоматически.
@@ -431,6 +455,7 @@ export function AssistantPage() {
             Сначала сохраните критерии вакансии, затем запустите анализ.
           </Alert>}
           {run.isError && <Alert severity="error">Не удалось запустить анализ: {run.error.message}</Alert>}
+          {supersedeRun.isError && <Alert severity="error">Не удалось остановить старый анализ: {supersedeRun.error.message}</Alert>}
         </Stack>
       </CardContent></Card>
       <Card variant="outlined"><CardContent>

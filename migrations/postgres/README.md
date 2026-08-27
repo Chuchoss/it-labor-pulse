@@ -26,6 +26,8 @@ NNNNNN_description.down.sql
 | `000012-000015_assistant` | Персональные критерии, AI foundation, bounded worker и lifecycle |
 | `000016_assistant_automation` | Явные AI/Telegram opt-in, activation cutoff, leased outbox и delivery idempotency |
 | `000024_assistant_specialization` | Проверки явной specialization и opt-in руководящих вакансий в immutable preferences |
+| `000025_assistant_run_superseded` | Терминальная остановка устаревшего ручного run при новой immutable preference |
+| `000026_assistant_run_superseded_origin` | Исходное состояние run до supersede для точной истории |
 
 UUID PK: `DEFAULT gen_random_uuid()` (Supabase / PG 13+). AI / Perspectives tables — не здесь (Phase 4–5).
 

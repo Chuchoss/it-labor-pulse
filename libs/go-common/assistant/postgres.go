@@ -35,50 +35,54 @@ type PreferenceRecord struct {
 }
 
 type AnalysisStatus struct {
-	RunID              string     `json:"run_id,omitempty"`
-	AIConfigured       bool       `json:"ai_configured"`
-	AIStatus           string     `json:"ai_status"`
-	AISkipReason       *string    `json:"ai_skip_reason,omitempty"`
-	State              string     `json:"state"`
-	StartedAt          *time.Time `json:"started_at,omitempty"`
-	FinishedAt         *time.Time `json:"finished_at,omitempty"`
-	LastCheckedAt      time.Time  `json:"last_checked_at"`
-	Processed          int        `json:"processed"`
-	Total              int        `json:"total"`
-	Eligible           int        `json:"eligible"`
-	Matched            int        `json:"matched"`
-	AICalls            int        `json:"ai_calls"`
-	AIEligible         int        `json:"ai_eligible"`
-	AISucceeded        int        `json:"ai_succeeded"`
-	AIMatches          int        `json:"ai_matches"`
-	AIFailures         int        `json:"ai_failures"`
-	AISkipped          int        `json:"ai_skipped"`
-	AIHTTPAttempts     int        `json:"ai_http_attempts"`
-	AIRetries          int        `json:"ai_retries"`
-	AIBatches          int        `json:"ai_batches"`
-	AIPromptTokens     int        `json:"ai_prompt_tokens"`
-	AICompletionTokens int        `json:"ai_completion_tokens"`
-	AICachedTokens     int        `json:"ai_cached_tokens"`
-	AIRateLimit        int        `json:"ai_rate_limit"`
-	AITimeouts         int        `json:"ai_timeouts"`
-	AIInvalidResponses int        `json:"ai_invalid_responses"`
-	AIAuth             int        `json:"ai_auth"`
-	AIQuota            int        `json:"ai_quota"`
-	AIServer           int        `json:"ai_server"`
-	AINetwork          int        `json:"ai_network"`
-	AIContextLimit     int        `json:"ai_context_limit"`
-	AIContentFilter    int        `json:"ai_content_filter"`
-	AIInvalidRequest   int        `json:"ai_invalid_request"`
-	Skipped            int        `json:"skipped"`
-	ErrorCategory      *string    `json:"error_category,omitempty"`
-	RequestID          *string    `json:"request_id,omitempty"`
-	CursorSource       string     `json:"cursor_source"`
-	CursorObservedAt   *time.Time `json:"cursor_observed_at,omitempty"`
-	PendingCandidates  bool       `json:"pending_candidates"`
-	Provider           *string    `json:"provider,omitempty"`
-	Model              *string    `json:"model,omitempty"`
-	PromptVersion      *string    `json:"prompt_version,omitempty"`
-	MethodVersion      string     `json:"method_version"`
+	RunID                         string     `json:"run_id,omitempty"`
+	AIConfigured                  bool       `json:"ai_configured"`
+	AIStatus                      string     `json:"ai_status"`
+	AISkipReason                  *string    `json:"ai_skip_reason,omitempty"`
+	State                         string     `json:"state"`
+	StartedAt                     *time.Time `json:"started_at,omitempty"`
+	FinishedAt                    *time.Time `json:"finished_at,omitempty"`
+	LastCheckedAt                 time.Time  `json:"last_checked_at"`
+	Processed                     int        `json:"processed"`
+	Total                         int        `json:"total"`
+	Eligible                      int        `json:"eligible"`
+	Matched                       int        `json:"matched"`
+	AICalls                       int        `json:"ai_calls"`
+	AIEligible                    int        `json:"ai_eligible"`
+	AISucceeded                   int        `json:"ai_succeeded"`
+	AIMatches                     int        `json:"ai_matches"`
+	AIFailures                    int        `json:"ai_failures"`
+	AISkipped                     int        `json:"ai_skipped"`
+	AIHTTPAttempts                int        `json:"ai_http_attempts"`
+	AIRetries                     int        `json:"ai_retries"`
+	AIBatches                     int        `json:"ai_batches"`
+	AIPromptTokens                int        `json:"ai_prompt_tokens"`
+	AICompletionTokens            int        `json:"ai_completion_tokens"`
+	AICachedTokens                int        `json:"ai_cached_tokens"`
+	AIRateLimit                   int        `json:"ai_rate_limit"`
+	AITimeouts                    int        `json:"ai_timeouts"`
+	AIInvalidResponses            int        `json:"ai_invalid_responses"`
+	AIAuth                        int        `json:"ai_auth"`
+	AIQuota                       int        `json:"ai_quota"`
+	AIServer                      int        `json:"ai_server"`
+	AINetwork                     int        `json:"ai_network"`
+	AIContextLimit                int        `json:"ai_context_limit"`
+	AIContentFilter               int        `json:"ai_content_filter"`
+	AIInvalidRequest              int        `json:"ai_invalid_request"`
+	Skipped                       int        `json:"skipped"`
+	ErrorCategory                 *string    `json:"error_category,omitempty"`
+	RequestID                     *string    `json:"request_id,omitempty"`
+	CursorSource                  string     `json:"cursor_source"`
+	CursorObservedAt              *time.Time `json:"cursor_observed_at,omitempty"`
+	PendingCandidates             bool       `json:"pending_candidates"`
+	Provider                      *string    `json:"provider,omitempty"`
+	Model                         *string    `json:"model,omitempty"`
+	PromptVersion                 *string    `json:"prompt_version,omitempty"`
+	MethodVersion                 string     `json:"method_version"`
+	PreferenceVersion             int        `json:"preference_version,omitempty"`
+	CurrentPreferenceVersion      int        `json:"current_preference_version,omitempty"`
+	SupersededByPreferenceVersion *int       `json:"superseded_by_preference_version,omitempty"`
+	SupersededFromState           string     `json:"superseded_from_state,omitempty"`
 }
 
 type AssistantRun struct {
@@ -116,6 +120,7 @@ type AssistantRunStore interface {
 type AssistantRunControlStore interface {
 	PauseAssistantRun(context.Context, string) error
 	ResumeAssistantRun(context.Context, string) error
+	SupersedeAssistantRun(context.Context, string, string) error
 }
 
 type ScopedWorkerStore interface {
@@ -257,15 +262,26 @@ func (r *PostgresRepository) ArchivePreference(ctx context.Context, userID, pref
 func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, aiConfigured bool) (AnalysisStatus, error) {
 	var s AnalysisStatus
 	var cursorAt *time.Time
-	err := r.db.QueryRow(ctx, `SELECT id::text, state, started_at, finished_at, last_checked_at,
+	err := r.db.QueryRow(ctx, `SELECT ar.id::text, ar.state, ar.started_at, ar.finished_at, ar.last_checked_at,
 		processed, snapshot_total, eligible, matched, ai_calls, ai_eligible, ai_succeeded,
 		ai_matches, ai_failures, ai_skipped, ai_status, ai_skip_reason,
 		ai_http_attempts, ai_retries, ai_batches, ai_prompt_tokens, ai_completion_tokens, ai_cached_tokens,
 		ai_rate_limit, ai_timeouts, ai_invalid_responses,
 		ai_auth, ai_quota, ai_server, ai_network, ai_context_limit, ai_content_filter, ai_invalid_request,
 		skipped, error_category, request_id,
-		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version
-		FROM assistant_runs WHERE user_id = $1::uuid ORDER BY created_at DESC LIMIT 1`, userID).Scan(
+		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version,
+		run_preference.version, current_preference.version, superseding_preference.version,
+		COALESCE(ar.superseded_from_state, '')
+		FROM assistant_runs ar
+		JOIN vacancy_preferences run_preference ON run_preference.id=ar.preference_id
+		JOIN LATERAL (
+			SELECT id, version FROM vacancy_preferences
+			WHERE user_id=ar.user_id AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		) current_preference ON true
+		LEFT JOIN vacancy_preferences superseding_preference
+			ON superseding_preference.id=ar.superseded_by_preference_id
+		WHERE ar.user_id = $1::uuid ORDER BY ar.created_at DESC LIMIT 1`, userID).Scan(
 		&s.RunID, &s.State, &s.StartedAt, &s.FinishedAt, &s.LastCheckedAt, &s.Processed, &s.Total, &s.Eligible,
 		&s.Matched, &s.AICalls, &s.AIEligible, &s.AISucceeded,
 		&s.AIMatches, &s.AIFailures, &s.AISkipped, &s.AIStatus, &s.AISkipReason,
@@ -274,7 +290,9 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 		&s.AIAuth, &s.AIQuota, &s.AIServer, &s.AINetwork, &s.AIContextLimit, &s.AIContentFilter,
 		&s.AIInvalidRequest,
 		&s.Skipped, &s.ErrorCategory, &s.RequestID, &s.CursorSource,
-		&cursorAt, &s.PendingCandidates, &s.Provider, &s.Model, &s.PromptVersion)
+		&cursorAt, &s.PendingCandidates, &s.Provider, &s.Model, &s.PromptVersion,
+		&s.PreferenceVersion, &s.CurrentPreferenceVersion, &s.SupersededByPreferenceVersion,
+		&s.SupersededFromState)
 	if errors.Is(err, pgx.ErrNoRows) {
 		s.State = "never_run"
 		s.AIStatus = "not_run"
@@ -422,6 +440,42 @@ func (r *PostgresRepository) ResumeAssistantRun(ctx context.Context, runID strin
 	return nil
 }
 
+func (r *PostgresRepository) SupersedeAssistantRun(ctx context.Context, userID, runID string) error {
+	tag, err := r.db.Exec(ctx, `
+		WITH current_preference AS (
+			SELECT id FROM vacancy_preferences
+			WHERE user_id=$1::uuid AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		)
+		UPDATE assistant_runs ar
+		SET superseded_from_state=ar.state, state='superseded',
+			finished_at=COALESCE(ar.finished_at, now()), superseded_at=now(),
+			superseded_by_preference_id=current_preference.id,
+			lease_until=NULL, last_checked_at=now(),
+			error_category='preferences_changed',
+			ai_status=CASE
+				WHEN ar.state='succeeded' THEN ar.ai_status
+				WHEN ar.ai_calls > 0 THEN 'partial' ELSE 'skipped'
+			END,
+			ai_skip_reason=CASE
+				WHEN ar.state='succeeded' THEN ar.ai_skip_reason
+				WHEN ar.ai_calls > 0 THEN NULL ELSE 'preferences_changed'
+			END
+		FROM current_preference
+		WHERE ar.id=$2::uuid AND ar.user_id=$1::uuid
+		  AND ar.preference_id <> current_preference.id
+		  AND ar.state IN ('queued','running','paused','failed','succeeded')
+		  AND (ar.state='succeeded' OR ar.processed < ar.snapshot_total)
+	`, userID, runID)
+	if err != nil {
+		return fmt.Errorf("supersede assistant run: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("assistant run cannot be superseded")
+	}
+	return nil
+}
+
 func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, state string, stats WorkerStats, errorCategory string) error {
 	if state != "succeeded" && state != "failed" && state != "disabled" {
 		return errors.New("invalid assistant run state")
@@ -438,7 +492,7 @@ func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, st
 			ai_quota=$22, ai_server=$23, ai_network=$24, ai_context_limit=$25,
 			ai_content_filter=$26, ai_invalid_request=$27, ai_batches=$28,
 			ai_prompt_tokens=$29, ai_completion_tokens=$30, ai_cached_tokens=$31
-		WHERE id = $1::uuid
+		WHERE id = $1::uuid AND state='running'
 	`, runID, state, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls,
 		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, errorCategory,
 		stats.AIEligible, stats.AISucceeded, stats.AIStatus, stats.AISkipReason,

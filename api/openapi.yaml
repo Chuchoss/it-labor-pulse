@@ -694,6 +694,33 @@ paths:
         "409": { description: Уже выполняется }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /api/v1/assistant/analyze/supersede:
+    post:
+      tags: [assistant]
+      operationId: supersedeAssistantAnalysis
+      summary: Остановить устаревший ручной анализ
+      description: >-
+        Терминально помечает незавершённый снимок как superseded, только если
+        для пользователя уже существует более новая immutable-версия критериев.
+        Счётчики и исторические результаты сохраняются, lease снимается.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [run_id]
+              properties:
+                run_id: { type: string, format: uuid }
+              additionalProperties: false
+      responses:
+        "200": { description: Устаревший запуск остановлен }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: Запуск уже терминальный или более новых критериев нет }
+
   /api/v1/assistant/matches:
     get:
       tags: [assistant]
@@ -1684,8 +1711,14 @@ components:
           enum: [not_run, pending, running, completed, partial, failed, skipped]
         ai_skip_reason:
           type: [string, "null"]
-          enum: [server_disabled, user_opt_out, run_predates_ai, no_eligible, budget_exhausted, already_analyzed, provider_unavailable, unknown, null]
-        state: { type: string, enum: [never_run, queued, running, paused, succeeded, failed, disabled] }
+          enum: [server_disabled, user_opt_out, run_predates_ai, no_eligible, budget_exhausted, already_analyzed, provider_unavailable, preferences_changed, unknown, null]
+        state: { type: string, enum: [never_run, queued, running, paused, succeeded, failed, disabled, superseded] }
+        preference_version: { type: integer, minimum: 1 }
+        current_preference_version: { type: integer, minimum: 1 }
+        superseded_by_preference_version: { type: [integer, "null"], minimum: 1 }
+        superseded_from_state:
+          type: [string, "null"]
+          enum: [queued, running, paused, succeeded, failed, null]
         started_at: { type: [string, "null"], format: date-time }
         finished_at: { type: [string, "null"], format: date-time }
         last_checked_at: { type: [string, "null"], format: date-time }

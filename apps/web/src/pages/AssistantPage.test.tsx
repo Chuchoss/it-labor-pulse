@@ -448,6 +448,24 @@ describe('AssistantPage', () => {
     expect(screen.getByText('Подтверждено AI')).toBeInTheDocument()
   })
 
+  it('explains a superseded run and offers a new manual run', async () => {
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        run_id: 'run-old', ai_configured: true, ai_status: 'partial', state: 'superseded',
+        preference_version: 10, current_preference_version: 11,
+        superseded_by_preference_version: 11, processed: 22, total: 25,
+        eligible: 22, matched: 2, ai_calls: 20, ai_succeeded: 20, ai_matches: 2,
+        ai_failures: 0, ai_skipped: 0, skipped: 20, pending_candidates: false,
+      })),
+    )
+
+    renderPage(<AssistantPage />, '/assistant')
+
+    expect(await screen.findByText(/Старый анализ остановлен, потому что критерии изменились/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Проверить текущие вакансии' })).toBeInTheDocument()
+  })
+
   it('separates preliminary matches from AI-confirmed results', async () => {
     useSupportingAssistantHandlers()
     server.use(
