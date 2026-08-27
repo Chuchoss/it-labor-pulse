@@ -134,7 +134,7 @@ func NewDeepSeek(cfg DeepSeekConfig, client *http.Client) (*DeepSeek, error) {
 		cfg.Timeout = 20 * time.Second
 	}
 	if cfg.MaxTokens <= 0 || cfg.MaxTokens > 40000 {
-		cfg.MaxTokens = 12000
+		cfg.MaxTokens = 4096
 	}
 	if cfg.MaxAttempts < 1 || cfg.MaxAttempts > 5 {
 		cfg.MaxAttempts = 3
@@ -142,11 +142,11 @@ func NewDeepSeek(cfg DeepSeekConfig, client *http.Client) (*DeepSeek, error) {
 	if cfg.MinInterval < 0 {
 		cfg.MinInterval = 0
 	}
-	if cfg.MaxBatchSize < 1 || cfg.MaxBatchSize > 20 {
+	if cfg.MaxBatchSize < 1 || cfg.MaxBatchSize > maxAIBatchSize {
 		cfg.MaxBatchSize = defaultAIBatchSize
 	}
-	if cfg.MaxConcurrency < 1 || cfg.MaxConcurrency > 4 {
-		cfg.MaxConcurrency = 3
+	if cfg.MaxConcurrency < 1 || cfg.MaxConcurrency > maxAIConcurrency {
+		cfg.MaxConcurrency = defaultAIConcurrency
 	}
 	if cfg.InputTokenBudget < 4000 {
 		cfg.InputTokenBudget = defaultAIInputTokenBudget

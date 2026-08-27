@@ -100,9 +100,9 @@ Usage содержит `prompt_tokens`, `completion_tokens`,
 `prompt_cache_hit_tokens` и `prompt_cache_miss_tokens`. Ограничения описаны как
 account concurrency (Flash — 2500); отдельный discounted async Batch API в
 официальном контракте не опубликован, поэтому worker использует обычный
-`/chat/completions`. Локальный safety limit намеренно существенно ниже:
-60 000 оценочных input tokens, обычно максимум 15 вакансий (жёсткий предел 20),
-до трёх параллельных пакетов и 12 000 output tokens.
+`/chat/completions`. Локальный safety limit намеренно существенно ниже полного окна модели:
+120 000 оценочных input tokens, обычно максимум 50 вакансий (жёсткий предел 80),
+до пяти параллельных пакетов и около 4 000 output tokens под список ID.
 
 Telegram использует только официальный Bot API: [sendMessage и
 getUpdates](https://core.telegram.org/bots/api/). Webhook и long polling
@@ -142,8 +142,12 @@ AI-идемпотентность включает пользователя, imm
 analysis revision. Автоматический режим не backfill-ит вакансии до
 `activation_at`, но повторно ставит содержательно изменившуюся ревизию.
 Лимитов количества AI-вакансий на запуск и на пользователя в час нет.
-Preferences передаются один раз на адаптивный пакет, а вакансии — отдельными
-недоверенными records с opaque ID. `ASSISTANT_AI_MAX_BATCH_SIZE`,
+Hard-reject по роли, специализации, leadership, remote и обязательному React
+отсекается до HTTP. Остальным вакансиям назначается opaque ID (UUID вакансии
+уже есть; в prompt уходит короткий токен 1:1). Preferences передаются один раз
+на адаптивный пакет, записи — `id + bounded title/skills/description`.
+Модель возвращает только релевантные `match` ID и опциональный `review`;
+прочие ID полного ответа считаются `reject`. `ASSISTANT_AI_MAX_BATCH_SIZE`,
 `ASSISTANT_AI_CONCURRENCY`, `ASSISTANT_AI_INPUT_TOKEN_BUDGET` и
 `ASSISTANT_AI_MAX_OUTPUT_TOKENS` ограничивают
 один HTTP-запрос; rate limiting ограничивает только скорость. Provider
@@ -151,10 +155,11 @@ Preferences передаются один раз на адаптивный па�
 задержкой и jitter; `Retry-After` имеет приоритет. Некорректный JSON/схема
 получает один repair retry, auth/quota/invalid-request не повторяются. Timeout
 одного запроса по умолчанию 90 секунд. Счётчики отдельно показывают отправленные
-AI-вакансии, все HTTP-попытки, retries и финальные ошибки по безопасным
+AI-вакансии, HTTP-запросы, средний пакет, retries и финальные ошибки по безопасным
 категориям без provider body. Partial/malformed/truncated/context-limit пакет
-делится пополам; успешно валидированные IDs не переотправляются, а singleton
-использует прежний устойчивый путь. UI показывает вакансии, HTTP requests,
+делится пополам; успешно валидированные IDs не переотправляются, а неразрешённые
+не становятся silent reject. Singleton использует прежний устойчивый путь.
+Исторический полный `decisions[]` читается. UI показывает вакансии, HTTP requests,
 средний batch, активные пакеты/concurrency, throughput, ETA, retries,
 `match|review|reject` и provider-reported tokens без сырого content. После 429,
 timeout, context-limit или invalid response concurrency уменьшается; после

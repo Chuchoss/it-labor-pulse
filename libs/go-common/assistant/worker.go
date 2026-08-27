@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -81,12 +80,15 @@ type WorkerDelivery struct {
 }
 
 type aiJob struct {
-	candidate WorkerCandidate
-	user      WorkerUser
-	match     WorkerMatch
-	request   Request
-	shared    string
-	settings  AutomationSettings
+	candidate   WorkerCandidate
+	user        WorkerUser
+	match       WorkerMatch
+	request     Request
+	shared      string
+	settings    AutomationSettings
+	title       string
+	skills      []string
+	description string
 }
 
 type WorkerOptions struct {
@@ -410,6 +412,13 @@ func processCandidates(
 		if !candidate.AIRetry {
 			stats.Processed++
 		}
+		vacancy := candidate.Vacancy
+		if vacancy.Title == "" {
+			vacancy.Title = candidate.Title
+		}
+		if vacancy.Description == "" {
+			vacancy.Description = candidate.Description
+		}
 		for _, user := range users {
 			settings := AutomationSettings{}
 			if settingsStore, ok := store.(AutomationStore); ok {
@@ -426,7 +435,7 @@ func processCandidates(
 			if !candidate.AIRetry {
 				stats.Eligible++
 			}
-			result := Match(candidate.Vacancy, toPreferences(user.Preference), opts.Now)
+			result := Match(vacancy, toPreferences(user.Preference), opts.Now)
 			if !candidate.AIRetry {
 				created, err := store.SaveMatch(ctx, WorkerMatch{
 					UserID: user.ID, VacancyID: candidate.ID, Source: candidate.Source,
@@ -487,24 +496,31 @@ func processCandidates(
 				setAISkipReason(stats, "already_analyzed")
 				continue
 			}
+			title, skills, description := compactCandidateText(candidate)
 			evidence := map[string]bool{"vacancy:title": true, "vacancy:description": true, "preferences": true}
-			facts := map[string]string{
-				"salary":                   candidate.SalaryText,
-				"deterministic_decision":   string(result.Decision),
-				"deterministic_score":      strconv.FormatFloat(result.Score, 'f', 2, 64),
-				"description_truncated":    strconv.FormatBool(candidate.DescriptionTruncated),
-				"requested_specialization": stringValue(user.Preference.HardCriteria["specialization"]),
-				"include_leadership":       strconv.FormatBool(boolValue(user.Preference.HardCriteria["include_leadership"])),
-			}
-			input := MinimizedInput(candidate.Title, candidate.Description, facts, evidence)
+			input := CompactInputSnapshot(title, skills, description)
 			shared := "PREFERENCES_JSON:\n" + preferenceSnapshot(user.Preference)
 			match := WorkerMatch{
 				UserID: user.ID, VacancyID: candidate.ID, PreferenceVersion: user.Preference.Version,
 				VacancyRevision: candidate.Revision, Result: result, Method: "ai", Provider: "deepseek",
-				RunID: stats.RunID, PromptVersion: "batch-v6-ic-leadership", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
+				RunID: stats.RunID, PromptVersion: "batch-v7-id-list", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
+			}
+			if result.Decision == DecisionReject {
+				stats.AISkipped++
+				setAISkipReason(stats, "hard_reject")
+				match.Provider = "prefilter"
+				match.PromptVersion = "hard-gate-prefilter-v1"
+				if err := durable.SaveAIResult(ctx, match, MatchOutput{
+					Decision: string(DecisionReject), Score: 0, Confidence: "high",
+					Conflicts: result.Conflicts, Rationale: "hard_gate_prefilter",
+				}); err != nil {
+					return err
+				}
+				continue
 			}
 			jobs = append(jobs, aiJob{
 				candidate: candidate, user: user, match: match, shared: shared, settings: settings,
+				title: title, skills: skills, description: description,
 				request: Request{InputSnapshot: input, Evidence: evidence},
 			})
 		}
@@ -620,7 +636,9 @@ func processAIJobs(
 			items := make([]BatchItem, 0, len(group))
 			for _, job := range group {
 				items = append(items, BatchItem{
-					ID: job.candidate.ID, InputSnapshot: job.request.InputSnapshot, Evidence: job.request.Evidence,
+					ID: job.candidate.ID, Title: job.title, Skills: job.skills,
+					Description: job.description, InputSnapshot: job.request.InputSnapshot,
+					Evidence: job.request.Evidence,
 				})
 			}
 			result, err := batchProvider.CompleteBatchDetailed(ctx, BatchRequest{
@@ -723,6 +741,18 @@ func finalizeAIStats(stats *WorkerStats) {
 			stats.AISkipReason = "unknown"
 		}
 	}
+}
+
+func compactCandidateText(candidate WorkerCandidate) (string, []string, string) {
+	title := candidate.Title
+	if title == "" {
+		title = candidate.Vacancy.Title
+	}
+	description := candidate.Description
+	if description == "" {
+		description = candidate.Vacancy.Description
+	}
+	return CompactVacancyFields(title, candidate.Vacancy.Skills, description)
 }
 
 func preferenceSnapshot(p PreferenceRecord) string {

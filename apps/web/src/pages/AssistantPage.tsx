@@ -63,6 +63,7 @@ const aiSkipReasonText: Record<string, string> = {
   no_eligible: 'AI-анализ не запускался: нет вакансий для AI.',
   budget_exhausted: 'Старый запуск остановлен историческим лимитом вызовов; новые запуски выполняются без лимита количества.',
   already_analyzed: 'AI-анализ не запускался: вакансии уже были обработаны AI.',
+  hard_reject: 'Часть вакансий отсеяна жёсткими критериями до запроса к модели.',
   provider_unavailable: 'AI-анализ не запускался: worker не получил разрешение на внешний провайдер.',
   unknown: 'AI-анализ не выполнялся; причина недоступна для старого запуска.',
 }
@@ -322,6 +323,7 @@ export function AssistantPage() {
     (status.data?.ai_eligible ?? 0) - (status.data?.ai_succeeded ?? 0) - (status.data?.ai_failures ?? 0) - (status.data?.ai_skipped ?? 0),
   )
   const aiBatchCount = status.data?.ai_batches ?? status.data?.ai_http_attempts
+  const httpAttempts = status.data?.ai_http_attempts
   const averageBatch = aiCalls !== undefined && aiBatchCount !== undefined && aiBatchCount > 0
     ? (aiCalls / aiBatchCount).toFixed(1)
     : '—'
@@ -356,9 +358,9 @@ export function AssistantPage() {
         <Stack spacing={1}>
           <Typography variant="h6">Автоматизация</Typography>
           <Typography variant="body2" color="text.secondary">
-            Новые вакансии будут автоматически анализироваться AI по полному описанию. Вакансии отправляются
-            небольшими пакетами для снижения повторяющегося контекста; общее количество вакансий не ограничено.
-            Telegram включается отдельно.
+            Новые вакансии будут автоматически анализироваться AI по полному описанию. Вакансии
+            отправляются компактными пакетами: критерии один раз, в ответ — только релевантные ID.
+            Общее количество вакансий не ограничено. Telegram включается отдельно.
           </Typography>
           <Stack direction="row" sx={{ alignItems: 'center' }}>
             <Switch checked={automation.data?.ai_enabled ?? false} disabled={!status.data?.ai_configured || updateAutomation.isPending}
@@ -424,7 +426,7 @@ export function AssistantPage() {
               ? 'AI-анализ: телеметрия недоступна · Совпадения: —'
               : aiCalls === 0
               ? 'AI-анализ: не выполнялся · Совпадения: —'
-              : `AI проверено: ${metric(status.data?.ai_succeeded)} вакансий · match: ${metric(status.data?.ai_matches)} · review: ${metric(status.data?.ai_reviews)} · reject: ${metric(status.data?.ai_rejects)} · DeepSeek HTTP-запросов: ${metric(status.data?.ai_http_attempts)} · Средний пакет: ${averageBatch} · Повторы: ${metric(status.data?.ai_retries)} · Ошибки: ${metric(status.data?.ai_failures)}`}
+              : `Вакансий в AI: ${metric(aiCalls)} · HTTP-запросов: ${metric(httpAttempts)} · Средний пакет: ${averageBatch} · match: ${metric(status.data?.ai_matches)} · review: ${metric(status.data?.ai_reviews)} · reject: ${metric(status.data?.ai_rejects)} · Повторы: ${metric(status.data?.ai_retries)} · Ошибки: ${metric(status.data?.ai_failures)}`}
             {aiCalls === 0 && ` · Ошибки: ${metric(status.data?.ai_failures)}`}
             {' · '}Пропущено AI: {metric(status.data?.ai_skipped)}
           </Typography>

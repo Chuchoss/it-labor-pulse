@@ -57,21 +57,29 @@ Worker атомарно claim-ит bounded batch через
 фиксирует `activation_at`, поэтому старые `first_observed_at` не backfill-ятся;
 `published_at` остаётся только показателем свежести HH.
 
-После opt-in автоматический AI применяется ко всем новым или содержательно
-изменившимся вакансиям, поступившим после `activation_at`, даже если
-deterministic assessment дал `reject`; такой результат хранится как AI
-`match|reject|review`, а не превращается в совпадение. Отключение прекращает
-новые вызовы, повторное включение действует только вперёд. Ручной snapshot
-использует текущий opt-in и те же server-side flags, но намеренно охватывает
-исторический снимок.
+После opt-in автоматический AI применяется к новым или содержательно
+изменившимся вакансиям после `activation_at`, если deterministic hard-gates
+не дали доказанный `reject`. Такие hard-reject сохраняются локально и в
+модель не отправляются. AI не может ослабить deterministic reject.
+Отключение прекращает новые вызовы, повторное включение действует только
+вперёд. Ручной snapshot использует текущий opt-in и те же server-side flags,
+но намеренно охватывает исторический снимок.
 
 Количество AI-вакансий не ограничивается ни на запуск, ни на пользователя в
-час. Worker объединяет ещё не обработанные вакансии одной версии preferences в
-адаптивные пакеты: обычно максимум 15 (жёсткий предел 20) и не более настроенного
-оценочного token budget. До трёх HTTP-пакетов выполняются параллельно.
-Общий контекст и preferences передаются один раз на пакет; каждое решение
-сохраняется отдельно. Это осознанный cost-risk. Оператор управляет расходами
-остановкой единственного worker, снятием `-allow-external`, отключением
+час. Worker сначала применяет deterministic hard-gates. Доказанный `reject`
+(роль, специализация, leadership, remote, обязательный React) в модель не
+отправляется и сохраняется локально. Оставшиеся вакансии одной версии
+preferences упаковываются в компактные пакеты: shared criteria один раз и
+N записей `{id, title, skills, description}` с opaque ID (короткий токен `vN`
+для UUID, 1:1). Обычно максимум 50 вакансий (жёсткий предел 80) при бюджете
+около 120 000 оценочных input tokens. До пяти HTTP-пакетов выполняются
+параллельно (потолок 6). Модель возвращает только `match` ID и опционально
+`review` с коротким reason code; отсутствующий ID в полном ответе — `reject`.
+Unknown ID игнорируются, дубликаты схлопываются. Truncated/malformed output
+не превращает неразрешённые ID в reject: пакет делится и повторяется.
+Полный historical `decisions[]` по-прежнему читается. Это осознанный
+cost-risk. Оператор управляет расходами остановкой единственного worker,
+снятием `-allow-external`, отключением
 `ASSISTANT_AI_ENABLED`/`ASSISTANT_AI_LIVE_TEST` или пользовательского opt-in.
 Контроллер уменьшает concurrency после 429, timeout, context-limit или
 некорректного ответа и медленно восстанавливает её после успешных волн.
@@ -104,11 +112,13 @@ director/CTO/head/team lead/tech lead и русские «технический
 считается React web; Next.js/JS/TS/JSX не считаются доказательством.
 `remote_only=true` требует официальный remote-сигнал.
 
-Batch-ответ — JSON-объект с ровно одним решением на каждый opaque
-`vacancy_id`. Duplicate/unknown ID отклоняет пакет; missing item остаётся
-retryable. Context-limit, truncation, malformed и partial output рекурсивно
-делят только неразрешённые элементы до singleton fallback. Счётчики вакансий
-отделены от HTTP attempts, batches, retries и provider-reported token usage.
+Batch-ответ ID-list — JSON `{"match":[id],"review":[{"id":id,"reason":"..."}]}`.
+Duplicate/unknown ID не ломают пакет: unknown игнорируется, duplicates
+схлопываются, omitted ID при `finish_reason=stop` — `reject`. Context-limit,
+truncation, malformed JSON рекурсивно делят только неразрешённые элементы до
+singleton fallback и не считают omitted ID отклонением. Исторический полный
+`decisions[]` остаётся читаемым. Счётчики отдельно показывают вакансии в AI,
+HTTP attempts, средний размер пакета, retries и provider-reported token usage.
 
 Ручной snapshot и outbox не создают отдельные копии вакансий. Если одна вакансия
 попала в оба пути, unique key результата `(user, preference, vacancy, method, …)`

@@ -209,6 +209,9 @@ func ApplyHardGatePrecedence(deterministic Result, ai MatchOutput) MatchOutput {
 	if ai.Decision != string(DecisionMatch) {
 		return ai
 	}
+	if ai.Rationale == "id_list_match" {
+		ai = enrichIDListMatchEvidence(deterministic, ai)
+	}
 	for criterion, proof := range ai.CriterionEvidence {
 		if proof.Pass {
 			ai.Evidence = appendUnique(ai.Evidence, "criterion:"+criterion+":"+proof.Source)
@@ -226,6 +229,25 @@ func ApplyHardGatePrecedence(deterministic Result, ai MatchOutput) MatchOutput {
 		if !ok || !proof.Pass || strings.TrimSpace(proof.Source) == "" {
 			ai.Decision = string(DecisionReview)
 			ai.Unknowns = appendUnique(ai.Unknowns, unknown)
+		}
+	}
+	return ai
+}
+
+func enrichIDListMatchEvidence(deterministic Result, ai MatchOutput) MatchOutput {
+	if ai.CriterionEvidence == nil {
+		ai.CriterionEvidence = map[string]CriterionProof{}
+	}
+	for _, unknown := range deterministic.Unknowns {
+		key := unknown
+		switch {
+		case unknown == "specialization_description_only":
+			key = "specialization"
+		case strings.HasPrefix(unknown, "required_skill:"):
+			key = "required_skill:" + normalizeSkill(strings.TrimPrefix(unknown, "required_skill:"))
+		}
+		if _, ok := ai.CriterionEvidence[key]; !ok {
+			ai.CriterionEvidence[key] = CriterionProof{Pass: true, Source: "description"}
 		}
 	}
 	return ai

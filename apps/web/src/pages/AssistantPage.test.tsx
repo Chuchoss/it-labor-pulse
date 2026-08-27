@@ -248,6 +248,7 @@ describe('AssistantPage', () => {
         return HttpResponse.json({
           ai_configured: true, ai_status: 'partial', state: 'succeeded', processed: 22, total: 22,
           eligible: 22, matched: 2, ai_calls: 8, ai_succeeded: 7, ai_matches: 2, ai_failures: 1,
+          ai_http_attempts: 2, ai_batches: 2, ai_retries: 0,
           ai_skipped: 14, skipped: 20, pending_candidates: false,
           finished_at: '2026-08-27T01:00:01Z', last_checked_at: '2026-08-27T01:00:01Z',
         })
@@ -264,7 +265,7 @@ describe('AssistantPage', () => {
     renderPage(<AssistantPage />)
     expect(await screen.findByText(/25 из 151/)).toBeInTheDocument()
     expect(screen.getByText(/Новые вакансии будут автоматически анализироваться AI по полному описанию/)).toBeInTheDocument()
-    expect(screen.getByText(/Вакансии отправляются небольшими пакетами для снижения повторяющегося контекста/)).toBeInTheDocument()
+    expect(screen.getByText(/Вакансии отправляются компактными пакетами/)).toBeInTheDocument()
     expect(screen.queryByText(/20.*запрос|лимит 20/i)).not.toBeInTheDocument()
     expect(screen.getByText(/AI-анализ: не выполнялся · Совпадения: — · Ошибки: 0 · Пропущено AI: 25/)).toBeInTheDocument()
     const runButton = screen.getByRole('button', { name: 'Проверить текущие вакансии' })
@@ -277,7 +278,8 @@ describe('AssistantPage', () => {
 
     releaseRequest()
     expect(await screen.findByText(/10 из 22/)).toBeInTheDocument()
-    expect(screen.getByText(/AI проверено: 3 вакансий .* Ошибки: 1/)).toBeInTheDocument()
+    expect(screen.getByText(/Вакансий в AI: 4 · HTTP-запросов: 1 · Средний пакет: 4.0/)).toBeInTheDocument()
+    expect(screen.getByText(/Ошибки: 1/)).toBeInTheDocument()
     expect(screen.getByText(/Токены: вход 1200 · выход 240 · из кэша 500/)).toBeInTheDocument()
     expect(await screen.findByText('Проверка завершена, но часть AI-запросов не удалась.')).toBeInTheDocument()
     expect(screen.getByText(/22 из 22/)).toBeInTheDocument()
@@ -473,6 +475,26 @@ describe('AssistantPage', () => {
     expect(screen.getByText(/Тестовая вакансия · уверенность AI: высокая/)).toBeInTheDocument()
     expect(screen.getByText('Подходящие навыки')).toBeInTheDocument()
     expect(screen.getByText('Подходящие')).toBeInTheDocument()
+  })
+
+  it('shows vacancy counts separately from HTTP request counts', async () => {
+    useSupportingAssistantHandlers()
+    server.use(
+      http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
+        id: 'preference-throughput', version: 1, note: '', hard_criteria: {},
+        soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        ai_configured: true, ai_status: 'completed', state: 'succeeded',
+        processed: 100, total: 100, eligible: 100, matched: 4,
+        ai_calls: 100, ai_succeeded: 100, ai_matches: 4, ai_reviews: 10, ai_rejects: 86,
+        ai_failures: 0, ai_skipped: 0, ai_http_attempts: 2, ai_batches: 2, ai_retries: 0,
+        skipped: 96, pending_candidates: false,
+      })),
+    )
+
+    renderPage(<AssistantPage />)
+    expect(await screen.findByText(/Вакансий в AI: 100 · HTTP-запросов: 2 · Средний пакет: 50.0/)).toBeInTheDocument()
   })
 
   it('explains a superseded run and offers a new manual run', async () => {

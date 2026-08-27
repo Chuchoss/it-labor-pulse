@@ -35,6 +35,20 @@ func TestPackBatchItemsUsesCountAndTokenBudget(t *testing.T) {
 	}
 }
 
+func TestCompactVacancyFieldsBoundsAndRedaction(t *testing.T) {
+	title, skills, description := CompactVacancyFields(
+		strings.Repeat("T", 400),
+		[]string{"React.js", "React.js", strings.Repeat("S", 80), "user@example.com"},
+		strings.Repeat("D", 5000)+" user@example.com",
+	)
+	if len([]rune(title)) != compactTitleRunes || len(skills) != 3 || len([]rune(description)) != compactDescRunes {
+		t.Fatalf("bounds title=%d skills=%d desc=%d", len([]rune(title)), len(skills), len([]rune(description)))
+	}
+	if strings.Contains(description, "@") || strings.Contains(strings.Join(skills, " "), "@") {
+		t.Fatal("PII leaked into compact vacancy fields")
+	}
+}
+
 func TestProviderHangIsBoundedAndObservable(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(250 * time.Millisecond)
@@ -82,36 +96,10 @@ func TestDeepSeekBatchTwentyFiveUsesFiveRequestsAndValidatesIDs(t *testing.T) {
 	requests := 0
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		var payload struct {
-			Messages []struct {
-				Content string `json:"content"`
-			} `json:"messages"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		var user struct {
-			Vacancies []struct {
-				ID string `json:"vacancy_id"`
-			} `json:"vacancies"`
-		}
-		if err := json.Unmarshal([]byte(payload.Messages[1].Content), &user); err != nil {
-			t.Fatal(err)
-		}
-		decisions := make([]map[string]any, 0, len(user.Vacancies))
-		for _, item := range user.Vacancies {
-			decisions = append(decisions, map[string]any{
-				"vacancy_id": item.ID, "decision": "review", "score": .5,
-				"confidence": "medium", "evidence_ids": []string{"vacancy:title"},
-			})
-		}
-		content, _ := json.Marshal(map[string]any{"decisions": decisions})
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []any{map[string]any{
-				"message": map[string]any{"content": string(content)}, "finish_reason": "stop",
-			}},
-			"usage": map[string]int{"prompt_tokens": 100, "completion_tokens": 20, "prompt_cache_hit_tokens": 40},
-		})
+		ids := decodeBatchVacancyIDs(t, r)
+		writeIDListResponse(w, ids, nil, map[string]int{
+			"prompt_tokens": 100, "completion_tokens": 20, "prompt_cache_hit_tokens": 40,
+		}, "stop")
 	}))
 	defer server.Close()
 	provider, err := NewDeepSeek(DeepSeekConfig{
@@ -124,7 +112,7 @@ func TestDeepSeekBatchTwentyFiveUsesFiveRequestsAndValidatesIDs(t *testing.T) {
 	items := make([]BatchItem, 25)
 	for i := range items {
 		items[i] = BatchItem{
-			ID: "v" + strconv.Itoa(i), InputSnapshot: "VACANCY_DATA_BEGIN\nsynthetic\nVACANCY_DATA_END",
+			ID: "item-" + strconv.Itoa(i), InputSnapshot: "VACANCY_DATA_BEGIN\nsynthetic\nVACANCY_DATA_END",
 			Evidence: map[string]bool{"vacancy:title": true},
 		}
 	}
@@ -134,79 +122,187 @@ func TestDeepSeekBatchTwentyFiveUsesFiveRequestsAndValidatesIDs(t *testing.T) {
 	if err != nil || len(result.Outputs) != 25 || len(result.Errors) != 0 {
 		t.Fatalf("outputs=%d errors=%v err=%v", len(result.Outputs), result.Errors, err)
 	}
+	for _, output := range result.Outputs {
+		if output.Decision != "review" {
+			t.Fatalf("decision=%s, want review", output.Decision)
+		}
+	}
 	if requests != 5 || result.Stats.HTTPAttempts != 5 || result.Stats.PromptTokens != 500 ||
 		result.Stats.CompletionTokens != 100 || result.Stats.CachedTokens != 200 {
 		t.Fatalf("requests=%d stats=%+v", requests, result.Stats)
 	}
 }
 
-func TestDeepSeekBatchSplitsDuplicateUnknownAndMissingOutputs(t *testing.T) {
-	for _, mode := range []string{"duplicate", "unknown", "missing"} {
-		t.Run(mode, func(t *testing.T) {
-			requests := 0
-			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests++
-				var payload struct {
-					Messages []struct {
-						Content string `json:"content"`
-					} `json:"messages"`
-				}
-				_ = json.NewDecoder(r.Body).Decode(&payload)
-				var user struct {
-					Vacancies []struct {
-						ID string `json:"vacancy_id"`
-					} `json:"vacancies"`
-				}
-				_ = json.Unmarshal([]byte(payload.Messages[1].Content), &user)
-				if len(user.Vacancies) == 0 {
-					_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
-						"message":       map[string]any{"content": `{"decision":"match","score":0.8,"confidence":"high","evidence_ids":[],"criterion_evidence":{"specialization":{"pass":true,"source":"title"}}}`},
-						"finish_reason": "stop",
-					}}})
-					return
-				}
-				ids := make([]string, 0, len(user.Vacancies))
-				for _, item := range user.Vacancies {
-					ids = append(ids, item.ID)
-				}
-				if len(ids) > 1 {
-					switch mode {
-					case "duplicate":
-						ids = []string{ids[0], ids[0]}
-					case "unknown":
-						ids = []string{"not-an-input"}
-					case "missing":
-						ids = ids[:1]
-					}
-				}
-				decisions := make([]map[string]any, 0, len(ids))
-				for _, id := range ids {
-					decisions = append(decisions, map[string]any{
-						"vacancy_id": id, "decision": "match", "score": .8,
-						"confidence": "high", "evidence_ids": []string{},
-						"criterion_evidence": map[string]any{
-							"specialization": map[string]any{"pass": true, "source": "title"},
-						},
-					})
-				}
-				content, _ := json.Marshal(map[string]any{"decisions": decisions})
-				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
-					"message": map[string]any{"content": string(content)}, "finish_reason": "stop",
-				}}})
-			}))
-			defer server.Close()
-			provider, _ := NewDeepSeek(DeepSeekConfig{
-				APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1, MaxBatchSize: 5, MaxTokens: 3500,
-			}, server.Client())
-			result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{
-				SharedPreferences: `{}`,
-				Items:             []BatchItem{{ID: "a"}, {ID: "b"}, {ID: "c"}},
-			})
-			if err != nil || len(result.Outputs) != 3 || len(result.Errors) != 0 || requests < 2 {
-				t.Fatalf("mode=%s requests=%d outputs=%d errors=%v err=%v",
-					mode, requests, len(result.Outputs), result.Errors, err)
+func TestIDListParseMatchReviewRejectByOmission(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = decodeBatchVacancyIDs(t, r)
+		writeJSONResponse(w, map[string]any{
+			"match":  []string{"keep"},
+			"review": []map[string]string{{"id": "maybe", "reason": "remote_unknown"}},
+		}, "stop", map[string]int{"prompt_tokens": 10, "completion_tokens": 5})
+	}))
+	defer server.Close()
+	provider, _ := NewDeepSeek(DeepSeekConfig{
+		APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1, MaxBatchSize: 5, MaxTokens: 3500,
+	}, server.Client())
+	result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{
+		Items: []BatchItem{{ID: "keep"}, {ID: "maybe"}, {ID: "drop"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outputs["keep"].Decision != "match" || result.Outputs["maybe"].Decision != "review" ||
+		result.Outputs["drop"].Decision != "reject" || len(result.Errors) != 0 {
+		t.Fatalf("outputs=%+v errors=%v", result.Outputs, result.Errors)
+	}
+	if result.Outputs["maybe"].Unknowns[0] != "remote_unknown" {
+		t.Fatalf("review reason=%v", result.Outputs["maybe"].Unknowns)
+	}
+}
+
+func TestIDListUnknownIDsIgnoredAndDuplicatesCollapsed(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ids := decodeBatchVacancyIDs(t, r)
+		writeJSONResponse(w, map[string]any{
+			"match":  []string{ids[0], ids[0], "not-an-input"},
+			"review": []map[string]string{{"id": "also-unknown", "reason": "other"}},
+		}, "stop", nil)
+	}))
+	defer server.Close()
+	provider, _ := NewDeepSeek(DeepSeekConfig{
+		APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1, MaxBatchSize: 5, MaxTokens: 3500,
+	}, server.Client())
+	result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{
+		Items: []BatchItem{{ID: "a"}, {ID: "b"}},
+	})
+	if err != nil || result.Outputs["a"].Decision != "match" || result.Outputs["b"].Decision != "reject" ||
+		len(result.Outputs) != 2 || len(result.Errors) != 0 {
+		t.Fatalf("outputs=%+v errors=%v err=%v", result.Outputs, result.Errors, err)
+	}
+}
+
+func TestTruncatedIDListRetriesInsteadOfRejecting(t *testing.T) {
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		ids := decodeBatchVacancyIDs(t, r)
+		if len(ids) > 1 {
+			writeJSONResponse(w, map[string]any{"match": []string{ids[0]}}, "length", nil)
+			return
+		}
+		if len(ids) == 1 {
+			writeJSONResponse(w, map[string]any{"match": ids, "review": []any{}}, "stop", nil)
+			return
+		}
+		writeSingletonDecision(w, "match")
+	}))
+	defer server.Close()
+	provider, _ := NewDeepSeek(DeepSeekConfig{
+		APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1, MaxBatchSize: 5, MaxTokens: 3500,
+	}, server.Client())
+	result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{
+		Items: []BatchItem{{ID: "a"}, {ID: "b"}, {ID: "c"}},
+	})
+	if err != nil || len(result.Outputs) != 3 || len(result.Errors) != 0 || requests < 2 {
+		t.Fatalf("requests=%d outputs=%d errors=%v err=%v", requests, len(result.Outputs), result.Errors, err)
+	}
+	for id, output := range result.Outputs {
+		if output.Decision != "match" {
+			t.Fatalf("%s silently rejected after truncation: %s", id, output.Decision)
+		}
+	}
+}
+
+func TestMalformedIDListSplitsInsteadOfRejecting(t *testing.T) {
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		ids := decodeBatchVacancyIDs(t, r)
+		if len(ids) > 1 {
+			writeJSONResponse(w, "not-json", "stop", nil)
+			return
+		}
+		if len(ids) == 1 {
+			writeJSONResponse(w, map[string]any{"match": ids, "review": []any{}}, "stop", nil)
+			return
+		}
+		writeSingletonDecision(w, "review")
+	}))
+	defer server.Close()
+	provider, _ := NewDeepSeek(DeepSeekConfig{
+		APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1, MaxBatchSize: 5, MaxTokens: 3500,
+	}, server.Client())
+	result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{
+		Items: []BatchItem{{ID: "a"}, {ID: "b"}},
+	})
+	if err != nil || len(result.Outputs) != 2 || requests < 2 {
+		t.Fatalf("requests=%d outputs=%d err=%v", requests, len(result.Outputs), err)
+	}
+}
+
+func TestHistoricalFullDecisionBatchStillReadable(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ids := decodeBatchVacancyIDs(t, r)
+		decisions := make([]map[string]any, 0, len(ids))
+		for i, id := range ids {
+			decision := "reject"
+			if i == 0 {
+				decision = "match"
+			} else if i == 1 {
+				decision = "review"
 			}
-		})
+			decisions = append(decisions, map[string]any{
+				"vacancy_id": id, "decision": decision, "score": .5,
+				"confidence": "medium", "evidence_ids": []string{},
+				"criterion_evidence": map[string]any{
+					"specialization": map[string]any{"pass": true, "source": "title"},
+				},
+			})
+		}
+		writeJSONResponse(w, map[string]any{"decisions": decisions}, "stop", nil)
+	}))
+	defer server.Close()
+	provider, _ := NewDeepSeek(DeepSeekConfig{
+		APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1, MaxBatchSize: 5, MaxTokens: 3500,
+	}, server.Client())
+	result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{
+		Items: []BatchItem{
+			{ID: "old-match", Evidence: map[string]bool{}},
+			{ID: "old-review", Evidence: map[string]bool{}},
+			{ID: "old-reject", Evidence: map[string]bool{}},
+		},
+	})
+	if err != nil || result.Outputs["old-match"].Decision != "match" ||
+		result.Outputs["old-review"].Decision != "review" ||
+		result.Outputs["old-reject"].Decision != "reject" {
+		t.Fatalf("historical parse=%+v err=%v", result.Outputs, err)
+	}
+}
+
+func TestUUIDPromptIDsAreShortOpaqueTokens(t *testing.T) {
+	realA := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	realB := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ids := decodeBatchVacancyIDs(t, r)
+		if len(ids) != 2 || ids[0] != "v1" || ids[1] != "v2" {
+			t.Errorf("prompt ids=%v, want opaque v1/v2", ids)
+		}
+		for _, id := range ids {
+			if strings.Contains(id, "aaaa") || strings.Contains(id, "bbbb") {
+				t.Errorf("raw vacancy UUID leaked into prompt: %s", id)
+			}
+		}
+		writeJSONResponse(w, map[string]any{"match": []string{"v1"}, "review": []any{}}, "stop", nil)
+	}))
+	defer server.Close()
+	provider, _ := NewDeepSeek(DeepSeekConfig{
+		APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1, MaxBatchSize: 5, MaxTokens: 3500,
+	}, server.Client())
+	result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{
+		Items: []BatchItem{{ID: realA}, {ID: realB}},
+	})
+	if err != nil || result.Outputs[realA].Decision != "match" || result.Outputs[realB].Decision != "reject" {
+		t.Fatalf("mapped outputs=%+v err=%v", result.Outputs, err)
 	}
 }
 
@@ -235,7 +331,7 @@ func TestProductionBatchPromptSemanticFixtures(t *testing.T) {
 		var user struct {
 			Preferences string `json:"preferences"`
 			Vacancies   []struct {
-				ID string `json:"vacancy_id"`
+				ID string `json:"id"`
 			} `json:"vacancies"`
 		}
 		if err := json.Unmarshal([]byte(payload.Messages[1].Content), &user); err != nil {
@@ -245,25 +341,22 @@ func TestProductionBatchPromptSemanticFixtures(t *testing.T) {
 		if strings.Contains(user.Preferences, "optional wish") {
 			t.Error("optional note leaked into mandatory AI preferences")
 		}
-		decisions := make([]map[string]any, 0, len(user.Vacancies))
+		var match []string
+		var review []map[string]string
 		for _, vacancy := range user.Vacancies {
-			decisions = append(decisions, map[string]any{
-				"vacancy_id": vacancy.ID, "decision": expected[vacancy.ID], "score": .8,
-				"confidence": "high", "evidence_ids": []string{"vacancy:title"},
-				"criterion_evidence": map[string]any{
-					"specialization": map[string]any{"pass": true, "source": "title"},
-				},
-			})
+			switch expected[vacancy.ID] {
+			case "match":
+				match = append(match, vacancy.ID)
+			case "review":
+				review = append(review, map[string]string{"id": vacancy.ID, "reason": "other"})
+			}
 		}
-		content, _ := json.Marshal(map[string]any{"decisions": decisions})
-		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
-			"message": map[string]any{"content": string(content)}, "finish_reason": "stop",
-		}}})
+		writeJSONResponse(w, map[string]any{"match": match, "review": review}, "stop", nil)
 	}))
 	defer server.Close()
 	provider, err := NewDeepSeek(DeepSeekConfig{
 		APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1,
-		MaxBatchSize: 15, MaxConcurrency: 3, MaxTokens: 12000,
+		MaxBatchSize: 50, MaxConcurrency: 5, MaxTokens: 4096,
 	}, server.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -301,38 +394,18 @@ func TestBatchThroughputSmokeHundredVacancies(t *testing.T) {
 			for current > peak.Load() && !peak.CompareAndSwap(peak.Load(), current) {
 			}
 			time.Sleep(15 * time.Millisecond)
-			var payload struct {
-				Messages []struct {
-					Content string `json:"content"`
-				} `json:"messages"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&payload)
-			var user struct {
-				Vacancies []struct {
-					ID string `json:"vacancy_id"`
-				} `json:"vacancies"`
-			}
-			_ = json.Unmarshal([]byte(payload.Messages[1].Content), &user)
-			decisions := make([]map[string]any, 0, len(user.Vacancies))
-			for _, vacancy := range user.Vacancies {
-				decisions = append(decisions, map[string]any{
-					"vacancy_id": vacancy.ID, "decision": "review", "score": .5,
-					"confidence": "medium", "evidence_ids": []string{},
-				})
-			}
-			content, _ := json.Marshal(map[string]any{"decisions": decisions})
-			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
-				"message": map[string]any{"content": string(content)}, "finish_reason": "stop",
-			}}})
+			ids := decodeBatchVacancyIDs(t, r)
+			writeIDListResponse(w, ids, nil, nil, "stop")
 		}))
 		defer server.Close()
 		provider, _ := NewDeepSeek(DeepSeekConfig{
 			APIKey: "synthetic", BaseURL: server.URL, MaxAttempts: 1,
 			MaxBatchSize: maxBatch, MaxConcurrency: concurrency, MaxTokens: 40000,
+			InputTokenBudget: 200000,
 		}, server.Client())
 		items := make([]BatchItem, 100)
 		for i := range items {
-			items[i] = BatchItem{ID: strconv.Itoa(i), InputSnapshot: "synthetic"}
+			items[i] = BatchItem{ID: strconv.Itoa(i), Title: "Synthetic", Description: "compact"}
 		}
 		start := time.Now()
 		result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{Items: items})
@@ -341,14 +414,95 @@ func TestBatchThroughputSmokeHundredVacancies(t *testing.T) {
 		}
 		return calls.Load(), peak.Load(), time.Since(start)
 	}
-	beforeRequests, _, beforeElapsed := run(5, 1)
-	afterRequests, afterPeak, afterElapsed := run(15, 3)
-	if beforeRequests != 20 || afterRequests != 7 {
-		t.Fatalf("requests before=%d after=%d", beforeRequests, afterRequests)
+	previousRequests, _, previousElapsed := run(15, 3)
+	newRequests, newPeak, newElapsed := run(50, 5)
+	if previousRequests != 7 || newRequests != 2 {
+		t.Fatalf("requests previous_15x3=%d new_50x5=%d", previousRequests, newRequests)
 	}
-	if afterPeak < 2 || afterElapsed >= beforeElapsed {
-		t.Fatalf("peak=%d elapsed before=%s after=%s", afterPeak, beforeElapsed, afterElapsed)
+	if newPeak < 1 || newElapsed >= previousElapsed*2 && newRequests >= previousRequests {
+		t.Fatalf("peak=%d elapsed previous=%s new=%s", newPeak, previousElapsed, newElapsed)
 	}
-	t.Logf("BENCHMARK_100 before_requests=%d after_requests=%d before_ms=%d after_ms=%d peak_concurrency=%d",
-		beforeRequests, afterRequests, beforeElapsed.Milliseconds(), afterElapsed.Milliseconds(), afterPeak)
+	t.Logf("BENCHMARK_100 previous_15x3_requests=%d new_50x5_requests=%d previous_ms=%d new_ms=%d peak_concurrency=%d",
+		previousRequests, newRequests, previousElapsed.Milliseconds(), newElapsed.Milliseconds(), newPeak)
+}
+
+func TestLoadConfigAIPackingDefaults(t *testing.T) {
+	t.Setenv("ASSISTANT_AI_MAX_BATCH_SIZE", "")
+	t.Setenv("ASSISTANT_AI_CONCURRENCY", "")
+	t.Setenv("ASSISTANT_AI_INPUT_TOKEN_BUDGET", "")
+	t.Setenv("ASSISTANT_AI_MAX_OUTPUT_TOKENS", "")
+	cfg := LoadConfig()
+	if cfg.AIMaxBatchSize != 50 || cfg.AIConcurrency != 5 || cfg.AIInputTokenBudget != 120000 || cfg.AIMaxOutputTokens != 4096 {
+		t.Fatalf("defaults=%+v", cfg)
+	}
+}
+
+func decodeBatchVacancyIDs(t *testing.T, r *http.Request) []string {
+	t.Helper()
+	var payload struct {
+		Messages []struct {
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		return nil
+	}
+	if len(payload.Messages) < 2 {
+		return nil
+	}
+	var user struct {
+		Vacancies []struct {
+			ID string `json:"id"`
+		} `json:"vacancies"`
+	}
+	if err := json.Unmarshal([]byte(payload.Messages[1].Content), &user); err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(user.Vacancies))
+	for _, vacancy := range user.Vacancies {
+		ids = append(ids, vacancy.ID)
+	}
+	return ids
+}
+
+func writeIDListResponse(w http.ResponseWriter, reviewIDs []string, matchIDs []string, usage map[string]int, finish string) {
+	if matchIDs == nil {
+		matchIDs = []string{}
+	}
+	review := make([]map[string]string, 0, len(reviewIDs))
+	for _, id := range reviewIDs {
+		review = append(review, map[string]string{"id": id, "reason": "other"})
+	}
+	writeJSONResponse(w, map[string]any{"match": matchIDs, "review": review}, finish, usage)
+}
+
+func writeJSONResponse(w http.ResponseWriter, content any, finish string, usage map[string]int) {
+	if finish == "" {
+		finish = "stop"
+	}
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		encoded = []byte(`{"match":[],"review":[]}`)
+	}
+	body := map[string]any{
+		"choices": []any{map[string]any{
+			"message": map[string]any{"content": string(encoded)}, "finish_reason": finish,
+		}},
+	}
+	if usage != nil {
+		body["usage"] = usage
+	}
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func writeSingletonDecision(w http.ResponseWriter, decision string) {
+	content, _ := json.Marshal(map[string]any{
+		"decision": decision, "score": .8, "confidence": "high", "evidence_ids": []string{},
+		"criterion_evidence": map[string]any{
+			"specialization": map[string]any{"pass": true, "source": "title"},
+		},
+	})
+	_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
+		"message": map[string]any{"content": string(content)}, "finish_reason": "stop",
+	}}})
 }

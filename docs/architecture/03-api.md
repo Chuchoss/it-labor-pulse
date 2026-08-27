@@ -482,8 +482,9 @@ outbox. Один активный run на пользователя; повто�
 refresh, `processed/total`, deterministic `matched`, а отдельно
 `ai_status`, `ai_skip_reason`, `ai_eligible`, `ai_calls`, `ai_succeeded`,
 `ai_matches`, `ai_failures` и `ai_skipped`. `ai_calls` означает уникальные
-отправки вакансий, `ai_http_attempts` — все HTTP-попытки, а `ai_retries` —
-повторные запросы. `ai_failures` считает только вакансии с финальной ошибкой;
+отправки вакансий в модель, `ai_http_attempts` — все HTTP-попытки, а `ai_retries` —
+повторные запросы. UI отдельно показывает вакансии, HTTP-запросы и средний
+размер пакета (`ai_calls / ai_batches`). `ai_failures` считает только вакансии с финальной ошибкой;
 `ai_batches` считает логические пакеты, а `ai_prompt_tokens`,
 `ai_completion_tokens` и `ai_cached_tokens` — безопасные usage-агрегаты без
 prompt/response content. У исторических singleton-запусков token counters
