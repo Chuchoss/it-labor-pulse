@@ -70,6 +70,7 @@ func (p Preferences) normalizedWeights() Weights {
 
 func Match(v Vacancy, p Preferences, now time.Time) Result {
 	r := Result{Decision: DecisionMatch, Reasons: []string{}, Unknowns: []string{}, Conflicts: []string{}, Evidence: []string{}}
+	v.RoleIDs = officialRoleIDs(v)
 	skills := make(map[string]bool, len(v.Skills))
 	for _, s := range v.Skills {
 		skills[normalizeSkill(s)] = true
@@ -266,28 +267,64 @@ func skillScore(required []string, skills map[string]bool) float64 {
 	return float64(hit) / float64(len(required))
 }
 
+func officialRoleIDs(v Vacancy) []string {
+	ids := append([]string{}, v.RoleIDs...)
+	primary := strings.TrimSpace(v.RoleID)
+	if primary != "" && !contains(ids, primary) {
+		if _, ok := approvedRolePolicy[primary]; ok {
+			ids = append(ids, primary)
+		}
+	}
+	return ids
+}
+
 func normalizeSkill(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	switch value {
-	case "react", "react.js", "reactjs":
+	value = strings.ReplaceAll(value, "ё", "е")
+	if impliesReactWeb(value) {
 		return "react"
-	default:
-		return value
 	}
+	return value
+}
+
+var reactToken = regexp.MustCompile(`(?i)(?:^|[^\pL\pN])(?:react\.js|reactjs|react)(?:$|[^\pL\pN])`)
+
+func stripReactNative(value string) string {
+	lower := strings.ToLower(value)
+	lower = strings.ReplaceAll(lower, "react-native", " ")
+	lower = strings.ReplaceAll(lower, "react native", " ")
+	return lower
+}
+
+func impliesReactWeb(value string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	switch trimmed {
+	case "react", "react.js", "reactjs", "react-js":
+		return true
+	}
+	slugged := strings.NewReplacer(".", " ", "_", " ", "/", " ", "+", " ").Replace(trimmed)
+	return reactToken.MatchString(stripReactNative(slugged))
 }
 
 func hasExplicitSkill(v Vacancy, skill string, normalizedSkills map[string]bool) bool {
-	if normalizedSkills[skill] {
-		return true
-	}
 	if skill == "" {
 		return false
 	}
-	aliases := []string{regexp.QuoteMeta(skill)}
 	if skill == "react" {
-		aliases = []string{`react`, `react\.js`, `reactjs`}
+		if normalizedSkills["react"] {
+			return true
+		}
+		for _, raw := range v.Skills {
+			if impliesReactWeb(raw) {
+				return true
+			}
+		}
+		return reactToken.MatchString(stripReactNative(v.Title)) || reactToken.MatchString(stripReactNative(v.Description))
 	}
-	rule := regexp.MustCompile(`(?i)(?:^|[^\pL\pN])(?:` + strings.Join(aliases, "|") + `)(?:$|[^\pL\pN])`)
+	if normalizedSkills[skill] {
+		return true
+	}
+	rule := regexp.MustCompile(`(?i)(?:^|[^\pL\pN])(?:` + regexp.QuoteMeta(skill) + `)(?:$|[^\pL\pN])`)
 	return rule.MatchString(v.Title) || rule.MatchString(v.Description)
 }
 func contains(values []string, needle string) bool {

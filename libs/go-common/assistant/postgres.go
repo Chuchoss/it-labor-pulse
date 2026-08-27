@@ -790,41 +790,56 @@ func (r *PostgresRepository) ListMatches(ctx context.Context, userID string, lim
 		limit = 50
 	}
 	rows, err := r.db.Query(ctx, `
-		SELECT m.vacancy_id::text, v.title, v.source_url, m.decision, m.score::float8,
-			m.method,
-			CASE WHEN m.method='ai' THEN 'confirmed' ELSE 'preliminary' END,
-			m.confidence, m.rationale, m.unknowns, m.conflicts, m.evidence_ids
-		FROM vacancy_match_results m
-		JOIN vacancies v ON v.id = m.vacancy_id
-		JOIN vacancy_preferences p ON p.id=m.preference_id
-		JOIN assistant_runs ar ON ar.id=m.run_id
-		WHERE m.user_id = $1::uuid
-		  AND p.id = (
+		WITH current_preference AS (
 			SELECT id FROM vacancy_preferences
 			WHERE user_id=$1::uuid AND archived_at IS NULL
 			ORDER BY version DESC LIMIT 1
-		  )
-		  AND m.decision = 'match'
-		  AND m.method='ai'
-		  AND m.ruleset_version=$3
-		  AND ar.ruleset_version=$3
-		  AND ar.state NOT IN ('superseded','disabled','failed')
-		  AND ar.id = (
-			SELECT latest.id FROM assistant_runs latest
+		), current_run AS (
+			SELECT latest.id
+			FROM assistant_runs latest
+			JOIN current_preference p ON p.id=latest.preference_id
 			WHERE latest.user_id=$1::uuid
-			  AND latest.preference_id=p.id
 			  AND latest.ruleset_version=$3
 			  AND latest.state NOT IN ('superseded','disabled','failed')
-			ORDER BY latest.created_at DESC LIMIT 1
-		  )
-		  AND NOT EXISTS (
-			SELECT 1 FROM vacancy_match_results hard
-			WHERE hard.user_id=m.user_id AND hard.preference_id=m.preference_id
-			  AND hard.vacancy_id=m.vacancy_id AND hard.vacancy_revision=m.vacancy_revision
-			  AND hard.run_id=m.run_id AND hard.method='deterministic'
-			  AND hard.decision <> 'match'
-		  )
-		ORDER BY m.created_at DESC LIMIT $2
+			ORDER BY latest.created_at DESC
+			LIMIT 1
+		), scoped AS (
+			SELECT m.vacancy_id, m.decision, m.score, m.method, m.confidence, m.rationale,
+				m.unknowns, m.conflicts, m.evidence_ids, m.created_at, m.vacancy_revision,
+				v.title, v.source_url
+			FROM vacancy_match_results m
+			JOIN vacancies v ON v.id = m.vacancy_id
+			JOIN current_preference p ON p.id=m.preference_id
+			LEFT JOIN current_run cr ON TRUE
+			WHERE m.user_id = $1::uuid
+			  AND m.ruleset_version=$3
+			  AND m.decision IN ('match','review')
+			  AND (m.run_id IS NULL OR m.run_id = cr.id)
+			  AND NOT EXISTS (
+				SELECT 1 FROM vacancy_match_results hard
+				WHERE hard.user_id=m.user_id AND hard.preference_id=m.preference_id
+				  AND hard.vacancy_id=m.vacancy_id AND hard.vacancy_revision=m.vacancy_revision
+				  AND hard.run_id IS NOT DISTINCT FROM m.run_id
+				  AND hard.decision = 'reject'
+			  )
+		), ranked AS (
+			SELECT vacancy_id::text, title, source_url, decision, score::float8, method,
+				CASE WHEN method='ai' AND decision='match' THEN 'confirmed' ELSE 'preliminary' END AS stage,
+				confidence, rationale, unknowns, conflicts, evidence_ids,
+				ROW_NUMBER() OVER (
+					PARTITION BY vacancy_id
+					ORDER BY CASE WHEN decision='match' THEN 0 ELSE 1 END,
+						CASE WHEN method='ai' THEN 0 ELSE 1 END,
+						created_at DESC
+				) AS rn
+			FROM scoped
+		)
+		SELECT vacancy_id, title, source_url, decision, score, method, stage,
+			confidence, rationale, unknowns, conflicts, evidence_ids
+		FROM ranked
+		WHERE rn=1
+		ORDER BY CASE WHEN decision='match' THEN 0 ELSE 1 END, vacancy_id
+		LIMIT $2
 	`, userID, limit, SpecializationRulesVersion)
 	if err != nil {
 		return nil, fmt.Errorf("list assistant matches: %w", err)
@@ -850,13 +865,13 @@ func (r *PostgresRepository) ListMatches(ctx context.Context, userID string, lim
 		if err := json.Unmarshal(evidence, &item.Evidence); err != nil {
 			return nil, err
 		}
-		item.Reasons = safeMatchReasons(item.Method, rationale, item.Evidence, item.Conflicts)
+		item.Reasons = safeMatchReasons(item.Method, rationale, item.Evidence, item.Conflicts, item.Unknowns)
 		result = append(result, item)
 	}
 	return result, rows.Err()
 }
 
-func safeMatchReasons(method, _ string, evidence, conflicts []string) []string {
+func safeMatchReasons(method, _ string, evidence, conflicts, unknowns []string) []string {
 	if method == "ai" {
 		labels := []struct{ prefix, text string }{
 			{"criterion:specialization:", "Frontend подтверждён"},
@@ -878,10 +893,32 @@ func safeMatchReasons(method, _ string, evidence, conflicts []string) []string {
 		}
 		return []string{"AI подтвердил hard-критерии"}
 	}
+	reviewReasons := map[string]string{
+		"remote":                          "Удалённый формат неизвестен",
+		"role":                            "Официальная роль не подтверждена",
+		"specialization":                  "Специализация неясна",
+		"specialization_description_only": "Специализация только из описания",
+		"required_skill:React":            "Явный React не подтверждён в title/навыках",
+		"required_skill:react":            "Явный React не подтверждён в title/навыках",
+	}
+	reasons := make([]string, 0, len(unknowns))
+	for _, unknown := range unknowns {
+		if text, ok := reviewReasons[unknown]; ok {
+			reasons = append(reasons, text)
+			continue
+		}
+		if strings.HasPrefix(unknown, "required_skill:") {
+			reasons = append(reasons, "Обязательный навык не подтверждён явно")
+		}
+	}
 	for _, value := range evidence {
 		if strings.HasPrefix(value, "specialization:") {
-			return []string{"Специализация подтверждена"}
+			reasons = append(reasons, "Специализация подтверждена")
+			break
 		}
+	}
+	if len(reasons) > 0 {
+		return reasons
 	}
 	if len(conflicts) == 0 {
 		return []string{"Предварительно подходит по фильтрам"}
@@ -1120,7 +1157,8 @@ func (r *PostgresRepository) SnapshotCandidates(ctx context.Context, run Assista
 			v.region_id::text, v.is_remote,
 			v.published_at, v.collected_at, v.created_at, COALESCE(v.description_text, ''),
 			v.description_truncated, v.analysis_revision,
-			COALESCE(array_agg(DISTINCT sk.slug) FILTER (WHERE sk.slug IS NOT NULL), '{}'),
+			COALESCE(array_agg(DISTINCT sk.slug) FILTER (WHERE sk.slug IS NOT NULL), '{}')
+			  || COALESCE(array_agg(DISTINCT sk.name) FILTER (WHERE sk.name IS NOT NULL), '{}'),
 			EXISTS (
 				SELECT 1 FROM assistant_ai_jobs j
 				WHERE j.user_id=$5::uuid AND j.preference_id=$6::uuid AND j.vacancy_id=v.id
@@ -1268,7 +1306,9 @@ func (r *PostgresRepository) Candidates(ctx context.Context, source string, _ ti
 				FILTER (WHERE scope_alias.pattern IS NOT NULL), '{}'),
 			v.region_id::text, v.is_remote, v.published_at,
 			v.collected_at, COALESCE(v.description_text, ''), v.description_truncated,
-			v.analysis_revision, COALESCE(array_agg(DISTINCT s.slug) FILTER (WHERE s.slug IS NOT NULL), '{}')
+			v.analysis_revision,
+			COALESCE(array_agg(DISTINCT s.slug) FILTER (WHERE s.slug IS NOT NULL), '{}')
+			  || COALESCE(array_agg(DISTINCT s.name) FILTER (WHERE s.name IS NOT NULL), '{}')
 		FROM vacancies v
 		JOIN claimed w ON w.source = v.source AND w.external_id = v.external_id
 			AND w.vacancy_revision = v.analysis_revision

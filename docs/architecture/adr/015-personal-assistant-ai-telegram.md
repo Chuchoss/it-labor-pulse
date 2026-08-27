@@ -81,24 +81,28 @@ deterministic assessment дал `reject`; такой результат хран
 до пяти раз и затем переходят в dead-letter. Ошибка/отсутствие AI не отменяет
 сохранённый deterministic результат.
 
-Начиная с ruleset `assistant-hard-gates-v2`, deterministic hard-критерии имеют
+Начиная с ruleset `assistant-hard-gates-v3`, deterministic hard-критерии имеют
 безусловный приоритет. Доказанное нарушение всегда даёт `reject`, даже если AI
 вернул `match`. Неизвестный hard-критерий остаётся `review`, пока AI не вернёт
 валидированное явное доказательство по каждому неизвестному критерию. В
-«Подходящие» попадают только `confirmed`-результаты текущей preference, текущего
-несуперседированного run и текущего ruleset. Старые результаты сохраняются для
-аудита, но из текущей выдачи исключаются.
+«Подходящие» попадают `match`-результаты текущей preference, текущего
+несуперседированного run или prospective outbox и текущего ruleset: и
+подтверждённый AI, и deterministic match без неизвестных hard-фактов. В
+«Нужно проверить» попадают оставшиеся `review` после исключения любого
+`reject`. Старые результаты сохраняются для аудита, но из текущей выдачи
+исключаются.
 
 AI получает только `hard_criteria`; свободная заметка и дополнительные пожелания
 не превращаются в обязательные условия. Неизвестные salary/remote/region/skills
 дают `review`, если известные данные не опровергают hard-критерий. Для строгого
-Frontend ясный Frontend IC может дать `match`, Backend/Fullstack и leadership
-при `include_leadership=false` дают `reject`. Руководство определяется прежде
-всего по title, включая director/CTO/head/team lead/tech lead/lead и русские
-«технический директор», «руководитель», «тимлид», «техлид», «ведущий».
-Обязательный React подтверждается только явными `React`, `React.js` или
-`ReactJS`; Next.js/JS/TS/JSX не считаются доказательством. `remote_only=true`
-требует официальный remote-сигнал либо явное описание удалённого формата.
+Frontend ясный Frontend IC может дать `match`, Backend/Fullstack дают `reject`.
+`include_leadership=false` исключает только управленческие и people-lead роли:
+director/CTO/head/team lead/tech lead и русские «технический директор»,
+«руководитель», «тимлид», «техлид», а также `lead developer`. Senior, старший и
+ведущий — seniority IC, а не руководство. Обязательный React подтверждается
+явными `React`, `React.js`, `ReactJS` или `React / Redux`; React Native не
+считается React web; Next.js/JS/TS/JSX не считаются доказательством.
+`remote_only=true` требует официальный remote-сигнал.
 
 Batch-ответ — JSON-объект с ровно одним решением на каждый opaque
 `vacancy_id`. Duplicate/unknown ID отклоняет пакет; missing item остаётся

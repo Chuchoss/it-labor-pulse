@@ -83,6 +83,8 @@ func TestFrontendSpecializationAndLeadershipSemantics(t *testing.T) {
 		{"fullstack rejects", Vacancy{Title: "Full-stack Developer", RoleIDs: []string{"96"}}, false, DecisionReject},
 		{"frontend lead rejects", Vacancy{Title: "Frontend Team Lead", RoleIDs: []string{"96", "104"}}, false, DecisionReject},
 		{"frontend lead allowed", Vacancy{Title: "Frontend Team Lead", RoleIDs: []string{"96", "104"}}, true, DecisionMatch},
+		{"vedushiy senior ic matches", Vacancy{Title: "Ведущий фронтенд-разработчик", RoleIDs: []string{"96"}}, false, DecisionMatch},
+		{"senior frontend ic matches", Vacancy{Title: "Senior Frontend Developer", RoleIDs: []string{"96"}}, false, DecisionMatch},
 		{"generic developer reviews", Vacancy{Title: "Software Developer", RoleIDs: []string{"96"}}, false, DecisionReview},
 		{"description only reviews", Vacancy{Title: "Developer", RoleIDs: []string{"96"}, Description: "React and TypeScript"}, false, DecisionReview},
 	}
@@ -257,10 +259,13 @@ func TestDeepSeekPromptIncludesSpecializationAndLeadershipSemantics(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"specialization", "include_leadership", "fullstack", "team lead"} {
+	for _, required := range []string{"specialization", "include_leadership", "fullstack", "team lead", "ведущий"} {
 		if !strings.Contains(systemPrompt, required) {
 			t.Fatalf("prompt missing %q", required)
 		}
+	}
+	if !strings.Contains(systemPrompt, "individual-contributor") && !strings.Contains(systemPrompt, "seniority") {
+		t.Fatal("prompt must treat ведущий as IC seniority")
 	}
 }
 
@@ -696,7 +701,7 @@ func TestWorkerUsesApprovedRolesWithoutProviderCalls(t *testing.T) {
 		},
 	}
 	stats, err := RunOnce(context.Background(), fake, WorkerOptions{BatchSize: 2})
-	if err != nil || stats.Matched != 1 || stats.AICalls != 0 || len(fake.matches) != 1 {
+	if err != nil || stats.Matched != 2 || stats.AICalls != 0 || len(fake.matches) != 2 {
 		t.Fatalf("approved role run: %+v matches=%d err=%v", stats, len(fake.matches), err)
 	}
 }
@@ -879,7 +884,7 @@ func TestLeadershipHardGateAliases(t *testing.T) {
 		"Технический директор", "CTO", "Chief Technology Officer",
 		"Engineering Director", "Director of Development", "Head of Engineering",
 		"Руководитель разработки", "Frontend Team Lead", "Frontend Tech Lead",
-		"Ведущий фронтенд-разработчик", "Lead Frontend Developer",
+		"Lead Frontend Developer",
 	}
 	for _, title := range titles {
 		got := Match(Vacancy{Title: title, RoleIDs: []string{"96"}}, Preferences{
@@ -890,7 +895,10 @@ func TestLeadershipHardGateAliases(t *testing.T) {
 		}
 	}
 	if ClassifyVacancy(Vacancy{Title: "Frontend developer at a leading company"}).Leadership {
-		t.Fatal("leading company must not imply leadership")
+		t.Fatal("leading company must not be classified as leadership")
+	}
+	if ClassifyVacancy(Vacancy{Title: "Ведущий фронтенд-разработчик"}).Leadership {
+		t.Fatal("ведущий IC title must not be classified as leadership")
 	}
 }
 
@@ -901,13 +909,65 @@ func TestRequiredReactUsesExplicitAliasesOnly(t *testing.T) {
 			t.Errorf("%q decision=%s, want reject", title, got.Decision)
 		}
 	}
-	for _, skill := range []string{"React", "React.js", "ReactJS"} {
+	if got := Match(Vacancy{Title: "React Native Developer"}, preferences, time.Now()); got.Decision != DecisionReject {
+		t.Fatalf("react native decision=%s, want reject", got.Decision)
+	}
+	if got := Match(Vacancy{Title: "Frontend Developer", Skills: []string{"React Native"}}, preferences, time.Now()); got.Decision != DecisionReject {
+		t.Fatalf("react native skill decision=%s, want reject", got.Decision)
+	}
+	for _, skill := range []string{"React", "React.js", "ReactJS", "React / Redux", "react-js", "frontend-react", "react-redux"} {
 		if got := Match(Vacancy{Title: "Frontend Developer", Skills: []string{skill}}, preferences, time.Now()); got.Decision != DecisionMatch {
 			t.Errorf("skill=%q decision=%s, want match", skill, got.Decision)
 		}
 	}
+	if got := Match(Vacancy{Title: "Frontend Developer (React / Redux)"}, preferences, time.Now()); got.Decision != DecisionMatch {
+		t.Fatalf("react slash redux title decision=%s, want match", got.Decision)
+	}
 	if got := Match(Vacancy{}, preferences, time.Now()); got.Decision != DecisionReview {
 		t.Fatalf("missing content decision=%s, want review", got.Decision)
+	}
+}
+
+func TestTypicalRemoteFrontendReactICMatches(t *testing.T) {
+	remote := true
+	vacancy := Vacancy{
+		Title:       "Ведущий фронтенд-разработчик (React)",
+		RoleIDs:     []string{"96"},
+		Skills:      []string{"React.js", "TypeScript"},
+		Description: "Remote frontend product work.",
+		IsRemote:    &remote,
+	}
+	got := Match(vacancy, Preferences{
+		ApprovedRoles:     []string{"96"},
+		Specialization:    SpecializationFrontend,
+		IncludeLeadership: false,
+		RemoteOnly:        true,
+		RequiredSkills:    []string{"React"},
+	}, time.Now())
+	if got.Decision != DecisionMatch {
+		t.Fatalf("typical HH-like vacancy decision=%s conflicts=%v unknowns=%v", got.Decision, got.Conflicts, got.Unknowns)
+	}
+	primaryOnly := vacancy
+	primaryOnly.RoleIDs = nil
+	primaryOnly.RoleID = "96"
+	if got := Match(primaryOnly, Preferences{
+		ApprovedRoles:     []string{"96"},
+		Specialization:    SpecializationFrontend,
+		IncludeLeadership: false,
+		RemoteOnly:        true,
+		RequiredSkills:    []string{"React"},
+	}, time.Now()); got.Decision != DecisionMatch {
+		t.Fatalf("primary role id fallback decision=%s conflicts=%v unknowns=%v", got.Decision, got.Conflicts, got.Unknowns)
+	}
+	office := false
+	vacancy.IsRemote = &office
+	if got := Match(vacancy, Preferences{
+		ApprovedRoles:  []string{"96"},
+		Specialization: SpecializationFrontend,
+		RemoteOnly:     true,
+		RequiredSkills: []string{"React"},
+	}, time.Now()); got.Decision != DecisionReject || !contains(got.Conflicts, "remote_only") {
+		t.Fatalf("official non-remote decision=%s conflicts=%v", got.Decision, got.Conflicts)
 	}
 }
 

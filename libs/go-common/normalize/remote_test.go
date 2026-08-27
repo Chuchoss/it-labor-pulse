@@ -21,6 +21,8 @@ func TestDetectRemote(t *testing.T) {
 	}{
 		{name: "work_format_remote", formats: []string{"REMOTE"}, want: boolPtr(true)},
 		{name: "schedule_remote", schedule: "remote", want: boolPtr(true)},
+		{name: "schedule_remote_work", schedule: "remote_work", want: boolPtr(true)},
+		{name: "work_format_remote_work", formats: []string{"REMOTE_WORK"}, want: boolPtr(true)},
 		{name: "text_is_not_authoritative", region: "Удалённо", title: "Remote", desc: "удалённо", want: nil},
 		{name: "office", schedule: "fullDay", formats: []string{"ON_SITE"}, region: "Москва", title: "Go", want: boolPtr(false)},
 		{name: "unknown", want: nil},

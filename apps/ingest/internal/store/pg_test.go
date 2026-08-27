@@ -47,11 +47,13 @@ func (r stubRow) Scan(dest ...any) error {
 type unchangedVacancyDB struct {
 	queryCalls int
 	updateArgs []any
+	updateSQL  string
 }
 
 func (f *unchangedVacancyDB) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	if strings.Contains(sql, "UPDATE vacancies") {
 		f.updateArgs = args
+		f.updateSQL = sql
 	}
 	return pgconn.CommandTag{}, nil
 }
@@ -219,6 +221,7 @@ func TestUnchangedVacancyReconcilesCanonicalRegionReference(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, changed)
+	require.Contains(t, db.updateSQL, "COALESCE($8, is_remote)")
 	require.Len(t, db.updateArgs, 8)
 	regionID, ok := db.updateArgs[3].(*string)
 	require.True(t, ok)

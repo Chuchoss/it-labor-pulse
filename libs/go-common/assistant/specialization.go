@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const SpecializationRulesVersion = "assistant-hard-gates-v2"
+const SpecializationRulesVersion = "assistant-hard-gates-v3"
 
 type Specialization string
 
@@ -54,7 +54,7 @@ var specializationAliases = aliasRules{
 		`chief[\s-]+technology[\s-]+officer`, `cto`, `engineering[\s-]+director`,
 		`director[\s-]+of[\s-]+(?:engineering|development)`,
 		`техническ[\pL]*[\s-]+директор[\pL]*`, `директор[\pL]*[\s-]+по[\s-]+разработк[\pL]*`,
-		`руководител[\pL]*[\s-]+(?:разработк[\pL]*|отдел[\pL]*)`, `ведущ[\pL]*`,
+		`руководител[\pL]*[\s-]+(?:разработк[\pL]*|отдел[\pL]*)`,
 	),
 }
 
@@ -76,7 +76,8 @@ func hasAlias(value string, rules []*regexp.Regexp) bool {
 }
 
 func ClassifyVacancy(v Vacancy) Classification {
-	leadership := contains(v.RoleIDs, "104") || hasAlias(v.Title, specializationAliases.leadership)
+	roleIDs := officialRoleIDs(v)
+	leadership := contains(roleIDs, "104") || hasAlias(v.Title, specializationAliases.leadership)
 	if specialization := classifyText(v.Title); specialization != SpecializationUnknown {
 		return Classification{Specialization: specialization, Leadership: leadership, Confidence: "high", Evidence: "title"}
 	}

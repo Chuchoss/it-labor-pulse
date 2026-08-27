@@ -10,8 +10,9 @@ import (
 )
 
 // ContentHash computes sha256 hex of the canonical subset used for dedup.
-// Includes analysis-relevant facts, including the sanitized description.
-// Does not include collected_at. Skills are sorted for order-independence.
+// Includes analysis-relevant facts, including the sanitized description and
+// official remote fact. Does not include collected_at. Skills are sorted for
+// order-independence.
 func ContentHash(v CanonicalVacancy) string {
 	skills := make([]string, 0, len(v.Skills))
 	for _, s := range v.Skills {
@@ -59,6 +60,8 @@ func ContentHash(v CanonicalVacancy) string {
 	b.WriteString(v.DescriptionText)
 	b.WriteByte('|')
 	writeBoolPtr(&b, &v.DescriptionTruncated)
+	b.WriteByte('|')
+	writeBoolPtr(&b, v.IsRemote)
 
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])

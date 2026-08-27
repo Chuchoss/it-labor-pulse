@@ -458,12 +458,15 @@ aliases из [runbook assistant](../runbooks/personal-assistant.md): извес�
 
 Для широкой роли `96` клиент сохраняет отдельную `specialization`; отсутствие
 поля означает «не задано», а не Frontend. `include_leadership` по умолчанию
-`false`. Известный legacy role может вернуть
+`false` и скрывает только управленческие/people-lead роли (team/tech lead,
+руководитель, директор, CTO), а не senior/старший/ведущий IC.
+Известный legacy role может вернуть
 `legacy_specialization_suggestion`, но это не подтверждённый критерий до нового
-явного сохранения. `/assistant/matches` возвращает `stage=preliminary` для
-deterministic match без финального AI-решения и `stage=confirmed` только для AI
-match; AI reject/review той же ревизии имеет приоритет и не попадает в
-положительный список.
+явного сохранения. `/assistant/matches` возвращает текущие preference и
+ruleset: `decision=match` (AI `stage=confirmed` или deterministic
+`stage=preliminary` при полностью доказанных hard-критериях) и
+`decision=review` для оставшихся неизвестных фактов. Любой `reject` той же
+ревизии исключает вакансию из выдачи.
 
 #### `/api/v1/assistant/analyze` и `/api/v1/assistant/status` (Phase 4)
 

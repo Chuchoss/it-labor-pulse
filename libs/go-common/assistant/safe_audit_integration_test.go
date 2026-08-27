@@ -517,3 +517,589 @@ func countFixtureDecisions(outputs map[string]MatchOutput, decision string) int 
 	}
 	return count
 }
+
+func TestSafeIndependentMatchFunnel(t *testing.T) {
+	if os.Getenv("ASSISTANT_SAFE_AUDIT") != "1" {
+		t.Skip("safe audit not requested")
+	}
+	_ = godotenv.Load("../../../.env")
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repo := NewPostgresRepository(pool)
+
+	var userID string
+	if err := pool.QueryRow(ctx, `
+		SELECT u.id::text
+		FROM assistant_users u
+		WHERE u.external_subject='local-dev-user'
+	`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	preference, err := repo.CurrentPreferences(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := toPreferences(preference)
+	hard := preference.HardCriteria
+	t.Logf("SAFE_CRITERIA preference_version=%d developer_role=%t specialization=%s include_leadership=%t remote_only=%t required_skills_count=%d required_react=%t excluded_skills_count=%d regions_count=%d min_salary_set=%t approved_roles_count=%d ruleset=%s",
+		preference.Version,
+		contains(p.ApprovedRoles, "96"),
+		stringValue(hard["specialization"]),
+		p.IncludeLeadership,
+		p.RemoteOnly,
+		len(p.RequiredSkills),
+		containsFold(p.RequiredSkills, "react"),
+		len(p.ExcludedSkills),
+		len(p.Regions),
+		p.MinSalaryRUB != nil,
+		len(p.ApprovedRoles),
+		SpecializationRulesVersion,
+	)
+
+	status, err := repo.AnalysisStatus(ctx, userID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_UI_RUN state=%s preference_version=%d current_preference_version=%d method_version=%s ruleset_constant=%s ai_matches=%d matched=%d processed=%d total=%d worker_state=%s worker_offline=%t run_present=%t",
+		status.State, status.PreferenceVersion, status.CurrentPreferenceVersion, status.MethodVersion,
+		SpecializationRulesVersion, status.AIMatches, status.Matched, status.Processed, status.Total,
+		status.WorkerState, status.WorkerOffline, strings.TrimSpace(status.RunID) != "")
+
+	var listedAI, listedDet int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE m.method='ai' AND m.decision='match'),
+			count(*) FILTER (WHERE m.method='deterministic' AND m.decision='match')
+		FROM vacancy_match_results m
+		JOIN vacancy_preferences p ON p.id=m.preference_id
+		JOIN assistant_runs ar ON ar.id=m.run_id
+		WHERE m.user_id=$1::uuid
+		  AND p.id = (
+			SELECT id FROM vacancy_preferences
+			WHERE user_id=$1::uuid AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		  )
+		  AND m.ruleset_version=$2
+		  AND ar.ruleset_version=$2
+		  AND ar.state NOT IN ('superseded','disabled','failed')
+		  AND ar.id = (
+			SELECT latest.id FROM assistant_runs latest
+			WHERE latest.user_id=$1::uuid
+			  AND latest.preference_id=p.id
+			  AND latest.ruleset_version=$2
+			  AND latest.state NOT IN ('superseded','disabled','failed')
+			ORDER BY latest.created_at DESC LIMIT 1
+		  )
+	`, userID, SpecializationRulesVersion).Scan(&listedAI, &listedDet); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_LISTING_SCOPE current_ruleset_ai_match=%d current_ruleset_det_match=%d", listedAI, listedDet)
+
+	var eligible, remoteTrue, remoteFalse, remoteUnknown, emptySkills, emptyDesc, emptyBoth int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			count(*),
+			count(*) FILTER (WHERE v.is_remote IS TRUE),
+			count(*) FILTER (WHERE v.is_remote IS FALSE),
+			count(*) FILTER (WHERE v.is_remote IS NULL),
+			count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM vacancy_skills vs WHERE vs.vacancy_id=v.id)),
+			count(*) FILTER (WHERE COALESCE(BTRIM(v.description_text), '') = ''),
+			count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM vacancy_skills vs WHERE vs.vacancy_id=v.id)
+				AND COALESCE(BTRIM(v.description_text), '') = '')
+		FROM vacancies v
+		JOIN sources src ON src.code=v.source AND src.is_active
+		WHERE v.is_active AND v.deleted_at IS NULL
+	`).Scan(&eligible, &remoteTrue, &remoteFalse, &remoteUnknown, &emptySkills, &emptyDesc, &emptyBoth); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_ELIGIBLE total=%d remote_true=%d remote_false=%d remote_unknown=%d empty_skills=%d empty_description=%d empty_skills_and_description=%d",
+		eligible, remoteTrue, remoteFalse, remoteUnknown, emptySkills, emptyDesc, emptyBoth)
+
+	var remoteUnknownNoPayload, remoteUnknownOfficialTrue, remoteFalseOfficialTrue, remoteUnknownOfficialFalse int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE v.is_remote IS NULL AND v.raw_payload IS NULL),
+			count(*) FILTER (WHERE v.is_remote IS NULL AND (
+				lower(COALESCE(v.raw_payload->'schedule'->>'id', '')) IN ('remote', 'remote_work')
+				OR EXISTS (
+					SELECT 1 FROM jsonb_array_elements(COALESCE(v.raw_payload->'work_format', '[]'::jsonb)) AS wf
+					WHERE upper(COALESCE(wf->>'id', '')) IN ('REMOTE', 'REMOTE_WORK')
+				)
+			)),
+			count(*) FILTER (WHERE v.is_remote IS FALSE AND (
+				lower(COALESCE(v.raw_payload->'schedule'->>'id', '')) IN ('remote', 'remote_work')
+				OR EXISTS (
+					SELECT 1 FROM jsonb_array_elements(COALESCE(v.raw_payload->'work_format', '[]'::jsonb)) AS wf
+					WHERE upper(COALESCE(wf->>'id', '')) IN ('REMOTE', 'REMOTE_WORK')
+				)
+			)),
+			count(*) FILTER (WHERE v.is_remote IS NULL AND v.raw_payload IS NOT NULL AND (
+				NULLIF(v.raw_payload->'schedule'->>'id', '') IS NOT NULL
+				OR jsonb_array_length(COALESCE(v.raw_payload->'work_format', '[]'::jsonb)) > 0
+			) AND NOT (
+				lower(COALESCE(v.raw_payload->'schedule'->>'id', '')) IN ('remote', 'remote_work')
+				OR EXISTS (
+					SELECT 1 FROM jsonb_array_elements(COALESCE(v.raw_payload->'work_format', '[]'::jsonb)) AS wf
+					WHERE upper(COALESCE(wf->>'id', '')) IN ('REMOTE', 'REMOTE_WORK')
+				)
+			))
+		FROM vacancies v
+		JOIN sources src ON src.code=v.source AND src.is_active
+		WHERE v.is_active AND v.deleted_at IS NULL
+	`).Scan(&remoteUnknownNoPayload, &remoteUnknownOfficialTrue, &remoteFalseOfficialTrue, &remoteUnknownOfficialFalse); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_REMOTE_PAYLOAD_GAP unknown_no_payload=%d unknown_but_official_remote=%d false_but_official_remote=%d unknown_with_non_remote_official_format=%d",
+		remoteUnknownNoPayload, remoteUnknownOfficialTrue, remoteFalseOfficialTrue, remoteUnknownOfficialFalse)
+
+	rows, err := pool.Query(ctx, `
+		SELECT COALESCE(NULLIF(s.slug, ''), 'empty_slug'), count(DISTINCT vs.vacancy_id)
+		FROM skills s
+		JOIN vacancy_skills vs ON vs.skill_id=s.id
+		JOIN vacancies v ON v.id=vs.vacancy_id
+		JOIN sources src ON src.code=v.source AND src.is_active
+		WHERE v.is_active AND v.deleted_at IS NULL
+		  AND (s.slug ~* 'react' OR s.name ~* 'react')
+		GROUP BY 1
+		ORDER BY 2 DESC
+		LIMIT 20
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slug string
+		var n int
+		if err := rows.Scan(&slug, &n); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("SAFE_REACT_SKILL_SLUG slug=%s vacancies=%d", slug, n)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	reactTitle := `(?:^|[^[:alnum:]])(?:react\.js|reactjs|react)(?:$|[^[:alnum:]])`
+	reactNative := `(?:^|[^[:alnum:]])react[[:space:]-]*native(?:$|[^[:alnum:]])`
+	reactSkillSlug := `^(react|react\.js|reactjs|react-js)$`
+	reactSkillName := `(?:^|[^[:alnum:]])(?:react\.js|reactjs|react)(?:$|[^[:alnum:]])`
+	frontend := `(?:^|[^[:alnum:]])(?:front[[:space:]-]?end|фронт[[:space:]-]?энд|фронтенд)(?:$|[^[:alnum:]])`
+	backend := `(?:^|[^[:alnum:]])(?:back[[:space:]-]?end|бэк[[:space:]-]?энд|бэкенд|backend)(?:$|[^[:alnum:]])`
+	fullstack := `(?:^|[^[:alnum:]])(?:full[[:space:]-]?stack|фулл[[:space:]-]?ст[еэ]к|фулст[еэ]к)(?:$|[^[:alnum:]])`
+	leadMgmt := `(?:^|[^[:alnum:]])(?:team[[:space:]-]?lead(?:er)?|tech(?:nical)?[[:space:]-]?lead|lead[[:space:]]?(?:developer|engineer)|lead[[:space:]-]?front[[:space:]-]?end|тим[[:space:]-]?лид|тех[[:space:]-]?лид|руководител[[:alpha:]]*|head[[:space:]-]?of|cto|chief[[:space:]]+technology[[:space:]]+officer|engineering[[:space:]]+director|director[[:space:]]+of[[:space:]]+(?:engineering|development)|техническ[[:alpha:]]*[[:space:]]+директор[[:alpha:]]*|директор[[:alpha:]]*[[:space:]]+по[[:space:]]+разработк[[:alpha:]]*)(?:$|[^[:alnum:]])`
+	vedushiy := `(?:^|[^[:alnum:]])ведущ[[:alpha:]]*(?:$|[^[:alnum:]])`
+	seniorIC := `(?:^|[^[:alnum:]])(?:senior|старш[[:alpha:]]*|ведущ[[:alpha:]]*)(?:$|[^[:alnum:]])`
+
+	var sqlRemote, sqlReactAny, sqlReactWeb, sqlReactNative, sqlFrontend, sqlBackend, sqlFullstack, sqlLeadMgmt, sqlVedushiy, sqlSeniorIC int
+	var sqlIntersectCurrentLead, sqlIntersectIC, sqlIntersectVedushiyIC int
+	if err := pool.QueryRow(ctx, `
+		WITH eligible AS (
+			SELECT v.id, v.title, COALESCE(v.description_text, '') AS description, v.is_remote,
+				COALESCE((
+					SELECT string_agg(s.slug, ' ')
+					FROM vacancy_skills vs JOIN skills s ON s.id=vs.skill_id
+					WHERE vs.vacancy_id=v.id
+				), '') AS skill_slugs,
+				COALESCE((
+					SELECT string_agg(s.name, ' ')
+					FROM vacancy_skills vs JOIN skills s ON s.id=vs.skill_id
+					WHERE vs.vacancy_id=v.id
+				), '') AS skill_names
+			FROM vacancies v
+			JOIN sources src ON src.code=v.source AND src.is_active
+			WHERE v.is_active AND v.deleted_at IS NULL
+		), marked AS (
+			SELECT *,
+				title ~* $1 OR description ~* $1 OR skill_names ~* $3 OR skill_slugs ~* $2 AS react_any,
+				(
+					(title ~* $1 AND title !~* $4) OR
+					(description ~* $1 AND description !~* $4) OR
+					(skill_names ~* $3 AND skill_names !~* $4) OR
+					skill_slugs ~* $2
+				) AS react_web,
+				title ~* $4 OR description ~* $4 OR skill_names ~* $4 OR skill_slugs ~* 'react-native' AS react_native,
+				title ~* $5 AS frontend_title,
+				title ~* $6 AS backend_title,
+				title ~* $7 AS fullstack_title,
+				title ~* $8 AS lead_mgmt_title,
+				title ~* $9 AS vedushiy_title,
+				title ~* $10 AS senior_ic_title,
+				is_remote IS TRUE AS remote_true
+			FROM eligible
+		)
+		SELECT
+			count(*) FILTER (WHERE remote_true),
+			count(*) FILTER (WHERE react_any),
+			count(*) FILTER (WHERE react_web),
+			count(*) FILTER (WHERE react_native),
+			count(*) FILTER (WHERE frontend_title AND NOT backend_title AND NOT fullstack_title),
+			count(*) FILTER (WHERE backend_title AND NOT frontend_title AND NOT fullstack_title),
+			count(*) FILTER (WHERE fullstack_title),
+			count(*) FILTER (WHERE lead_mgmt_title),
+			count(*) FILTER (WHERE vedushiy_title),
+			count(*) FILTER (WHERE senior_ic_title AND NOT lead_mgmt_title),
+			count(*) FILTER (WHERE remote_true AND react_web AND frontend_title AND NOT backend_title AND NOT fullstack_title AND NOT lead_mgmt_title AND NOT vedushiy_title),
+			count(*) FILTER (WHERE remote_true AND react_web AND frontend_title AND NOT backend_title AND NOT fullstack_title AND NOT lead_mgmt_title),
+			count(*) FILTER (WHERE remote_true AND react_web AND frontend_title AND NOT backend_title AND NOT fullstack_title AND NOT lead_mgmt_title AND vedushiy_title)
+		FROM marked
+	`, reactTitle, reactSkillSlug, reactSkillName, reactNative, frontend, backend, fullstack, leadMgmt, vedushiy, seniorIC).
+		Scan(&sqlRemote, &sqlReactAny, &sqlReactWeb, &sqlReactNative, &sqlFrontend, &sqlBackend, &sqlFullstack,
+			&sqlLeadMgmt, &sqlVedushiy, &sqlSeniorIC, &sqlIntersectCurrentLead, &sqlIntersectIC, &sqlIntersectVedushiyIC); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_SQL_PATTERNS react_title_or_desc=%s react_skill_slug=%s react_skill_name=%s react_native_excluded=%s frontend_title=%s backend_title=%s fullstack_title=%s lead_mgmt=%s vedushiy=%s",
+		reactTitle, reactSkillSlug, reactSkillName, reactNative, frontend, backend, fullstack, leadMgmt, vedushiy)
+	t.Logf("SAFE_SQL_FUNNEL eligible=%d remote_true=%d react_any=%d react_web=%d react_native=%d frontend_title_only=%d backend_title_only=%d fullstack_title=%d lead_mgmt_title=%d vedushiy_title=%d senior_ic_not_mgmt=%d",
+		eligible, sqlRemote, sqlReactAny, sqlReactWeb, sqlReactNative, sqlFrontend, sqlBackend, sqlFullstack, sqlLeadMgmt, sqlVedushiy, sqlSeniorIC)
+	t.Logf("SAFE_SQL_INTERSECT remote+react_web+frontend_title+not_backend+not_fullstack+not_mgmt_not_vedushiy=%d same_allow_vedushiy=%d vedushiy_subset=%d",
+		sqlIntersectCurrentLead, sqlIntersectIC, sqlIntersectVedushiyIC)
+
+	run := AssistantRun{UserID: userID, PreferenceID: preference.ID, SnapshotCutoff: time.Now().UTC().Add(time.Hour)}
+	counts := map[string]int{}
+	seen := map[string]bool{}
+	vedushiyOnly := compileAliases(`ведущ[\pL]*`)
+	for {
+		candidates, err := repo.SnapshotCandidates(ctx, run, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		for _, candidate := range candidates {
+			if seen[candidate.ID] {
+				continue
+			}
+			seen[candidate.ID] = true
+			counts["loaded"]++
+			if len(candidate.Vacancy.Skills) == 0 {
+				counts["loaded_empty_skills"]++
+			}
+			if strings.TrimSpace(candidate.Vacancy.Description) == "" {
+				counts["loaded_empty_description"]++
+			}
+			if candidate.Vacancy.IsRemote == nil {
+				counts["loaded_remote_unknown"]++
+			} else if *candidate.Vacancy.IsRemote {
+				counts["loaded_remote_true"]++
+			} else {
+				counts["loaded_remote_false"]++
+			}
+			classification := ClassifyVacancy(candidate.Vacancy)
+			if classification.Leadership {
+				counts["matcher_lead"]++
+			} else {
+				counts["matcher_ic"]++
+			}
+			switch classification.Specialization {
+			case SpecializationFrontend:
+				counts["matcher_frontend"]++
+			case SpecializationBackend:
+				counts["matcher_backend"]++
+			case SpecializationFullstack:
+				counts["matcher_fullstack"]++
+			default:
+				counts["matcher_spec_"+string(classification.Specialization)]++
+			}
+			skillMap := make(map[string]bool, len(candidate.Vacancy.Skills))
+			for _, skill := range candidate.Vacancy.Skills {
+				skillMap[normalizeSkill(skill)] = true
+			}
+			if hasExplicitSkill(candidate.Vacancy, "react", skillMap) {
+				counts["matcher_react"]++
+			}
+			remoteOK := candidate.Vacancy.IsRemote != nil && *candidate.Vacancy.IsRemote
+			frontendOK := classification.Specialization == SpecializationFrontend
+			titleFrontend := classifyText(candidate.Vacancy.Title) == SpecializationFrontend
+			titleClass := classifyText(candidate.Vacancy.Title)
+			leadOK := !classification.Leadership
+			reactOK := hasExplicitSkill(candidate.Vacancy, "react", skillMap)
+			reactTitle := hasExplicitSkill(Vacancy{Title: candidate.Vacancy.Title}, "react", map[string]bool{})
+			vedushiyLead := hasAlias(candidate.Vacancy.Title, vedushiyOnly)
+			mgmtLead := classification.Leadership && !vedushiyLead
+			if vedushiyLead {
+				for _, rule := range specializationAliases.leadership {
+					if strings.Contains(rule.String(), "ведущ") {
+						continue
+					}
+					if rule.MatchString(candidate.Vacancy.Title) {
+						mgmtLead = true
+						break
+					}
+				}
+			}
+			if titleFrontend {
+				counts["title_frontend"]++
+			}
+			if reactTitle {
+				counts["react_in_title"]++
+			}
+			if remoteOK && reactTitle {
+				counts["remote_react_title"]++
+			}
+			if remoteOK && reactTitle && !mgmtLead {
+				counts["remote_react_title_not_mgmt"]++
+			}
+			if remoteOK && reactTitle && !mgmtLead && !vedushiyLead {
+				counts["remote_react_title_not_mgmt_not_vedushiy"]++
+			}
+			if remoteOK && reactOK && titleFrontend && !mgmtLead {
+				counts["remote_react_titlefrontend_not_mgmt"]++
+			}
+			roleBucket := "other"
+			switch {
+			case len(candidate.Vacancy.RoleIDs) == 0:
+				roleBucket = "empty"
+			case contains(candidate.Vacancy.RoleIDs, "96"):
+				roleBucket = "96"
+			case contains(candidate.Vacancy.RoleIDs, "104"):
+				roleBucket = "104"
+			case contains(candidate.Vacancy.RoleIDs, "124"):
+				roleBucket = "124"
+			case contains(candidate.Vacancy.RoleIDs, "148"):
+				roleBucket = "148"
+			case contains(candidate.Vacancy.RoleIDs, "150"):
+				roleBucket = "150"
+			case contains(candidate.Vacancy.RoleIDs, "156"):
+				roleBucket = "156"
+			case contains(candidate.Vacancy.RoleIDs, "164"):
+				roleBucket = "164"
+			}
+			counts["role_bucket_"+roleBucket]++
+			if remoteOK && reactOK && frontendOK {
+				counts["rrf_role_"+roleBucket]++
+				counts["rrf_title_spec_"+string(titleClass)]++
+				if classification.Leadership {
+					counts["rrf_lead"]++
+					if vedushiyLead && !mgmtLead {
+						counts["rrf_lead_vedushiy_only"]++
+					}
+					if mgmtLead {
+						counts["rrf_lead_mgmt"]++
+					}
+					if contains(candidate.Vacancy.RoleIDs, "104") {
+						counts["rrf_lead_role_104"]++
+					}
+				}
+			}
+			if remoteOK && reactOK && frontendOK && leadOK {
+				counts["intersect_current_rules"]++
+				counts["intersect_role_"+roleBucket]++
+				counts["intersect_title_spec_"+string(titleClass)]++
+				result := Match(candidate.Vacancy, p, time.Now().UTC())
+				counts["intersect_decision_"+string(result.Decision)]++
+				if result.Decision == DecisionReject && len(result.Conflicts) > 0 {
+					counts["intersect_first_reject_"+result.Conflicts[0]]++
+				}
+				for _, unknown := range result.Unknowns {
+					counts["intersect_unknown_"+unknown]++
+				}
+			}
+			if remoteOK && reactOK && frontendOK {
+				counts["intersect_ignore_lead"]++
+				if classification.Leadership {
+					counts["intersect_rejected_only_by_current_lead"]++
+				}
+			}
+			result := Match(candidate.Vacancy, p, time.Now().UTC())
+			counts["all_decision_"+string(result.Decision)]++
+			if result.Decision == DecisionReject && len(result.Conflicts) > 0 {
+				counts["all_first_reject_"+result.Conflicts[0]]++
+			}
+			if result.Decision == DecisionReview {
+				for _, unknown := range result.Unknowns {
+					counts["review_unknown_"+unknown]++
+				}
+				if roleBucket == "96" {
+					counts["review_role_96"]++
+				}
+			}
+			if roleBucket == "96" {
+				if remoteOK {
+					counts["r96_remote"]++
+				}
+				if candidate.Vacancy.IsRemote == nil {
+					counts["r96_remote_unknown"]++
+				}
+				if reactOK {
+					counts["r96_react"]++
+				}
+				if frontendOK {
+					counts["r96_frontend"]++
+				}
+				if leadOK {
+					counts["r96_ic"]++
+				}
+				if remoteOK && reactOK {
+					counts["r96_remote_react"]++
+				}
+				if remoteOK && reactOK && frontendOK {
+					counts["r96_remote_react_frontend"]++
+				}
+				if remoteOK && reactOK && frontendOK && leadOK {
+					counts["r96_remote_react_frontend_ic"]++
+				}
+				if candidate.Vacancy.IsRemote == nil && reactOK && frontendOK && leadOK {
+					counts["r96_react_frontend_ic_remote_unknown"]++
+				}
+				if candidate.Vacancy.IsRemote != nil && !*candidate.Vacancy.IsRemote && reactOK && frontendOK && leadOK {
+					counts["r96_react_frontend_ic_office"]++
+				}
+				if result.Decision == DecisionReject && len(result.Conflicts) > 0 {
+					counts["r96_first_reject_"+result.Conflicts[0]]++
+				}
+				counts["r96_decision_"+string(result.Decision)]++
+			}
+		}
+		last := candidates[len(candidates)-1]
+		run.CursorCreatedAt = &last.CreatedAt
+		run.CursorVacancyID = last.ID
+	}
+	t.Logf("SAFE_MATCHER_LOAD loaded=%d empty_skills=%d empty_description=%d remote_true=%d remote_false=%d remote_unknown=%d",
+		counts["loaded"], counts["loaded_empty_skills"], counts["loaded_empty_description"],
+		counts["loaded_remote_true"], counts["loaded_remote_false"], counts["loaded_remote_unknown"])
+	t.Logf("SAFE_MATCHER_DERIVED frontend=%d backend=%d fullstack=%d unknown=%d other=%d mobile=%d lead=%d ic=%d react=%d",
+		counts["matcher_frontend"], counts["matcher_backend"], counts["matcher_fullstack"],
+		counts["matcher_spec_unknown"], counts["matcher_spec_other"], counts["matcher_spec_mobile"],
+		counts["matcher_lead"], counts["matcher_ic"], counts["matcher_react"])
+	t.Logf("SAFE_INTERSECT_CURRENT remote+react+frontend+not_current_lead=%d match=%d review=%d reject=%d ignore_lead=%d rejected_only_by_lead=%d",
+		counts["intersect_current_rules"], counts["intersect_decision_match"], counts["intersect_decision_review"],
+		counts["intersect_decision_reject"], counts["intersect_ignore_lead"], counts["intersect_rejected_only_by_current_lead"])
+	t.Logf("SAFE_ALL_DECISIONS match=%d review=%d reject=%d",
+		counts["all_decision_match"], counts["all_decision_review"], counts["all_decision_reject"])
+	t.Logf("SAFE_REVIEW_UNKNOWNS remote=%d role=%d specialization=%d spec_description_only=%d role96=%d",
+		counts["review_unknown_remote"], counts["review_unknown_role"], counts["review_unknown_specialization"],
+		counts["review_unknown_specialization_description_only"], counts["review_role_96"])
+	t.Logf("SAFE_ROLE96 remote=%d remote_unknown=%d react=%d frontend=%d ic=%d remote_react=%d remote_react_frontend=%d remote_react_frontend_ic=%d react_frontend_ic_remote_unknown=%d react_frontend_ic_office=%d decision_match=%d decision_review=%d decision_reject=%d",
+		counts["r96_remote"], counts["r96_remote_unknown"], counts["r96_react"], counts["r96_frontend"], counts["r96_ic"],
+		counts["r96_remote_react"], counts["r96_remote_react_frontend"], counts["r96_remote_react_frontend_ic"],
+		counts["r96_react_frontend_ic_remote_unknown"], counts["r96_react_frontend_ic_office"],
+		counts["r96_decision_match"], counts["r96_decision_review"], counts["r96_decision_reject"])
+	t.Logf("SAFE_TITLE_SIGNALS title_frontend=%d react_in_title=%d remote_react_title=%d remote_react_title_not_mgmt=%d remote_react_title_not_mgmt_not_vedushiy=%d remote_react_titlefrontend_not_mgmt=%d",
+		counts["title_frontend"], counts["react_in_title"], counts["remote_react_title"],
+		counts["remote_react_title_not_mgmt"], counts["remote_react_title_not_mgmt_not_vedushiy"],
+		counts["remote_react_titlefrontend_not_mgmt"])
+	t.Logf("SAFE_ROLE_ALL empty=%d r96=%d r104=%d r124=%d r148=%d r150=%d r156=%d r164=%d other=%d",
+		counts["role_bucket_empty"], counts["role_bucket_96"], counts["role_bucket_104"],
+		counts["role_bucket_124"], counts["role_bucket_148"], counts["role_bucket_150"],
+		counts["role_bucket_156"], counts["role_bucket_164"], counts["role_bucket_other"])
+	t.Logf("SAFE_RRF remote+react+frontend role_empty=%d r96=%d r104=%d r124=%d r148=%d r150=%d r156=%d r164=%d other=%d lead=%d lead_vedushiy_only=%d lead_mgmt=%d lead_role_104=%d title_frontend=%d title_unknown=%d title_fullstack=%d title_backend=%d title_mobile=%d",
+		counts["rrf_role_empty"], counts["rrf_role_96"], counts["rrf_role_104"], counts["rrf_role_124"],
+		counts["rrf_role_148"], counts["rrf_role_150"], counts["rrf_role_156"], counts["rrf_role_164"],
+		counts["rrf_role_other"], counts["rrf_lead"], counts["rrf_lead_vedushiy_only"], counts["rrf_lead_mgmt"],
+		counts["rrf_lead_role_104"], counts["rrf_title_spec_frontend"], counts["rrf_title_spec_unknown"],
+		counts["rrf_title_spec_fullstack"], counts["rrf_title_spec_backend"], counts["rrf_title_spec_mobile"])
+	t.Logf("SAFE_INTERSECT_ROLES empty=%d r96=%d r104=%d r124=%d r148=%d r150=%d r156=%d r164=%d other=%d title_frontend=%d title_unknown=%d title_fullstack=%d title_backend=%d title_mobile=%d",
+		counts["intersect_role_empty"], counts["intersect_role_96"], counts["intersect_role_104"],
+		counts["intersect_role_124"], counts["intersect_role_148"], counts["intersect_role_150"],
+		counts["intersect_role_156"], counts["intersect_role_164"], counts["intersect_role_other"],
+		counts["intersect_title_spec_frontend"], counts["intersect_title_spec_unknown"],
+		counts["intersect_title_spec_fullstack"], counts["intersect_title_spec_backend"],
+		counts["intersect_title_spec_mobile"])
+	for key, value := range counts {
+		if strings.HasPrefix(key, "all_first_reject_") || strings.HasPrefix(key, "intersect_first_reject_") || strings.HasPrefix(key, "intersect_unknown_") || strings.HasPrefix(key, "r96_first_reject_") || strings.HasPrefix(key, "review_unknown_") {
+			t.Logf("SAFE_REASON %s=%d", key, value)
+		}
+	}
+}
+
+func TestSafePauseActiveManualRun(t *testing.T) {
+	if os.Getenv("ASSISTANT_SAFE_PAUSE") != "1" {
+		t.Skip("safe pause not requested")
+	}
+	_ = godotenv.Load("../../../.env")
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repo := NewPostgresRepository(pool)
+	var runID, state string
+	var processed, total int
+	err = pool.QueryRow(ctx, `
+		SELECT id::text, state, processed, snapshot_total
+		FROM assistant_runs
+		WHERE state IN ('queued','running')
+		ORDER BY created_at DESC
+		LIMIT 1
+	`).Scan(&runID, &state, &processed, &total)
+	if err != nil {
+		t.Fatalf("no active run to pause: %v", err)
+	}
+	t.Logf("SAFE_PAUSE_BEFORE state=%s processed=%d total=%d", state, processed, total)
+	if err := repo.PauseAssistantRun(ctx, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT state FROM assistant_runs WHERE id=$1::uuid`, runID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_PAUSE_AFTER state=%s", state)
+}
+
+func TestSafeSupersedeStaleRulesetRuns(t *testing.T) {
+	if os.Getenv("ASSISTANT_SAFE_SUPERSEDE") != "1" {
+		t.Skip("safe supersede not requested")
+	}
+	_ = godotenv.Load("../../../.env")
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repo := NewPostgresRepository(pool)
+	var userID, runID, state, ruleset string
+	err = pool.QueryRow(ctx, `
+		SELECT u.id::text, ar.id::text, ar.state, ar.ruleset_version
+		FROM assistant_users u
+		JOIN assistant_runs ar ON ar.user_id=u.id
+		WHERE u.external_subject='local-dev-user'
+		  AND ar.state IN ('queued','running','paused','failed','succeeded')
+		  AND ar.ruleset_version <> $1
+		  AND (ar.state='succeeded' OR ar.processed < ar.snapshot_total)
+		ORDER BY ar.created_at DESC
+		LIMIT 1
+	`, SpecializationRulesVersion).Scan(&userID, &runID, &state, &ruleset)
+	if err != nil {
+		t.Fatalf("no stale ruleset run to supersede: %v", err)
+	}
+	t.Logf("SAFE_SUPERSEDE_BEFORE state=%s ruleset_stale=%t current_ruleset=%s",
+		state, ruleset != SpecializationRulesVersion, SpecializationRulesVersion)
+	if err := repo.SupersedeAssistantRun(ctx, userID, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT state FROM assistant_runs WHERE id=$1::uuid`, runID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_SUPERSEDE_AFTER state=%s", state)
+}
+
+func containsFold(values []string, needle string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), needle) {
+			return true
+		}
+	}
+	return false
+}

@@ -60,3 +60,12 @@ func TestContentHash_salaryChange(t *testing.T) {
 	bVac.SalaryMid = f64(200)
 	require.NotEqual(t, normalize.ContentHash(a), normalize.ContentHash(bVac))
 }
+
+func TestContentHash_includesOfficialRemoteFact(t *testing.T) {
+	t.Parallel()
+	base := normalize.CanonicalVacancy{Title: "Frontend Developer"}
+	remote := true
+	withRemote := base
+	withRemote.IsRemote = &remote
+	require.NotEqual(t, normalize.ContentHash(base), normalize.ContentHash(withRemote))
+}

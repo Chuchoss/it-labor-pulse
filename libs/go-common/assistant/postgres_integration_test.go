@@ -147,16 +147,22 @@ func TestPostgresListMatchesAppliesAIFinalPrecedence(t *testing.T) {
 		VALUES ($1::uuid, $2::uuid, 'succeeded', now(), $3)
 		RETURNING id::text
 	`, userID, preference.ID, SpecializationRulesVersion).Scan(&runID))
-	vacancyIDs := make([]string, 3)
+	vacancyIDs := make([]string, 4)
 	for i := range vacancyIDs {
 		require.NoError(t, conn.QueryRow(ctx, `
 			INSERT INTO vacancies (source, external_id, title, collected_at, is_active)
 			VALUES ('hh', $1, $2, now(), true) RETURNING id::text
 		`, fmt.Sprintf("synthetic-precedence-%s-%d", suffix, i), fmt.Sprintf("Synthetic frontend %d", i)).
 			Scan(&vacancyIDs[i]))
+		decision := DecisionMatch
+		unknowns := []string{}
+		if i == 2 {
+			decision = DecisionReview
+			unknowns = []string{"remote"}
+		}
 		_, err = repo.SaveMatch(ctx, WorkerMatch{
 			UserID: userID, VacancyID: vacancyIDs[i], PreferenceVersion: preference.Version,
-			RunID: runID, VacancyRevision: 1, Result: Result{Decision: DecisionMatch, Score: .8},
+			RunID: runID, VacancyRevision: 1, Result: Result{Decision: decision, Score: .8, Unknowns: unknowns},
 		})
 		require.NoError(t, err)
 	}
@@ -171,14 +177,20 @@ func TestPostgresListMatchesAppliesAIFinalPrecedence(t *testing.T) {
 
 	matches, err := repo.ListMatches(ctx, userID, 10)
 	require.NoError(t, err)
-	require.Len(t, matches, 1)
+	require.Len(t, matches, 3)
 	stages := map[string]string{}
+	decisions := map[string]Decision{}
 	for _, match := range matches {
 		stages[match.VacancyID] = match.Stage
+		decisions[match.VacancyID] = match.Decision
 	}
 	require.NotContains(t, stages, vacancyIDs[0])
 	require.Equal(t, "confirmed", stages[vacancyIDs[1]])
-	require.NotContains(t, stages, vacancyIDs[2])
+	require.Equal(t, "preliminary", stages[vacancyIDs[2]])
+	require.Equal(t, "preliminary", stages[vacancyIDs[3]])
+	require.Equal(t, DecisionMatch, decisions[vacancyIDs[1]])
+	require.Equal(t, DecisionReview, decisions[vacancyIDs[2]])
+	require.Equal(t, DecisionMatch, decisions[vacancyIDs[3]])
 }
 
 func TestPostgresManualSnapshotScansEligibleVacanciesAndDeduplicatesOutbox(t *testing.T) {
@@ -285,7 +297,7 @@ func TestPostgresManualSnapshotScansEligibleVacanciesAndDeduplicatesOutbox(t *te
 	var resultCount int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM vacancy_match_results
 		WHERE user_id=$1::uuid`, userID).Scan(&resultCount))
-	require.Equal(t, stats.Matched, resultCount)
+	require.Equal(t, stats.Processed, resultCount)
 	var workStatus string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM assistant_work_items
 		WHERE source=$1 AND external_id='eligible'`, activeSource).Scan(&workStatus))

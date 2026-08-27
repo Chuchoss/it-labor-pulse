@@ -493,31 +493,61 @@ describe('AssistantPage', () => {
     expect(screen.getByRole('button', { name: 'Проверить текущие вакансии' })).toBeInTheDocument()
   })
 
-  it('renders only AI-confirmed results', async () => {
+  it('renders hard-proven matches for the current ruleset and hides leadership titles', async () => {
     useSupportingAssistantHandlers()
     server.use(
       http.get('*/api/v1/assistant/preferences', () => HttpResponse.json({
-        id: 'preference-current', version: 3, note: '',
+        id: 'preference-current', version: 15, note: '',
         hard_criteria: { approved_roles: ['96'], specialization: 'frontend', include_leadership: false },
         soft_criteria: {}, weights: {},
+      })),
+      http.get('*/api/v1/assistant/status', () => HttpResponse.json({
+        run_id: 'run-current', ai_configured: true, ai_status: 'completed', state: 'succeeded',
+        preference_version: 15, current_preference_version: 15,
+        method_version: 'assistant-hard-gates-v3',
+        processed: 10, total: 10, eligible: 10, matched: 2,
+        ai_calls: 2, ai_matches: 1, ai_reviews: 1, skipped: 0, pending_candidates: false,
+        worker_offline: false, worker_stalled: false,
       })),
       http.get('*/api/v1/assistant/matches', () => HttpResponse.json([
         {
           vacancy_id: 'confirmed', title: 'Frontend', decision: 'match', score: 0.9,
+          method: 'ai', stage: 'confirmed', confidence: 'high', reasons: ['Frontend подтверждён'],
+          unknowns: [], conflicts: [], evidence_ids: [],
+        },
+        {
+          vacancy_id: 'vedushiy', title: 'Ведущий фронтенд-разработчик', decision: 'match', score: 0.88,
+          method: 'deterministic', stage: 'preliminary', reasons: ['Специализация подтверждена'],
+          unknowns: [], conflicts: [], evidence_ids: [],
+        },
+        {
+          vacancy_id: 'review', title: 'Frontend Developer', decision: 'review', score: 0.4,
+          method: 'deterministic', stage: 'preliminary', reasons: ['Удалённый формат неизвестен'],
+          unknowns: ['remote'], conflicts: [], evidence_ids: [],
+        },
+        {
+          vacancy_id: 'lead', title: 'Lead Frontend Developer', decision: 'match', score: 0.9,
           method: 'ai', stage: 'confirmed', reasons: ['Frontend подтверждён'],
           unknowns: [], conflicts: [], evidence_ids: [],
         },
         {
-          vacancy_id: 'pending', title: 'React Developer', decision: 'match', score: 0.7,
-          method: 'deterministic', stage: 'preliminary', reasons: ['Предварительно подходит по фильтрам'],
+          vacancy_id: 'director', title: 'Технический директор', decision: 'match', score: 0.9,
+          method: 'ai', stage: 'confirmed', reasons: ['Frontend подтверждён'],
           unknowns: [], conflicts: [], evidence_ids: [],
         },
       ])),
     )
     renderPage(<AssistantPage />)
     expect(await screen.findByText('Подходящие')).toBeInTheDocument()
-    expect(screen.getByText('Frontend')).toBeInTheDocument()
-    expect(screen.queryByText('React Developer')).not.toBeInTheDocument()
+    expect(screen.getByText(/Текущие правила: assistant-hard-gates-v3/)).toBeInTheDocument()
+    expect(screen.getByText(/критерии версии 15/)).toBeInTheDocument()
+    expect(screen.getByText(/выдача текущего запуска/)).toBeInTheDocument()
+    expect(screen.getByText('Frontend · уверенность AI: высокая')).toBeInTheDocument()
+    expect(screen.getByText('Ведущий фронтенд-разработчик · подтверждено фильтрами')).toBeInTheDocument()
+    expect(screen.getByText('Нужно проверить')).toBeInTheDocument()
+    expect(screen.getByText('Удалённый формат неизвестен')).toBeInTheDocument()
+    expect(screen.queryByText('Lead Frontend Developer')).not.toBeInTheDocument()
+    expect(screen.queryByText('Технический директор')).not.toBeInTheDocument()
   })
 
   it('keeps missing or null historical telemetry unknown and handles zero batches', async () => {
@@ -544,7 +574,6 @@ describe('AssistantPage', () => {
     expect(await screen.findByText('failed')).toBeInTheDocument()
     expect(screen.getByText(/Проверено по критериям: — из — · Предварительно подходят: —/)).toBeInTheDocument()
     expect(screen.getByText(/Пропущено AI:/)).toHaveTextContent('Средний пакет: —')
-    expect(screen.queryByText(/Историческая вакансия/)).not.toBeInTheDocument()
     expect(screen.queryByText(/^Токены:/)).not.toBeInTheDocument()
   })
 })

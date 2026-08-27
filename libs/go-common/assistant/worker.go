@@ -427,9 +427,7 @@ func processCandidates(
 				stats.Eligible++
 			}
 			result := Match(candidate.Vacancy, toPreferences(user.Preference), opts.Now)
-			if candidate.AIRetry {
-				// Deterministic state and counters were persisted on the first pass.
-			} else if result.Decision == DecisionMatch {
+			if !candidate.AIRetry {
 				created, err := store.SaveMatch(ctx, WorkerMatch{
 					UserID: user.ID, VacancyID: candidate.ID, Source: candidate.Source,
 					ExternalID: candidate.ExternalID, PreferenceVersion: user.Preference.Version,
@@ -438,30 +436,32 @@ func processCandidates(
 				if err != nil {
 					return err
 				}
-				stats.Matched++
-				if created && !settings.AIEnabled && opts.TelegramEnabled && settings.TelegramEnabled {
-					eligible := true
-					if eligibility, ok := store.(TelegramEligibilityStore); ok {
-						eligible, err = eligibility.TelegramEligible(ctx, user.ID)
-						if err != nil {
-							return err
+				if result.Decision == DecisionMatch {
+					stats.Matched++
+					if created && !settings.AIEnabled && opts.TelegramEnabled && settings.TelegramEnabled {
+						eligible := true
+						if eligibility, ok := store.(TelegramEligibilityStore); ok {
+							eligible, err = eligibility.TelegramEligible(ctx, user.ID)
+							if err != nil {
+								return err
+							}
+						}
+						if eligible {
+							created, err := store.SaveDelivery(ctx, WorkerDelivery{
+								UserID: user.ID, VacancyID: candidate.ID,
+								PreferenceVersion: user.Preference.Version,
+							})
+							if err != nil {
+								return err
+							}
+							if created {
+								stats.Notified++
+							}
 						}
 					}
-					if eligible {
-						created, err := store.SaveDelivery(ctx, WorkerDelivery{
-							UserID: user.ID, VacancyID: candidate.ID,
-							PreferenceVersion: user.Preference.Version,
-						})
-						if err != nil {
-							return err
-						}
-						if created {
-							stats.Notified++
-						}
-					}
+				} else {
+					stats.Skipped++
 				}
-			} else {
-				stats.Skipped++
 			}
 
 			durable, ok := store.(AIStore)
@@ -501,7 +501,7 @@ func processCandidates(
 			match := WorkerMatch{
 				UserID: user.ID, VacancyID: candidate.ID, PreferenceVersion: user.Preference.Version,
 				VacancyRevision: candidate.Revision, Result: result, Method: "ai", Provider: "deepseek",
-				RunID: stats.RunID, PromptVersion: "batch-v5-hard-gates", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
+				RunID: stats.RunID, PromptVersion: "batch-v6-ic-leadership", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
 			}
 			jobs = append(jobs, aiJob{
 				candidate: candidate, user: user, match: match, shared: shared, settings: settings,

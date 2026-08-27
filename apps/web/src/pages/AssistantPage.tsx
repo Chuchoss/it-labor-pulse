@@ -75,6 +75,10 @@ const workerStateText: Record<string, string> = {
   offline: 'недоступен',
 }
 
+function isManagementLeadershipTitle(title: string) {
+  return /team[\s-]?lead|tech(?:nical)?[\s-]?lead|\blead[\s-]+(?:developer|engineer|front)|тим[\s-]?лид|тех[\s-]?лид|руководител|head[\s-]?of|\bcto\b|директор/i.test(title)
+}
+
 function normalizeLegacyAlias(value: string) {
   const key = value.trim().toLowerCase().replaceAll('_', ' ').replaceAll('-', ' ').replace(/\s+/g, ' ')
   return legacyRoleAliases[key]
@@ -529,10 +533,17 @@ export function AssistantPage() {
               )?.label}». Выберите её вручную и сохраните новую версию.
             </Alert>
           )}
-          {developerSelected && <FormControlLabel
-            control={<Switch checked={includeLeadershipValue} onChange={(event) => setIncludeLeadership(event.target.checked)} />}
-            label="Включать руководящие вакансии"
-          />}
+          {developerSelected && (
+            <Stack spacing={0.5}>
+              <FormControlLabel
+                control={<Switch checked={includeLeadershipValue} onChange={(event) => setIncludeLeadership(event.target.checked)} />}
+                label="Включать руководящие вакансии"
+              />
+              <Typography variant="body2" color="text.secondary">
+                Выключено: скрываются team lead, tech lead, руководитель, директор и CTO. Senior, старший и ведущий остаются обычными специалистами.
+              </Typography>
+            </Stack>
+          )}
           {legacyRoleState === 'unknown' && <Alert severity="warning">
             Не удалось распознать сохранённую роль. Выберите подходящую роль из списка.
           </Alert>}
@@ -630,21 +641,55 @@ export function AssistantPage() {
       <Card variant="outlined"><CardContent>
         <Stack spacing={2}>
           <Typography variant="h6">Результаты</Typography>
+          {(status.data?.method_version || status.data?.preference_version) && (
+            <Typography variant="body2" color="text.secondary">
+              {status.data?.method_version ? `Текущие правила: ${status.data.method_version}` : 'Текущие правила: —'}
+              {status.data?.preference_version ? ` · критерии версии ${status.data.preference_version}` : ''}
+              {' · выдача текущего запуска'}
+            </Typography>
+          )}
           {matches.isLoading && <Typography>Загрузка…</Typography>}
           {matches.isError && <Alert severity="warning">Assistant API пока не подключён.</Alert>}
-          {matches.data?.length === 0 && <Typography color="text.secondary">
-            {status.data?.state === 'running' ? 'Подтверждено на текущем этапе: 0.' : 'Новых совпадений нет.'}
-          </Typography>}
-          {(matches.data?.some((match) => match.stage === 'confirmed')) && <Typography sx={{ fontWeight: 700 }}>Подходящие</Typography>}
-          {matches.data?.filter((match) => match.stage === 'confirmed').map((match, index) => <Stack key={`confirmed-${match.vacancy_id ?? 'unknown'}-${index}`} spacing={0.5}>
-            <Typography sx={{ fontWeight: 700 }}>
-              {match.title || 'Вакансия'} · уверенность AI: {match.confidence === 'high' ? 'высокая' : match.confidence === 'medium' ? 'средняя' : 'низкая'}
-            </Typography>
-            <Typography variant="body2">
-              {match.reasons.length > 0 ? match.reasons.slice(0, 3).join(' · ') : 'Причины не указаны.'}
-            </Typography>
-            <Divider />
-          </Stack>)}
+          {(() => {
+            const visible = (matches.data ?? []).filter((match) => !isManagementLeadershipTitle(match.title ?? ''))
+            const suitable = visible.filter((match) => match.decision === 'match')
+            const review = visible.filter((match) => match.decision === 'review')
+            if (!matches.isLoading && !matches.isError && visible.length === 0) {
+              return (
+                <Typography color="text.secondary">
+                  {status.data?.state === 'running' ? 'Подтверждено на текущем этапе: 0.' : 'Новых совпадений нет.'}
+                </Typography>
+              )
+            }
+            return (
+              <>
+                {suitable.length > 0 && <Typography sx={{ fontWeight: 700 }}>Подходящие</Typography>}
+                {suitable.map((match, index) => (
+                  <Stack key={`confirmed-${match.vacancy_id ?? 'unknown'}-${index}`} spacing={0.5}>
+                    <Typography sx={{ fontWeight: 700 }}>
+                      {`${match.title || 'Вакансия'}${match.stage === 'confirmed'
+                        ? ` · уверенность AI: ${match.confidence === 'high' ? 'высокая' : match.confidence === 'medium' ? 'средняя' : 'низкая'}`
+                        : ' · подтверждено фильтрами'}`}
+                    </Typography>
+                    <Typography variant="body2">
+                      {match.reasons.length > 0 ? match.reasons.slice(0, 3).join(' · ') : 'Причины не указаны.'}
+                    </Typography>
+                    <Divider />
+                  </Stack>
+                ))}
+                {review.length > 0 && <Typography sx={{ fontWeight: 700 }}>Нужно проверить</Typography>}
+                {review.map((match, index) => (
+                  <Stack key={`review-${match.vacancy_id ?? 'unknown'}-${index}`} spacing={0.5}>
+                    <Typography sx={{ fontWeight: 700 }}>{match.title || 'Вакансия'}</Typography>
+                    <Typography variant="body2">
+                      {match.reasons.length > 0 ? match.reasons.slice(0, 3).join(' · ') : 'Не все hard-критерии подтверждены.'}
+                    </Typography>
+                    <Divider />
+                  </Stack>
+                ))}
+              </>
+            )
+          })()}
         </Stack>
       </CardContent></Card>
       <Card variant="outlined"><CardContent>

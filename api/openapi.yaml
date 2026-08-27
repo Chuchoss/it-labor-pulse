@@ -725,12 +725,15 @@ paths:
     get:
       tags: [assistant]
       operationId: listAssistantMatches
-      summary: Получить персональные совпадения
+      summary: Получить персональные совпадения и записи на проверку
       security:
         - bearerAuth: []
       responses:
         "200":
-          description: Совпадения
+          description: >
+            Текущие preference и ruleset. `decision=match` — все hard-критерии доказаны;
+            `decision=review` — осталось проверить неизвестные факты. Суперседированные
+            запуски не входят в выдачу.
           content:
             application/json:
               schema:
@@ -1657,7 +1660,7 @@ components:
             include_leadership:
               type: boolean
               default: false
-              description: Явное разрешение руководящих вакансий; при false lead/team lead/head исключаются.
+              description: Разрешение управленческих и people-lead ролей. При false исключаются team/tech lead, руководитель, директор и CTO; senior/старший/ведущий остаются IC.
             role:
               type: string
               deprecated: true

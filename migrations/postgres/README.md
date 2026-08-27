@@ -30,6 +30,7 @@ NNNNNN_description.down.sql
 | `000026_assistant_run_superseded_origin` | Исходное состояние run до supersede для точной истории |
 | `000027_assistant_worker_heartbeat` | Run-level heartbeat, provider phase и lease telemetry |
 | `000030_assistant_worker_process_heartbeat` | Независимый process heartbeat continuous worker с TTL |
+| `000031_backfill_official_remote` | Повторно заполняет `is_remote` из сохранённых HH `schedule`/`work_format` |
 
 UUID PK: `DEFAULT gen_random_uuid()` (Supabase / PG 13+). AI / Perspectives tables — не здесь (Phase 4–5).
 

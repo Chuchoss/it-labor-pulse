@@ -168,8 +168,9 @@ Slug ролей — канон в PG (`go-developer`), в API часто удо�
   key skills, затем очищенное description;
 - `fullstack` проверяется до frontend/backend; конфликтующие или общие
   developer-сигналы дают `unknown` и решение `review`;
-- `104` или явный team/tech lead, head, руководитель/тимлид задаёт leadership;
-  слово `leading` само по себе не является leadership;
+- `104` или явный team/tech lead, head, руководитель/тимлид/техлид, director/CTO
+  задаёт leadership; `leading`, senior, старший и ведущий — это IC seniority,
+  а не руководство;
 - strict Frontend отклоняет Backend-only и Fullstack, а leadership отклоняется,
   если `include_leadership=false`.
 
@@ -187,13 +188,16 @@ Slug ролей — канон в PG (`go-developer`), в API часто удо�
 
 `vacancies.is_remote` — nullable boolean из полей официального HH detail API:
 
-- `schedule.id == "remote"` или `work_format[].id == "REMOTE"` → `true`;
-- известный иной `schedule.id`/непустой `work_format` без `REMOTE` → `false`;
+- `schedule.id` `remote`/`remote_work` или `work_format[].id` `REMOTE`/`REMOTE_WORK` → `true`;
+- известный иной `schedule.id`/непустой `work_format` без remote → `false`;
 - оба поля отсутствуют → `NULL` (unknown).
 
 Текст title/description и название area не используются как источник истины.
 Если HH перечисляет `REMOTE` вместе с другим форматом, сохраняется `true`:
 удалённый вариант явно доступен; region офиса сохраняется отдельно.
+Повторный ingest без `schedule`/`work_format` не затирает уже известный
+`is_remote`. `content_hash` включает официальный remote-факт, чтобы search-only
+touch не считался тем же содержимым.
 
 ---
 

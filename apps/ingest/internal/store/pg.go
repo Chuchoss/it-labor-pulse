@@ -987,7 +987,7 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			    role_id = $5::uuid,
 			    employer_id = $6::uuid,
 			    source_url = NULLIF($7, ''),
-			    is_remote = $8,
+			    is_remote = COALESCE($8, is_remote),
 			    deleted_at = NULL,
 			    updated_at = now()
 			WHERE id = $1::uuid
@@ -1048,7 +1048,7 @@ func upsertVacancy(ctx context.Context, tx DBTX, item VacancyWrite) (changed boo
 			content_hash = EXCLUDED.content_hash,
 			analysis_revision = vacancies.analysis_revision + 1,
 			raw_payload = EXCLUDED.raw_payload,
-			is_remote = EXCLUDED.is_remote,
+			is_remote = COALESCE(EXCLUDED.is_remote, vacancies.is_remote),
 			updated_at = now()
 		RETURNING id::text
 	`,
