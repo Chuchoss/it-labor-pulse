@@ -102,11 +102,13 @@ function TagsField({
   placeholder,
   value,
   onChange,
+  helperText,
 }: {
   label: string
   placeholder: string
   value: string[]
   onChange: (value: string[]) => void
+  helperText: string
 }) {
   return (
     <Autocomplete
@@ -120,7 +122,7 @@ function TagsField({
           {...params}
           label={label}
           placeholder={value.length === 0 ? placeholder : undefined}
-          helperText="Введите значение и нажмите Enter"
+          helperText={helperText}
         />
       )}
     />
@@ -514,7 +516,7 @@ export function AssistantPage() {
               setApprovedRoleIDs(values.map((value) => value.id))
               if (legacyRoleState === 'unknown' && values.length > 0) setLegacyRoleResolved(true)
             }}
-            renderInput={(params) => <TextField {...params} label="Роли" placeholder="Выберите одну или несколько" />} />
+            renderInput={(params) => <TextField {...params} label="Роли" placeholder="Выберите одну или несколько" helperText="Официальная роль HeadHunter — подсказка; при выбранной специализации решают название и навыки." />} />
           {developerSelected && <Alert severity="info">
             «Разработчик» — широкая роль HeadHunter. Выберите специализацию, чтобы сузить результаты.
           </Alert>}
@@ -524,7 +526,7 @@ export function AssistantPage() {
             label="Специализация"
             value={specializationValue}
             onChange={(event) => setSpecialization(event.target.value)}
-            helperText="Frontend, Backend и Fullstack проверяются отдельно"
+            helperText="Сравнивается с названием и навыками вакансии: Frontend, Backend и Fullstack не взаимозаменяемы."
           >
             {specializationOptions.map((option) => <MenuItem key={option.id} value={option.id}>{option.label}</MenuItem>)}
           </TextField>}
@@ -559,6 +561,7 @@ export function AssistantPage() {
               placeholder="Например, Москва"
               value={regionsValue}
               onChange={setRegions}
+              helperText="Сравнивается с регионом вакансии в справочнике, не с текстом описания."
             />
             <TextField
               label="Минимальная зарплата, ₽"
@@ -567,12 +570,15 @@ export function AssistantPage() {
               onChange={(event) => setMinSalaryRUB(event.target.value)}
               placeholder="Например, 180000"
               error={salaryError}
-              helperText={salaryError ? 'Введите число не меньше 0' : 'До вычета налогов, в рублях'}
+              helperText={salaryError ? 'Введите число не меньше 0' : 'Сравнивается с серединой вилки from/to в рублях; если суммы нет — на проверку, а не отказ.'}
               slotProps={{ htmlInput: { min: 0, inputMode: 'numeric' } }}
             />
           </Box>
           <FormControl>
             <FormLabel id="work-format-label">Формат работы</FormLabel>
+            <Typography variant="body2" color="text.secondary">
+              «Удалённо» требует официальный флаг удалённой работы, а не догадку по тексту.
+            </Typography>
             <RadioGroup
               row
               aria-labelledby="work-format-label"
@@ -588,6 +594,7 @@ export function AssistantPage() {
             placeholder="Например, React"
             value={requiredSkillsValue}
             onChange={setRequiredSkills}
+            helperText="Для React нужны слова React, React.js или ReactJS в названии, навыках или описании; React Native не считается."
           />
           <Accordion disableGutters>
             <AccordionSummary aria-controls="additional-criteria-content" id="additional-criteria-header">
@@ -599,6 +606,7 @@ export function AssistantPage() {
                 placeholder="Например, PHP"
                 value={excludedSkillsValue}
                 onChange={setExcludedSkills}
+                helperText="Вакансия отсеивается, если навык явно указан в списке навыков."
               />
             </AccordionDetails>
           </Accordion>
@@ -647,7 +655,7 @@ export function AssistantPage() {
             <Typography variant="body2" color="text.secondary">
               {status.data?.method_version ? `Текущие правила: ${status.data.method_version}` : 'Текущие правила: —'}
               {status.data?.preference_version ? ` · критерии версии ${status.data.preference_version}` : ''}
-              {' · выдача текущего запуска'}
+              {' · выдача текущих критериев и правил'}
             </Typography>
           )}
           {matches.isLoading && <Typography>Загрузка…</Typography>}

@@ -193,6 +193,140 @@ func TestPostgresListMatchesAppliesAIFinalPrecedence(t *testing.T) {
 	require.Equal(t, DecisionMatch, decisions[vacancyIDs[3]])
 }
 
+func TestPostgresListMatchesKeepsEarlierSucceededRunAfterNewerRun(t *testing.T) {
+	_ = godotenv.Load("../../../.env")
+	databaseURL := os.Getenv("ASSISTANT_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		databaseURL = os.Getenv("DATABASE_URL")
+	}
+	if databaseURL == "" {
+		t.Skip("ASSISTANT_TEST_DATABASE_URL or DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, databaseURL)
+	require.NoError(t, err)
+	defer conn.Close(context.Background())
+	repo := NewPostgresRepository(conn)
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID, err := repo.EnsureUser(ctx, "assistant-stale-run-"+suffix)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = conn.Exec(context.Background(), `DELETE FROM assistant_users WHERE id=$1::uuid`, userID)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM vacancies WHERE source='hh' AND external_id LIKE $1`, "synthetic-stale-run-"+suffix+"%")
+	}()
+	preference, err := repo.SavePreferences(ctx, userID, "stale-run", PreferenceRecord{
+		HardCriteria: map[string]any{"approved_roles": []any{"96"}},
+		SoftCriteria: map[string]any{}, Weights: map[string]float64{},
+	})
+	require.NoError(t, err)
+	var firstRun, secondRun, vacancyID string
+	require.NoError(t, conn.QueryRow(ctx, `
+		INSERT INTO assistant_runs
+			(user_id, preference_id, state, snapshot_cutoff, ruleset_version, created_at)
+		VALUES ($1::uuid, $2::uuid, 'succeeded', now(), $3, now() - interval '1 hour')
+		RETURNING id::text
+	`, userID, preference.ID, SpecializationRulesVersion).Scan(&firstRun))
+	require.NoError(t, conn.QueryRow(ctx, `
+		INSERT INTO vacancies (source, external_id, title, collected_at, is_active)
+		VALUES ('hh', $1, 'Synthetic frontend review', now(), true) RETURNING id::text
+	`, "synthetic-stale-run-"+suffix).Scan(&vacancyID))
+	created, err := repo.SaveMatch(ctx, WorkerMatch{
+		UserID: userID, VacancyID: vacancyID, PreferenceVersion: preference.Version,
+		RunID: firstRun, VacancyRevision: 1,
+		Result: Result{Decision: DecisionReview, Score: .4, Unknowns: []string{"specialization"}},
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NoError(t, conn.QueryRow(ctx, `
+		INSERT INTO assistant_runs
+			(user_id, preference_id, state, snapshot_cutoff, ruleset_version, created_at)
+		VALUES ($1::uuid, $2::uuid, 'succeeded', now(), $3, now())
+		RETURNING id::text
+	`, userID, preference.ID, SpecializationRulesVersion).Scan(&secondRun))
+	matches, err := repo.ListMatches(ctx, userID, 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	require.Equal(t, DecisionReview, matches[0].Decision)
+	require.Equal(t, vacancyID, matches[0].VacancyID)
+
+	rebound, err := repo.SaveMatch(ctx, WorkerMatch{
+		UserID: userID, VacancyID: vacancyID, PreferenceVersion: preference.Version,
+		RunID: secondRun, VacancyRevision: 1,
+		Result: Result{Decision: DecisionReview, Score: .4, Unknowns: []string{"specialization"}},
+	})
+	require.NoError(t, err)
+	require.False(t, rebound)
+	var boundRun string
+	require.NoError(t, conn.QueryRow(ctx, `
+		SELECT run_id::text FROM vacancy_match_results
+		WHERE user_id=$1::uuid AND vacancy_id=$2::uuid AND method='deterministic'
+	`, userID, vacancyID).Scan(&boundRun))
+	require.Equal(t, secondRun, boundRun)
+	matches, err = repo.ListMatches(ctx, userID, 10)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+}
+
+func TestPostgresAIResultExistsIsScopedToCurrentRuleset(t *testing.T) {
+	_ = godotenv.Load("../../../.env")
+	databaseURL := os.Getenv("ASSISTANT_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		databaseURL = os.Getenv("DATABASE_URL")
+	}
+	if databaseURL == "" {
+		t.Skip("ASSISTANT_TEST_DATABASE_URL or DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, databaseURL)
+	require.NoError(t, err)
+	defer conn.Close(context.Background())
+	repo := NewPostgresRepository(conn)
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID, err := repo.EnsureUser(ctx, "assistant-ruleset-ai-"+suffix)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = conn.Exec(context.Background(), `DELETE FROM assistant_users WHERE id=$1::uuid`, userID)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM vacancies WHERE source='hh' AND external_id LIKE $1`, "synthetic-ruleset-ai-"+suffix+"%")
+	}()
+	preference, err := repo.SavePreferences(ctx, userID, "ruleset-ai", PreferenceRecord{
+		HardCriteria: map[string]any{"approved_roles": []any{"96"}},
+		SoftCriteria: map[string]any{}, Weights: map[string]float64{},
+	})
+	require.NoError(t, err)
+	var vacancyID string
+	require.NoError(t, conn.QueryRow(ctx, `
+		INSERT INTO vacancies (source, external_id, title, collected_at, is_active)
+		VALUES ('hh', $1, 'Synthetic frontend', now(), true) RETURNING id::text
+	`, "synthetic-ruleset-ai-"+suffix).Scan(&vacancyID))
+	_, err = conn.Exec(ctx, `
+		INSERT INTO assistant_ai_jobs
+			(user_id, preference_id, vacancy_id, vacancy_revision, status, provider, attempts, finished_at)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 1, 'complete', 'deepseek', 1, now())
+	`, userID, preference.ID, vacancyID)
+	require.NoError(t, err)
+	_, err = conn.Exec(ctx, `
+		INSERT INTO vacancy_match_results
+			(user_id, preference_id, vacancy_id, decision, method, score, rationale,
+			 evidence_ids, conflicts, unknowns, provider, prompt_version, vacancy_revision, ruleset_version)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'review', 'ai', 0.4, 'legacy',
+			'[]'::jsonb, '[]'::jsonb, '[]'::jsonb, 'deepseek', 'batch-v5-hard-gates', 1, 'assistant-hard-gates-v2')
+	`, userID, preference.ID, vacancyID)
+	require.NoError(t, err)
+	exists, err := repo.AIResultExists(ctx, userID, preference.Version, vacancyID, 1)
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	require.NoError(t, repo.SaveAIResult(ctx, WorkerMatch{
+		UserID: userID, VacancyID: vacancyID, PreferenceVersion: preference.Version,
+		VacancyRevision: 1, Method: "ai", Provider: "fake", Model: "fake", PromptVersion: "batch-v7-id-list",
+	}, MatchOutput{Decision: "review", Score: .45, Confidence: "medium"}))
+	exists, err = repo.AIResultExists(ctx, userID, preference.Version, vacancyID, 1)
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
 func TestPostgresManualSnapshotScansEligibleVacanciesAndDeduplicatesOutbox(t *testing.T) {
 	_ = godotenv.Load("../../../.env")
 	databaseURL := os.Getenv("ASSISTANT_TEST_DATABASE_URL")

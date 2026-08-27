@@ -67,7 +67,8 @@ describe('AssistantPage', () => {
     expect(await screen.findByText('Разработчик')).toBeInTheDocument()
     expect(screen.getByText('Москва')).toBeInTheDocument()
     expect(screen.getByText('React')).toBeInTheDocument()
-    expect(screen.getByText(/«Разработчик» — широкая роль HeadHunter/)).toBeInTheDocument()
+    expect(screen.getByText(/Официальная роль HeadHunter — подсказка/)).toBeInTheDocument()
+    expect(screen.getByText(/Для React нужны слова React/)).toBeInTheDocument()
     expect(screen.queryByText(/Устаревший критерий роли/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Жёсткие критерии|JSON только|Мягкие критерии|matcher использует/)).not.toBeInTheDocument()
     expect(screen.queryByText(/role:|approved_roles|required_skills|min_salary_rub/)).not.toBeInTheDocument()
@@ -526,7 +527,7 @@ describe('AssistantPage', () => {
       http.get('*/api/v1/assistant/status', () => HttpResponse.json({
         run_id: 'run-current', ai_configured: true, ai_status: 'completed', state: 'succeeded',
         preference_version: 15, current_preference_version: 15,
-        method_version: 'assistant-hard-gates-v3',
+        method_version: 'assistant-hard-gates-v4',
         processed: 10, total: 10, eligible: 10, matched: 2,
         ai_calls: 2, ai_matches: 1, ai_reviews: 1, skipped: 0, pending_candidates: false,
         worker_offline: false, worker_stalled: false,
@@ -561,9 +562,9 @@ describe('AssistantPage', () => {
     )
     renderPage(<AssistantPage />)
     expect(await screen.findByText('Подходящие')).toBeInTheDocument()
-    expect(screen.getByText(/Текущие правила: assistant-hard-gates-v3/)).toBeInTheDocument()
+    expect(screen.getByText(/Текущие правила: assistant-hard-gates-v4/)).toBeInTheDocument()
     expect(screen.getByText(/критерии версии 15/)).toBeInTheDocument()
-    expect(screen.getByText(/выдача текущего запуска/)).toBeInTheDocument()
+    expect(screen.getByText(/выдача текущих критериев и правил/)).toBeInTheDocument()
     expect(screen.getByText('Frontend · уверенность AI: высокая')).toBeInTheDocument()
     expect(screen.getByText('Ведущий фронтенд-разработчик · подтверждено фильтрами')).toBeInTheDocument()
     expect(screen.getByText('Нужно проверить')).toBeInTheDocument()

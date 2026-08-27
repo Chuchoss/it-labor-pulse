@@ -794,15 +794,6 @@ func (r *PostgresRepository) ListMatches(ctx context.Context, userID string, lim
 			SELECT id FROM vacancy_preferences
 			WHERE user_id=$1::uuid AND archived_at IS NULL
 			ORDER BY version DESC LIMIT 1
-		), current_run AS (
-			SELECT latest.id
-			FROM assistant_runs latest
-			JOIN current_preference p ON p.id=latest.preference_id
-			WHERE latest.user_id=$1::uuid
-			  AND latest.ruleset_version=$3
-			  AND latest.state NOT IN ('superseded','disabled','failed')
-			ORDER BY latest.created_at DESC
-			LIMIT 1
 		), scoped AS (
 			SELECT m.vacancy_id, m.decision, m.score, m.method, m.confidence, m.rationale,
 				m.unknowns, m.conflicts, m.evidence_ids, m.created_at, m.vacancy_revision,
@@ -810,16 +801,24 @@ func (r *PostgresRepository) ListMatches(ctx context.Context, userID string, lim
 			FROM vacancy_match_results m
 			JOIN vacancies v ON v.id = m.vacancy_id
 			JOIN current_preference p ON p.id=m.preference_id
-			LEFT JOIN current_run cr ON TRUE
 			WHERE m.user_id = $1::uuid
 			  AND m.ruleset_version=$3
 			  AND m.decision IN ('match','review')
-			  AND (m.run_id IS NULL OR m.run_id = cr.id)
+			  AND (
+				m.run_id IS NULL
+				OR EXISTS (
+					SELECT 1 FROM assistant_runs ar
+					WHERE ar.id = m.run_id
+					  AND ar.preference_id = p.id
+					  AND ar.ruleset_version = $3
+					  AND ar.state NOT IN ('superseded','disabled','failed')
+				)
+			  )
 			  AND NOT EXISTS (
 				SELECT 1 FROM vacancy_match_results hard
 				WHERE hard.user_id=m.user_id AND hard.preference_id=m.preference_id
 				  AND hard.vacancy_id=m.vacancy_id AND hard.vacancy_revision=m.vacancy_revision
-				  AND hard.run_id IS NOT DISTINCT FROM m.run_id
+				  AND hard.ruleset_version=$3
 				  AND hard.decision = 'reject'
 			  )
 		), ranked AS (
@@ -1408,7 +1407,8 @@ func (r *PostgresRepository) SaveMatch(ctx context.Context, match WorkerMatch) (
 	unknowns, _ := json.Marshal(match.Result.Unknowns)
 	conflicts, _ := json.Marshal(match.Result.Conflicts)
 	evidence, _ := json.Marshal(match.Result.Evidence)
-	tag, err := r.db.Exec(ctx, `
+	var created bool
+	err := r.db.QueryRow(ctx, `
 		INSERT INTO vacancy_match_results
 			(user_id, preference_id, vacancy_id, decision, method, score, rationale,
 			 evidence_ids, conflicts, unknowns, provider, model, prompt_version, input_snapshot_hash,
@@ -1418,15 +1418,26 @@ func (r *PostgresRepository) SaveMatch(ctx context.Context, match WorkerMatch) (
 			NULLIF($16, '')::uuid, $17
 		FROM vacancy_preferences p
 		WHERE p.user_id = $1::uuid AND p.version = $9
-		ON CONFLICT DO NOTHING
+		ON CONFLICT (user_id, preference_id, vacancy_id, vacancy_revision, method, (COALESCE(provider, '')), (COALESCE(model, '')), (COALESCE(prompt_version, '')))
+		DO UPDATE SET
+			run_id = COALESCE(EXCLUDED.run_id, vacancy_match_results.run_id),
+			decision = EXCLUDED.decision,
+			score = EXCLUDED.score,
+			rationale = EXCLUDED.rationale,
+			evidence_ids = EXCLUDED.evidence_ids,
+			conflicts = EXCLUDED.conflicts,
+			unknowns = EXCLUDED.unknowns,
+			ruleset_version = EXCLUDED.ruleset_version,
+			input_snapshot_hash = COALESCE(EXCLUDED.input_snapshot_hash, vacancy_match_results.input_snapshot_hash)
+		RETURNING (xmax = 0)
 	`, match.UserID, match.VacancyID, string(match.Result.Decision), match.Result.Score,
 		strings.Join(match.Result.Reasons, "; "), string(evidence), string(conflicts), string(unknowns),
 		match.PreferenceVersion, match.Method, match.Provider, match.Model, match.PromptVersion,
-		match.InputSnapshotHash, max(match.VacancyRevision, 1), match.RunID, SpecializationRulesVersion)
+		match.InputSnapshotHash, max(match.VacancyRevision, 1), match.RunID, SpecializationRulesVersion).Scan(&created)
 	if err != nil {
 		return false, fmt.Errorf("save assistant match: %w", err)
 	}
-	return tag.RowsAffected() == 1, nil
+	return created, nil
 }
 
 func (r *PostgresRepository) SaveAIResult(ctx context.Context, match WorkerMatch, output MatchOutput) error {
@@ -1477,13 +1488,17 @@ func (r *PostgresRepository) AIResultExists(
 	var exists bool
 	err := r.db.QueryRow(ctx, `
 		SELECT EXISTS (
+			SELECT 1 FROM vacancy_match_results m
+			JOIN vacancy_preferences p ON p.id = m.preference_id
+			WHERE m.user_id = $1::uuid AND p.version = $2 AND m.vacancy_id = $3::uuid
+			  AND m.vacancy_revision = $4 AND m.method = 'ai' AND m.ruleset_version = $5
+		) OR EXISTS (
 			SELECT 1 FROM assistant_ai_jobs j
 			JOIN vacancy_preferences p ON p.id = j.preference_id
 			WHERE j.user_id = $1::uuid AND p.version = $2 AND j.vacancy_id = $3::uuid
-			  AND j.vacancy_revision = $4 AND j.status IN ('complete', 'failed')
-			  AND (j.status = 'complete' OR j.attempts >= 5)
+			  AND j.vacancy_revision = $4 AND j.status = 'failed' AND j.attempts >= 5
 		)
-	`, userID, preferenceVersion, vacancyID, max(vacancyRevision, 1)).Scan(&exists)
+	`, userID, preferenceVersion, vacancyID, max(vacancyRevision, 1), SpecializationRulesVersion).Scan(&exists)
 	return exists, err
 }
 

@@ -780,6 +780,14 @@ func TestHardRejectNeverSentToAI(t *testing.T) {
 						Skills: []string{"Next.js"}, IsRemote: &remote,
 					},
 				},
+				{
+					ID: "qa-tagged-frontend", ExternalID: "5", Source: "hh", Revision: 1, ObservedAt: time.Now().UTC(),
+					Title: "Frontend Developer (React)", Description: "Remote frontend product work.",
+					Vacancy: Vacancy{
+						ID: "qa-tagged-frontend", Title: "Frontend Developer (React)", RoleIDs: []string{"124"},
+						Skills: []string{"React"}, IsRemote: &remote,
+					},
+				},
 			},
 		},
 		settings: map[string]AutomationSettings{
@@ -789,8 +797,11 @@ func TestHardRejectNeverSentToAI(t *testing.T) {
 	stats, err := RunOnce(context.Background(), fake, WorkerOptions{
 		BatchSize: 10, AIProvider: provider, Now: time.Now().UTC(),
 	})
-	if err != nil || len(provider.ids) != 1 || provider.ids[0] != "senior-ic" || stats.AICalls != 1 {
+	if err != nil || len(provider.ids) != 2 || stats.AICalls != 2 {
 		t.Fatalf("sent=%v stats=%+v err=%v", provider.ids, stats, err)
+	}
+	if !contains(provider.ids, "senior-ic") || !contains(provider.ids, "qa-tagged-frontend") {
+		t.Fatalf("expected proven frontend IC vacancies to reach AI, sent=%v", provider.ids)
 	}
 	if stats.AISkipped < 3 || fake.jobs["u1lead"].Decision != "reject" ||
 		fake.jobs["u1backend"].Decision != "reject" || fake.jobs["u1no-react"].Decision != "reject" {
@@ -1066,6 +1077,161 @@ func TestTypicalRemoteFrontendReactICMatches(t *testing.T) {
 	}
 }
 
+func TestCatalogRoleLatticeFrontendDeveloper(t *testing.T) {
+	remote := true
+	prefs := Preferences{
+		ApprovedRoles:     []string{"96"},
+		Specialization:    SpecializationFrontend,
+		IncludeLeadership: false,
+		RemoteOnly:        true,
+		RequiredSkills:    []string{"React"},
+	}
+	frontendReactRemote := Vacancy{
+		Title:    "Frontend Developer (React)",
+		Skills:   []string{"React"},
+		IsRemote: &remote,
+	}
+	tests := []struct {
+		name     string
+		vacancy  Vacancy
+		prefs    Preferences
+		want     Decision
+		conflict string
+		unknown  string
+	}{
+		{
+			name:    "qa tagged proven frontend matches",
+			vacancy: withRoles(frontendReactRemote, "124"),
+			prefs:   prefs, want: DecisionMatch,
+		},
+		{
+			name:    "analyst tagged proven frontend matches",
+			vacancy: withRoles(frontendReactRemote, "148"),
+			prefs:   prefs, want: DecisionMatch,
+		},
+		{
+			name:    "data analyst tagged proven frontend matches",
+			vacancy: withRoles(frontendReactRemote, "156"),
+			prefs:   prefs, want: DecisionMatch,
+		},
+		{
+			name:    "official developer role still matches",
+			vacancy: withRoles(frontendReactRemote, "96"),
+			prefs:   prefs, want: DecisionMatch,
+		},
+		{
+			name: "backend react remote rejects",
+			vacancy: Vacancy{
+				Title: "Backend Developer", RoleIDs: []string{"96"},
+				Skills: []string{"React"}, IsRemote: &remote,
+			},
+			prefs: prefs, want: DecisionReject, conflict: "specialization:backend",
+		},
+		{
+			name: "fullstack react remote rejects",
+			vacancy: Vacancy{
+				Title: "Full-stack Developer", RoleIDs: []string{"96"},
+				Skills: []string{"React"}, IsRemote: &remote,
+			},
+			prefs: prefs, want: DecisionReject, conflict: "specialization:fullstack",
+		},
+		{
+			name: "people lead frontend rejects",
+			vacancy: Vacancy{
+				Title: "Frontend Team Lead (React)", RoleIDs: []string{"96"},
+				Skills: []string{"React"}, IsRemote: &remote,
+			},
+			prefs: prefs, want: DecisionReject, conflict: "leadership_excluded",
+		},
+		{
+			name: "people manager role 104 rejects",
+			vacancy: Vacancy{
+				Title: "Frontend Developer (React)", RoleIDs: []string{"104"},
+				Skills: []string{"React"}, IsRemote: &remote,
+			},
+			prefs: prefs, want: DecisionReject, conflict: "leadership_excluded",
+		},
+		{
+			name: "react native is not react web",
+			vacancy: Vacancy{
+				Title: "Frontend Developer", RoleIDs: []string{"124"},
+				Skills: []string{"React Native"}, IsRemote: &remote,
+			},
+			prefs: prefs, want: DecisionReject, conflict: "required_skill_missing:React",
+		},
+		{
+			name: "next js only is not react",
+			vacancy: Vacancy{
+				Title: "Frontend Developer (Next.js)", RoleIDs: []string{"96"},
+				Skills: []string{"Next.js"}, IsRemote: &remote,
+			},
+			prefs: prefs, want: DecisionReject, conflict: "required_skill_missing:React",
+		},
+		{
+			name:    "salary unknown stays review",
+			vacancy: withRoles(frontendReactRemote, "124"),
+			prefs: func() Preferences {
+				p := prefs
+				p.MinSalaryRUB = ptr(180000)
+				return p
+			}(),
+			want: DecisionReview, unknown: "salary",
+		},
+		{
+			name:    "region unknown stays review",
+			vacancy: withRoles(frontendReactRemote, "124"),
+			prefs: func() Preferences {
+				p := prefs
+				p.Regions = []string{"1"}
+				return p
+			}(),
+			want: DecisionReview, unknown: "region",
+		},
+		{
+			name: "unknown specialization wrong catalog role is review",
+			vacancy: Vacancy{
+				Title: "Software Developer", RoleIDs: []string{"124"},
+				Skills: []string{"Git"}, IsRemote: &remote,
+			},
+			prefs: Preferences{ApprovedRoles: []string{"96"}, Specialization: SpecializationFrontend},
+			want:  DecisionReview, unknown: "role",
+		},
+		{
+			name:    "unset specialization still rejects catalog mismatch without frontend evidence",
+			vacancy: Vacancy{Title: "QA Engineer", RoleIDs: []string{"124"}, Skills: []string{"Selenium"}},
+			prefs:   Preferences{ApprovedRoles: []string{"96"}},
+			want:    DecisionReject, conflict: "role",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Match(tt.vacancy, tt.prefs, time.Now())
+			if got.Decision != tt.want {
+				t.Fatalf("decision=%s want=%s conflicts=%v unknowns=%v reasons=%v",
+					got.Decision, tt.want, got.Conflicts, got.Unknowns, got.Reasons)
+			}
+			if tt.conflict != "" && !contains(got.Conflicts, tt.conflict) {
+				t.Fatalf("conflicts=%v want %s", got.Conflicts, tt.conflict)
+			}
+			if tt.unknown != "" && !contains(got.Unknowns, tt.unknown) {
+				t.Fatalf("unknowns=%v want %s", got.Unknowns, tt.unknown)
+			}
+		})
+	}
+	qaTagged := withRoles(frontendReactRemote, "124")
+	if !catalogRoleHardRejectV3(qaTagged, prefs) {
+		t.Fatal("v3 catalog gate must still hard-reject QA-tagged frontend without role 96")
+	}
+	if got := Match(qaTagged, prefs, time.Now()); got.Decision != DecisionMatch {
+		t.Fatalf("v4 lattice decision=%s", got.Decision)
+	}
+}
+
+func withRoles(v Vacancy, roles ...string) Vacancy {
+	v.RoleIDs = append([]string{}, roles...)
+	return v
+}
+
 func TestAIHardGatePrecedence(t *testing.T) {
 	aiMatch := MatchOutput{
 		Decision: "match", Confidence: "high",
@@ -1092,6 +1258,11 @@ func TestAIHardGatePrecedence(t *testing.T) {
 	idList := MatchOutput{Decision: "match", Confidence: "high", Rationale: "id_list_match"}
 	if got := ApplyHardGatePrecedence(unknown, idList); got.Decision != "match" {
 		t.Fatalf("id-list match did not resolve unknown: %+v", got)
+	}
+	proven := Result{Decision: DecisionMatch, Reasons: []string{"specialization:frontend", "remote"}}
+	aiReject := MatchOutput{Decision: "reject", Confidence: "high", Conflicts: []string{"role"}}
+	if got := ApplyHardGatePrecedence(proven, aiReject); got.Decision != "match" {
+		t.Fatalf("AI downgraded proven match: %+v", got)
 	}
 }
 

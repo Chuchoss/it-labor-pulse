@@ -17,8 +17,11 @@ evidence совпадений остаются доступны для ауди�
 `approved_roles`, `regions`, `required_skills`, `excluded_skills`,
 `remote_only`, `min_salary_rub`, `specialization`, `include_leadership`;
 неизвестные поля возвращают `400`. Роль HH `96` шире Frontend/Backend:
-специализация выбирается отдельно. Руководящие вакансии по умолчанию исключены.
-Свободная заметка и неподдержанные soft-критерии не участвуют в matcher.
+специализация выбирается отдельно. `96` + `specialization=frontend` означает
+frontend-разработчика: catalog ID HH не hard-reject, если название или навыки
+уже доказывают Frontend. Backend/Fullstack по-прежнему отказ. Руководящие
+вакансии по умолчанию исключены. Свободная заметка и неподдержанные
+soft-критерии не участвуют в matcher.
 
 ### Совместимость legacy role
 
@@ -171,15 +174,23 @@ timeout, context-limit или invalid response concurrency уменьшаетс�
 
 ## Приоритет hard-критериев
 
-Ruleset `assistant-hard-gates-v3` не позволяет AI ослабить deterministic
-`reject`. Для `match` должны быть доказаны все hard-критерии: Frontend,
-явный React (`React`, `React.js`, `ReactJS`, `React / Redux`), официальный
-удалённый формат и отсутствие управленческой роли. `include_leadership=false`
-исключает team/tech lead, руководителя, директора и CTO, но не senior/старший/
-ведущий IC. React Native не доказывает React web. Next.js не доказывает React.
+Ruleset `assistant-hard-gates-v4` не позволяет AI ослабить deterministic
+`reject` или понизить доказанный `match`. Для `match` должны быть доказаны все
+hard-критерии: Frontend по названию или навыкам, явный React (`React`,
+`React.js`, `ReactJS`, `React / Redux`), официальный удалённый формат и
+отсутствие управленческой роли. Official HH role `96` при выбранной
+специализации Frontend не требуется, если specialization уже доказана;
+неверный catalog ID даёт `review` только когда специализация неизвестна.
+`include_leadership=false` исключает team/tech lead, руководителя, директора,
+CTO и официальную роль `104`, но не senior/старший/ведущий IC. React Native не
+доказывает React web. Next.js не доказывает React.
 Неизвестный remote или иной hard-факт остаётся `review`. Выдача
 `/assistant/matches` показывает `match` и оставшийся `review` текущих
-preference, run/outbox и ruleset; суперседированные запуски остаются в истории.
+preference и ruleset; суперседированные запуски остаются в истории. Повторный
+ручной снимок той же preference не должен прятать уже сохранённые match/review
+только потому, что `run_id` указывает на предыдущий успешный запуск. AI
+идемпотентность `(user, preference, vacancy, revision)` действует внутри
+текущего ruleset: complete-job старого ruleset не пропускает повторный вызов.
 
 Чтобы немедленно остановить новые расходы, завершите единственный worker.
 После аварийной остановки зафиксируйте resumable-состояние:

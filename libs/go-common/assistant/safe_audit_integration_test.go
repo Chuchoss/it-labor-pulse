@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -1102,4 +1103,929 @@ func containsFold(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestSafeHardFilterPipeline(t *testing.T) {
+	if os.Getenv("ASSISTANT_SAFE_AUDIT") != "1" {
+		t.Skip("safe audit not requested")
+	}
+	_ = godotenv.Load("../../../.env")
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repo := NewPostgresRepository(pool)
+
+	var userID string
+	if err := pool.QueryRow(ctx, `
+		SELECT u.id::text FROM assistant_users u WHERE u.external_subject='local-dev-user'
+	`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	preference, err := repo.CurrentPreferences(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := toPreferences(preference)
+	roleLabels := make([]string, 0, len(p.ApprovedRoles))
+	for _, id := range p.ApprovedRoles {
+		if role, ok := approvedRolePolicy[id]; ok {
+			roleLabels = append(roleLabels, id+":"+role.Label)
+		} else {
+			roleLabels = append(roleLabels, id+":unknown")
+		}
+	}
+	regionKinds := map[string]int{}
+	for _, region := range p.Regions {
+		switch {
+		case looksLikeUUID(region):
+			regionKinds["uuid"]++
+		case looksLikeHHNumeric(region):
+			regionKinds["hh_numeric"]++
+		default:
+			regionKinds["label"]++
+		}
+	}
+	salarySet := p.MinSalaryRUB != nil
+	salaryValue := 0.0
+	if salarySet {
+		salaryValue = *p.MinSalaryRUB
+	}
+	t.Logf("SAFE_PREF version=%d roles=%s specialization=%s include_leadership=%t remote_only=%t required_skills=%v excluded_skills=%v regions_count=%d region_kinds=%v region_labels=%v min_salary_set=%t min_salary_rub=%.0f",
+		preference.Version, strings.Join(roleLabels, ","), string(p.Specialization),
+		p.IncludeLeadership, p.RemoteOnly, p.RequiredSkills, p.ExcludedSkills,
+		len(p.Regions), regionKinds, p.Regions, salarySet, salaryValue)
+
+	status, err := repo.AnalysisStatus(ctx, userID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipReason := ""
+	if status.AISkipReason != nil {
+		skipReason = *status.AISkipReason
+	}
+	t.Logf("SAFE_RUN state=%s ruleset=%s run_pref=%d current_pref=%d processed=%d total=%d eligible=%d matched=%d skipped=%d ai_status=%s ai_skip=%s ai_eligible=%d ai_calls=%d ai_http=%d ai_batches=%d ai_succeeded=%d ai_matches=%d ai_reviews=%d ai_rejects=%d ai_failures=%d ai_skipped=%d worker=%s offline=%t",
+		status.State, status.MethodVersion, status.PreferenceVersion, status.CurrentPreferenceVersion,
+		status.Processed, status.Total, status.Eligible, status.Matched, status.Skipped,
+		status.AIStatus, skipReason, status.AIEligible, status.AICalls, status.AIHTTPAttempts,
+		status.AIBatches, status.AISucceeded, status.AIMatches, status.AIReviews, status.AIRejects,
+		status.AIFailures, status.AISkipped, status.WorkerState, status.WorkerOffline)
+
+	var aiEnabled bool
+	_ = pool.QueryRow(ctx, `
+		SELECT COALESCE((SELECT ai_enabled FROM assistant_automation_settings WHERE user_id=$1::uuid), false)
+	`, userID).Scan(&aiEnabled)
+	t.Logf("SAFE_AUTOMATION ai_enabled=%t", aiEnabled)
+
+	var listed int
+	matches, err := repo.ListMatches(ctx, userID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listedMatch, listedReview := 0, 0
+	for _, item := range matches {
+		listed++
+		if item.Decision == "match" {
+			listedMatch++
+		} else if item.Decision == "review" {
+			listedReview++
+		}
+	}
+	t.Logf("SAFE_UI_LIST listed=%d match=%d review=%d", listed, listedMatch, listedReview)
+
+	var stored struct {
+		detMatch, detReview, detReject                         int
+		aiMatch, aiReview, aiReject                            int
+		prefilterReject, idListMatch, idListOmitted, idListRev int
+		currentRunAI, otherRunAI                               int
+	}
+	if err := pool.QueryRow(ctx, `
+		WITH current_preference AS (
+			SELECT id FROM vacancy_preferences
+			WHERE user_id=$1::uuid AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		), current_run AS (
+			SELECT latest.id
+			FROM assistant_runs latest
+			JOIN current_preference p ON p.id=latest.preference_id
+			WHERE latest.user_id=$1::uuid
+			  AND latest.ruleset_version=$2
+			  AND latest.state NOT IN ('superseded','disabled','failed')
+			ORDER BY latest.created_at DESC LIMIT 1
+		)
+		SELECT
+			count(*) FILTER (WHERE m.method='deterministic' AND m.decision='match'),
+			count(*) FILTER (WHERE m.method='deterministic' AND m.decision='review'),
+			count(*) FILTER (WHERE m.method='deterministic' AND m.decision='reject'),
+			count(*) FILTER (WHERE m.method='ai' AND m.decision='match'),
+			count(*) FILTER (WHERE m.method='ai' AND m.decision='review'),
+			count(*) FILTER (WHERE m.method='ai' AND m.decision='reject'),
+			count(*) FILTER (WHERE m.method='ai' AND m.prompt_version='hard-gate-prefilter-v1'),
+			count(*) FILTER (WHERE m.method='ai' AND m.rationale='id_list_match'),
+			count(*) FILTER (WHERE m.method='ai' AND m.rationale='omitted'),
+			count(*) FILTER (WHERE m.method='ai' AND m.decision='review' AND m.prompt_version='batch-v7-id-list'),
+			count(*) FILTER (WHERE m.run_id = (SELECT id FROM current_run)),
+			count(*) FILTER (WHERE m.method='ai' AND (m.run_id IS DISTINCT FROM (SELECT id FROM current_run)))
+		FROM vacancy_match_results m
+		JOIN current_preference p ON p.id=m.preference_id
+		WHERE m.user_id=$1::uuid AND m.ruleset_version=$2
+	`, userID, SpecializationRulesVersion).Scan(
+		&stored.detMatch, &stored.detReview, &stored.detReject,
+		&stored.aiMatch, &stored.aiReview, &stored.aiReject,
+		&stored.prefilterReject, &stored.idListMatch, &stored.idListOmitted, &stored.idListRev,
+		&stored.currentRunAI, &stored.otherRunAI,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_STORED det_match=%d det_review=%d det_reject=%d ai_match=%d ai_review=%d ai_reject=%d prefilter=%d id_list_match=%d id_list_omitted=%d id_list_review=%d current_run_rows=%d other_run_ai=%d",
+		stored.detMatch, stored.detReview, stored.detReject, stored.aiMatch, stored.aiReview, stored.aiReject,
+		stored.prefilterReject, stored.idListMatch, stored.idListOmitted, stored.idListRev,
+		stored.currentRunAI, stored.otherRunAI)
+
+	var regionOverlapUUID, regionOverlapTitle, vacancyRegionKnown, vacancyRegionUnknown, salaryKnown, salaryUnknown int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE v.region_id IS NOT NULL),
+			count(*) FILTER (WHERE v.region_id IS NULL),
+			count(*) FILTER (WHERE v.salary_mid IS NOT NULL),
+			count(*) FILTER (WHERE v.salary_mid IS NULL),
+			count(*) FILTER (WHERE v.region_id::text = ANY($1::text[])),
+			count(*) FILTER (WHERE EXISTS (
+				SELECT 1 FROM regions r WHERE r.id=v.region_id AND (
+					r.name = ANY($1::text[]) OR r.code = ANY($1::text[])
+				)
+			) OR EXISTS (
+				SELECT 1 FROM region_external_ids x
+				WHERE x.region_id=v.region_id AND x.external_id = ANY($1::text[])
+			))
+		FROM vacancies v
+		JOIN sources src ON src.code=v.source AND src.is_active
+		WHERE v.is_active AND v.deleted_at IS NULL
+	`, emptyStrings(p.Regions)).Scan(&vacancyRegionKnown, &vacancyRegionUnknown, &salaryKnown, &salaryUnknown,
+		&regionOverlapUUID, &regionOverlapTitle); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_REGION_SALARY_BASE vacancy_region_known=%d vacancy_region_unknown=%d salary_known=%d salary_unknown=%d pref_region_uuid_hits=%d pref_region_title_hits=%d",
+		vacancyRegionKnown, vacancyRegionUnknown, salaryKnown, salaryUnknown, regionOverlapUUID, regionOverlapTitle)
+
+	run := AssistantRun{UserID: userID, PreferenceID: preference.ID, SnapshotCutoff: time.Now().UTC().Add(time.Hour)}
+	counts := map[string]int{}
+	seen := map[string]bool{}
+	now := time.Now().UTC()
+	for {
+		candidates, err := repo.SnapshotCandidates(ctx, run, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		for _, candidate := range candidates {
+			if seen[candidate.ID] {
+				continue
+			}
+			seen[candidate.ID] = true
+			vacancy := candidate.Vacancy
+			if vacancy.Title == "" {
+				vacancy.Title = candidate.Title
+			}
+			if vacancy.Description == "" {
+				vacancy.Description = candidate.Description
+			}
+			counts["eligible"]++
+			traceHardFilterFunnel(vacancy, p, now, counts)
+		}
+		last := candidates[len(candidates)-1]
+		run.CursorCreatedAt = &last.CreatedAt
+		run.CursorVacancyID = last.ID
+	}
+	t.Logf("SAFE_FUNNEL eligible=%d after_excluded=%d after_leadership=%d after_role=%d after_specialization=%d after_salary=%d after_region=%d after_remote=%d after_required=%d det_match=%d det_review=%d det_reject=%d ai_would_see=%d already_final_reject=%d",
+		counts["eligible"], counts["after_excluded"], counts["after_leadership"], counts["after_role"],
+		counts["after_specialization"], counts["after_salary"], counts["after_region"], counts["after_remote"],
+		counts["after_required"], counts["det_match"], counts["det_review"], counts["det_reject"],
+		counts["ai_would_see"], counts["already_final_reject"])
+	t.Logf("SAFE_FUNNEL_DROPS excluded=%d leadership=%d role_reject=%d role_unknown=%d spec_reject=%d spec_unknown=%d salary_reject=%d salary_unknown=%d region_reject=%d region_unknown=%d remote_reject=%d remote_unknown=%d required_reject=%d required_unknown=%d",
+		counts["drop_excluded"], counts["drop_leadership"], counts["drop_role"], counts["role_unknown"],
+		counts["drop_specialization"], counts["spec_unknown"], counts["drop_salary"], counts["salary_unknown"],
+		counts["drop_region"], counts["region_unknown"], counts["drop_remote"], counts["remote_unknown"],
+		counts["drop_required"], counts["required_unknown"])
+	t.Logf("SAFE_ROLE_SPLIT role_pass=%d role_unknown=%d role_reject=%d role96_in_scopes=%d role_scopes_empty=%d primary_only_unofficial=%d",
+		counts["role_pass"], counts["role_unknown"], counts["drop_role"], counts["role96"],
+		counts["role_empty"], counts["role_primary_unofficial"])
+
+	hiddenByTitle := 0
+	reviewUnknown := map[string]int{}
+	for _, item := range matches {
+		if isAuditLeadershipTitle(item.Title) {
+			hiddenByTitle++
+		}
+		for _, unknown := range item.Unknowns {
+			reviewUnknown[unknown]++
+		}
+	}
+	t.Logf("SAFE_LISTED_DETAIL hidden_by_leadership_title=%d unknown_buckets=%v", hiddenByTitle, reviewUnknown)
+	for _, item := range matches {
+		t.Logf("SAFE_LISTED_ITEM decision=%s method=%s stage=%s unknown_count=%d conflict_count=%d",
+			item.Decision, item.Method, item.Stage, len(item.Unknowns), len(item.Conflicts))
+	}
+
+	var reviewJobsComplete, reviewJobsFailed, reviewJobsNone int
+	if err := pool.QueryRow(ctx, `
+		WITH current_preference AS (
+			SELECT id FROM vacancy_preferences
+			WHERE user_id=$1::uuid AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		), reviews AS (
+			SELECT m.vacancy_id, m.vacancy_revision
+			FROM vacancy_match_results m
+			JOIN current_preference p ON p.id=m.preference_id
+			WHERE m.user_id=$1::uuid AND m.method='deterministic' AND m.decision='review'
+			  AND m.ruleset_version=$2
+		)
+		SELECT
+			count(*) FILTER (WHERE j.status='complete'),
+			count(*) FILTER (WHERE j.status='failed'),
+			count(*) FILTER (WHERE j.id IS NULL)
+		FROM reviews r
+		LEFT JOIN assistant_ai_jobs j
+		  ON j.user_id=$1::uuid AND j.preference_id=(SELECT id FROM current_preference)
+		 AND j.vacancy_id=r.vacancy_id AND j.vacancy_revision=r.vacancy_revision
+	`, userID, SpecializationRulesVersion).Scan(&reviewJobsComplete, &reviewJobsFailed, &reviewJobsNone); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_REVIEW_JOBS complete=%d failed=%d missing=%d", reviewJobsComplete, reviewJobsFailed, reviewJobsNone)
+
+	reviewResultRows, err := pool.Query(ctx, `
+		WITH current_preference AS (
+			SELECT id FROM vacancy_preferences
+			WHERE user_id=$1::uuid AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		), reviews AS (
+			SELECT m.vacancy_id, m.vacancy_revision
+			FROM vacancy_match_results m
+			JOIN current_preference p ON p.id=m.preference_id
+			WHERE m.user_id=$1::uuid AND m.method='deterministic' AND m.decision='review'
+			  AND m.ruleset_version=$2
+		)
+		SELECT COALESCE(m.ruleset_version, '(null)'), m.method, m.decision,
+			COALESCE(m.prompt_version, '(null)'), COALESCE(m.provider, '(null)'), count(*)
+		FROM reviews r
+		JOIN vacancy_match_results m
+		  ON m.user_id=$1::uuid AND m.preference_id=(SELECT id FROM current_preference)
+		 AND m.vacancy_id=r.vacancy_id
+		GROUP BY 1, 2, 3, 4, 5
+		ORDER BY 6 DESC
+	`, userID, SpecializationRulesVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for reviewResultRows.Next() {
+		var ruleset, method, decision, prompt, provider string
+		var n int
+		if err := reviewResultRows.Scan(&ruleset, &method, &decision, &prompt, &provider, &n); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("SAFE_REVIEW_RESULTS ruleset=%s method=%s decision=%s prompt=%s provider=%s n=%d",
+			ruleset, method, decision, prompt, provider, n)
+	}
+	reviewResultRows.Close()
+
+	var jobProvider, jobModel, jobStatus string
+	var jobAttempts int
+	jobRows, err := pool.Query(ctx, `
+		WITH current_preference AS (
+			SELECT id FROM vacancy_preferences
+			WHERE user_id=$1::uuid AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		), reviews AS (
+			SELECT m.vacancy_id, m.vacancy_revision
+			FROM vacancy_match_results m
+			JOIN current_preference p ON p.id=m.preference_id
+			WHERE m.user_id=$1::uuid AND m.method='deterministic' AND m.decision='review'
+			  AND m.ruleset_version=$2
+		)
+		SELECT COALESCE(j.provider, '(null)'), COALESCE(j.model, '(null)'), j.status, j.attempts, count(*)
+		FROM reviews r
+		JOIN assistant_ai_jobs j
+		  ON j.user_id=$1::uuid AND j.preference_id=(SELECT id FROM current_preference)
+		 AND j.vacancy_id=r.vacancy_id AND j.vacancy_revision=r.vacancy_revision
+		GROUP BY 1, 2, 3, 4
+	`, userID, SpecializationRulesVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for jobRows.Next() {
+		var n int
+		if err := jobRows.Scan(&jobProvider, &jobModel, &jobStatus, &jobAttempts, &n); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("SAFE_REVIEW_JOB_META provider=%s model=%s status=%s attempts=%d n=%d", jobProvider, jobModel, jobStatus, jobAttempts, n)
+	}
+	jobRows.Close()
+
+	rows, err := pool.Query(ctx, `
+		SELECT COALESCE(prompt_version, '(null)'), COALESCE(provider, '(null)'),
+			CASE
+				WHEN COALESCE(rationale, '') IN ('omitted', 'id_list_match', 'hard_gate_prefilter') THEN rationale
+				WHEN COALESCE(rationale, '') = '' THEN '(empty)'
+				ELSE '(other)'
+			END AS rationale_kind,
+			decision, count(*)
+		FROM vacancy_match_results m
+		JOIN vacancy_preferences p ON p.id=m.preference_id
+		WHERE m.user_id=$1::uuid AND m.method='ai' AND m.ruleset_version=$2
+		  AND p.id=(
+			SELECT id FROM vacancy_preferences
+			WHERE user_id=$1::uuid AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		  )
+		GROUP BY 1, 2, 3, 4
+		ORDER BY 5 DESC
+	`, userID, SpecializationRulesVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var prompt, provider, rationale, decision string
+		var n int
+		if err := rows.Scan(&prompt, &provider, &rationale, &decision, &n); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("SAFE_AI_BUCKET prompt=%s provider=%s rationale=%s decision=%s n=%d", prompt, provider, rationale, decision, n)
+	}
+	rows.Close()
+
+	var pairedRejectReject, pairedRejectReview, pairedRejectMatch, pairedReviewReject, pairedReviewReview, pairedReviewMatch, omittedConflict int
+	if err := pool.QueryRow(ctx, `
+		WITH current_preference AS (
+			SELECT id FROM vacancy_preferences
+			WHERE user_id=$1::uuid AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		)
+		SELECT
+			count(*) FILTER (WHERE d.decision='reject' AND a.decision='reject'),
+			count(*) FILTER (WHERE d.decision='reject' AND a.decision='review'),
+			count(*) FILTER (WHERE d.decision='reject' AND a.decision='match'),
+			count(*) FILTER (WHERE d.decision='review' AND a.decision='reject'),
+			count(*) FILTER (WHERE d.decision='review' AND a.decision='review'),
+			count(*) FILTER (WHERE d.decision='review' AND a.decision='match'),
+			count(*) FILTER (WHERE a.conflicts @> '["omitted_from_id_list"]'::jsonb)
+		FROM vacancy_match_results a
+		JOIN vacancy_match_results d
+		  ON d.user_id=a.user_id AND d.preference_id=a.preference_id
+		 AND d.vacancy_id=a.vacancy_id AND d.vacancy_revision=a.vacancy_revision
+		 AND d.run_id IS NOT DISTINCT FROM a.run_id AND d.method='deterministic'
+		JOIN current_preference p ON p.id=a.preference_id
+		WHERE a.user_id=$1::uuid AND a.method='ai' AND a.ruleset_version=$2
+	`, userID, SpecializationRulesVersion).Scan(
+		&pairedRejectReject, &pairedRejectReview, &pairedRejectMatch,
+		&pairedReviewReject, &pairedReviewReview, &pairedReviewMatch, &omittedConflict,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_AI_VS_DET det_reject_ai_reject=%d det_reject_ai_review=%d det_reject_ai_match=%d det_review_ai_reject=%d det_review_ai_review=%d det_review_ai_match=%d omitted_conflict=%d",
+		pairedRejectReject, pairedRejectReview, pairedRejectMatch, pairedReviewReject, pairedReviewReview, pairedReviewMatch, omittedConflict)
+
+	roleRows, err := pool.Query(ctx, `
+		SELECT COALESCE(a.pattern, '(none)'), count(DISTINCT v.id)
+		FROM vacancies v
+		JOIN sources src ON src.code=v.source AND src.is_active
+		LEFT JOIN vacancy_role_scopes s ON s.vacancy_id=v.id AND s.scope='vacancy_listing'
+		LEFT JOIN role_aliases a ON a.role_id=s.role_id AND a.source=v.source AND a.pattern ~ '^[0-9]+$'
+		WHERE v.is_active AND v.deleted_at IS NULL
+		GROUP BY 1
+		ORDER BY 2 DESC
+		LIMIT 15
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for roleRows.Next() {
+		var pattern string
+		var n int
+		if err := roleRows.Scan(&pattern, &n); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("SAFE_ROLE_PATTERN pattern=%s vacancies=%d", pattern, n)
+	}
+	roleRows.Close()
+}
+
+func TestSafeFrontendRoleLatticeDryRun(t *testing.T) {
+	if os.Getenv("ASSISTANT_SAFE_AUDIT") != "1" {
+		t.Skip("safe audit not requested")
+	}
+	_ = godotenv.Load("../../../.env")
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repo := NewPostgresRepository(pool)
+
+	var userID string
+	if err := pool.QueryRow(ctx, `
+		SELECT u.id::text FROM assistant_users u WHERE u.external_subject='local-dev-user'
+	`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	preference, err := repo.CurrentPreferences(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := toPreferences(preference)
+	t.Logf("SAFE_LATTICE_CRITERIA preference_version=%d developer_role=%t specialization=%s include_leadership=%t remote_only=%t required_react=%t min_salary_set=%t regions_count=%d ruleset=%s",
+		preference.Version, contains(p.ApprovedRoles, "96"), string(p.Specialization), p.IncludeLeadership,
+		p.RemoteOnly, containsFold(p.RequiredSkills, "react"), p.MinSalaryRUB != nil, len(p.Regions),
+		SpecializationRulesVersion)
+
+	var eligible, remoteTrue int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*), count(*) FILTER (WHERE v.is_remote IS TRUE)
+		FROM vacancies v
+		JOIN sources src ON src.code=v.source AND src.is_active
+		WHERE v.is_active AND v.deleted_at IS NULL
+	`).Scan(&eligible, &remoteTrue); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_LATTICE_SQL eligible=%d remote_true=%d", eligible, remoteTrue)
+
+	roleRows, err := pool.Query(ctx, `
+		WITH remote AS (
+			SELECT v.id
+			FROM vacancies v
+			JOIN sources src ON src.code=v.source AND src.is_active
+			WHERE v.is_active AND v.deleted_at IS NULL AND v.is_remote IS TRUE
+		)
+		SELECT COALESCE(a.pattern, '(none)'), count(DISTINCT r.id)
+		FROM remote r
+		LEFT JOIN vacancy_role_scopes s ON s.vacancy_id=r.id AND s.scope='vacancy_listing'
+		LEFT JOIN role_aliases a ON a.role_id=s.role_id AND a.source='hh' AND a.pattern ~ '^[0-9]+$'
+		GROUP BY 1
+		ORDER BY 2 DESC, 1
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for roleRows.Next() {
+		var pattern string
+		var n int
+		if err := roleRows.Scan(&pattern, &n); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("SAFE_LATTICE_SQL_REMOTE_ROLE role_id=%s vacancies=%d", pattern, n)
+	}
+	roleRows.Close()
+
+	var sqlReact, sqlFrontend, sqlNotLead, sqlIntersect, sqlHas96, sqlNo96 int
+	if err := pool.QueryRow(ctx, `
+		WITH eligible AS (
+			SELECT v.id, v.title, COALESCE(v.description_text, '') AS description_text
+			FROM vacancies v
+			JOIN sources src ON src.code=v.source AND src.is_active
+			WHERE v.is_active AND v.deleted_at IS NULL AND v.is_remote IS TRUE
+		), react AS (
+			SELECT e.id
+			FROM eligible e
+			WHERE (
+				EXISTS (
+					SELECT 1 FROM vacancy_skills vs
+					JOIN skills sk ON sk.id=vs.skill_id
+					WHERE vs.vacancy_id=e.id
+					  AND sk.name !~* 'react[[:space:]-]*native'
+					  AND sk.slug !~* 'react[[:space:]-]*native'
+					  AND (
+						lower(sk.slug) IN ('react','react.js','reactjs','react-js')
+						OR lower(sk.name) IN ('react','react.js','reactjs')
+						OR sk.name ~* '(^|[^[:alnum:]])(react\.js|reactjs|react)([^[:alnum:]]|$)'
+						OR sk.slug ~* '(^|[^[:alnum:]])(react\.js|reactjs|react)([^[:alnum:]]|$)'
+					  )
+				)
+				OR (
+					e.title ~* '(^|[^[:alnum:]])(react\.js|reactjs|react)([^[:alnum:]]|$)'
+					AND e.title !~* 'react[[:space:]-]*native'
+				)
+				OR (
+					e.description_text ~* '(^|[^[:alnum:]])(react\.js|reactjs|react)([^[:alnum:]]|$)'
+					AND e.description_text !~* 'react[[:space:]-]*native'
+				)
+			)
+		), frontend AS (
+			SELECT e.id
+			FROM eligible e
+			WHERE (
+				e.title ~* '(^|[^[:alnum:]])(front[[:space:]-]?end|фронт[[:space:]-]?энд|фронтенд)([^[:alnum:]]|$)'
+				OR EXISTS (
+					SELECT 1 FROM vacancy_skills vs
+					JOIN skills sk ON sk.id=vs.skill_id
+					WHERE vs.vacancy_id=e.id
+					  AND (
+						sk.slug ~* '(front-?end|react|vue|angular|javascript|typescript)'
+						OR sk.name ~* '(front[[:space:]-]?end|фронтенд|react|vue|angular|javascript|typescript)'
+					  )
+					  AND sk.name !~* 'react[[:space:]-]*native'
+				)
+			)
+			AND e.title !~* 'full[[:space:]-]?stack|фулл[[:space:]-]?ст'
+			AND e.title !~* '(^|[^[:alnum:]])(back[[:space:]-]?end|бэкенд)([^[:alnum:]]|$)'
+		), not_lead AS (
+			SELECT e.id
+			FROM eligible e
+			WHERE e.title !~* 'team[[:space:]-]?lead|tech(?:nical)?[[:space:]-]?lead|(^|[^[:alnum:]])lead[[:space:]]+(developer|engineer|front)|тим[[:space:]-]?лид|тех[[:space:]-]?лид|руководител|head[[:space:]-]?of|(^|[^[:alnum:]])cto([^[:alnum:]]|$)|директор'
+			  AND NOT EXISTS (
+				SELECT 1 FROM vacancy_role_scopes s
+				JOIN role_aliases a ON a.role_id=s.role_id AND a.source='hh' AND a.pattern='104'
+				WHERE s.vacancy_id=e.id AND s.scope='vacancy_listing'
+			  )
+		), intersected AS (
+			SELECT r.id
+			FROM react r
+			JOIN frontend f ON f.id=r.id
+			JOIN not_lead n ON n.id=r.id
+		)
+		SELECT
+			(SELECT count(*) FROM react),
+			(SELECT count(*) FROM frontend),
+			(SELECT count(*) FROM not_lead),
+			(SELECT count(*) FROM intersected),
+			(SELECT count(*) FROM intersected i WHERE EXISTS (
+				SELECT 1 FROM vacancy_role_scopes s
+				JOIN role_aliases a ON a.role_id=s.role_id AND a.source='hh' AND a.pattern='96'
+				WHERE s.vacancy_id=i.id AND s.scope='vacancy_listing'
+			)),
+			(SELECT count(*) FROM intersected i WHERE NOT EXISTS (
+				SELECT 1 FROM vacancy_role_scopes s
+				JOIN role_aliases a ON a.role_id=s.role_id AND a.source='hh' AND a.pattern='96'
+				WHERE s.vacancy_id=i.id AND s.scope='vacancy_listing'
+			))
+	`).Scan(&sqlReact, &sqlFrontend, &sqlNotLead, &sqlIntersect, &sqlHas96, &sqlNo96); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SAFE_LATTICE_SQL_INTERSECT remote_react=%d remote_frontend=%d remote_not_lead=%d remote_react_frontend_ic=%d has_role_96=%d without_role_96=%d",
+		sqlReact, sqlFrontend, sqlNotLead, sqlIntersect, sqlHas96, sqlNo96)
+
+	sqlRoleRows, err := pool.Query(ctx, `
+		WITH eligible AS (
+			SELECT v.id, v.title, COALESCE(v.description_text, '') AS description_text
+			FROM vacancies v
+			JOIN sources src ON src.code=v.source AND src.is_active
+			WHERE v.is_active AND v.deleted_at IS NULL AND v.is_remote IS TRUE
+		), react AS (
+			SELECT e.id FROM eligible e
+			WHERE (
+				EXISTS (
+					SELECT 1 FROM vacancy_skills vs
+					JOIN skills sk ON sk.id=vs.skill_id
+					WHERE vs.vacancy_id=e.id
+					  AND sk.name !~* 'react[[:space:]-]*native'
+					  AND sk.slug !~* 'react[[:space:]-]*native'
+					  AND (
+						lower(sk.slug) IN ('react','react.js','reactjs','react-js')
+						OR lower(sk.name) IN ('react','react.js','reactjs')
+						OR sk.name ~* '(^|[^[:alnum:]])(react\.js|reactjs|react)([^[:alnum:]]|$)'
+						OR sk.slug ~* '(^|[^[:alnum:]])(react\.js|reactjs|react)([^[:alnum:]]|$)'
+					  )
+				)
+				OR (e.title ~* '(^|[^[:alnum:]])(react\.js|reactjs|react)([^[:alnum:]]|$)' AND e.title !~* 'react[[:space:]-]*native')
+				OR (e.description_text ~* '(^|[^[:alnum:]])(react\.js|reactjs|react)([^[:alnum:]]|$)' AND e.description_text !~* 'react[[:space:]-]*native')
+			)
+		), frontend AS (
+			SELECT e.id FROM eligible e
+			WHERE (
+				e.title ~* '(^|[^[:alnum:]])(front[[:space:]-]?end|фронт[[:space:]-]?энд|фронтенд)([^[:alnum:]]|$)'
+				OR EXISTS (
+					SELECT 1 FROM vacancy_skills vs
+					JOIN skills sk ON sk.id=vs.skill_id
+					WHERE vs.vacancy_id=e.id
+					  AND (sk.slug ~* '(front-?end|react|vue|angular|javascript|typescript)'
+						OR sk.name ~* '(front[[:space:]-]?end|фронтенд|react|vue|angular|javascript|typescript)')
+					  AND sk.name !~* 'react[[:space:]-]*native'
+				)
+			)
+			AND e.title !~* 'full[[:space:]-]?stack|фулл[[:space:]-]?ст'
+			AND e.title !~* '(^|[^[:alnum:]])(back[[:space:]-]?end|бэкенд)([^[:alnum:]]|$)'
+		), not_lead AS (
+			SELECT e.id FROM eligible e
+			WHERE e.title !~* 'team[[:space:]-]?lead|tech(?:nical)?[[:space:]-]?lead|(^|[^[:alnum:]])lead[[:space:]]+(developer|engineer|front)|тим[[:space:]-]?лид|тех[[:space:]-]?лид|руководител|head[[:space:]-]?of|(^|[^[:alnum:]])cto([^[:alnum:]]|$)|директор'
+			  AND NOT EXISTS (
+				SELECT 1 FROM vacancy_role_scopes s
+				JOIN role_aliases a ON a.role_id=s.role_id AND a.source='hh' AND a.pattern='104'
+				WHERE s.vacancy_id=e.id AND s.scope='vacancy_listing'
+			  )
+		), intersected AS (
+			SELECT r.id FROM react r JOIN frontend f ON f.id=r.id JOIN not_lead n ON n.id=r.id
+		)
+		SELECT COALESCE(a.pattern, '(none)'), count(DISTINCT i.id)
+		FROM intersected i
+		LEFT JOIN vacancy_role_scopes s ON s.vacancy_id=i.id AND s.scope='vacancy_listing'
+		LEFT JOIN role_aliases a ON a.role_id=s.role_id AND a.source='hh' AND a.pattern ~ '^[0-9]+$'
+		GROUP BY 1
+		ORDER BY 2 DESC, 1
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for sqlRoleRows.Next() {
+		var pattern string
+		var n int
+		if err := sqlRoleRows.Scan(&pattern, &n); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("SAFE_LATTICE_SQL_INTERSECT_ROLE role_id=%s vacancies=%d", pattern, n)
+	}
+	sqlRoleRows.Close()
+
+	run := AssistantRun{UserID: userID, PreferenceID: preference.ID, SnapshotCutoff: time.Now().UTC().Add(time.Hour)}
+	counts := map[string]int{}
+	seen := map[string]bool{}
+	now := time.Now().UTC()
+	for {
+		candidates, err := repo.SnapshotCandidates(ctx, run, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		for _, candidate := range candidates {
+			if seen[candidate.ID] {
+				continue
+			}
+			seen[candidate.ID] = true
+			vacancy := candidate.Vacancy
+			if vacancy.Title == "" {
+				vacancy.Title = candidate.Title
+			}
+			if vacancy.Description == "" {
+				vacancy.Description = candidate.Description
+			}
+			vacancy.RoleIDs = officialRoleIDs(vacancy)
+			counts["eligible"]++
+			after := Match(vacancy, p, now)
+			counts["after_"+string(after.Decision)]++
+			if catalogRoleHardRejectV3(vacancy, p) {
+				counts["v3_role_reject"]++
+			}
+			classification := ClassifyVacancy(vacancy)
+			skillMap := make(map[string]bool, len(vacancy.Skills))
+			for _, skill := range vacancy.Skills {
+				skillMap[normalizeSkill(skill)] = true
+			}
+			remoteOK := vacancy.IsRemote != nil && *vacancy.IsRemote
+			reactOK := hasExplicitSkill(vacancy, "react", skillMap)
+			frontendOK := classification.Specialization == SpecializationFrontend && specializationProven(classification)
+			if remoteOK && reactOK && frontendOK && !classification.Leadership {
+				counts["intersect"]++
+				switch {
+				case contains(vacancy.RoleIDs, "96"):
+					counts["intersect_role_96"]++
+				case len(vacancy.RoleIDs) == 0:
+					counts["intersect_role_empty"]++
+				default:
+					counts["intersect_role_other"]++
+				}
+				for _, roleID := range vacancy.RoleIDs {
+					counts["intersect_role_id_"+roleID]++
+				}
+				beforeReject := catalogRoleHardRejectV3(vacancy, p)
+				if beforeReject {
+					counts["intersect_v3_role_reject"]++
+					counts["intersect_v3_decision_reject"]++
+				} else {
+					counts["intersect_v3_decision_"+string(after.Decision)]++
+				}
+				counts["intersect_v4_decision_"+string(after.Decision)]++
+				if beforeReject && after.Decision == DecisionMatch {
+					counts["rescued_to_match"]++
+				}
+				if beforeReject && after.Decision == DecisionReview {
+					counts["rescued_to_review"]++
+				}
+				if beforeReject && after.Decision == DecisionReject {
+					counts["still_reject_other_gate"]++
+				}
+			}
+		}
+		last := candidates[len(candidates)-1]
+		run.CursorCreatedAt = &last.CreatedAt
+		run.CursorVacancyID = last.ID
+	}
+
+	t.Logf("SAFE_LATTICE_GO_INTERSECT n=%d role_96=%d role_other=%d role_empty=%d",
+		counts["intersect"], counts["intersect_role_96"], counts["intersect_role_other"], counts["intersect_role_empty"])
+	for _, roleID := range []string{"96", "104", "124", "148", "150", "156", "164"} {
+		if n := counts["intersect_role_id_"+roleID]; n > 0 {
+			t.Logf("SAFE_LATTICE_GO_INTERSECT_ROLE role_id=%s vacancies=%d", roleID, n)
+		}
+	}
+	t.Logf("SAFE_LATTICE_BEFORE_ON_INTERSECT v3_role_reject=%d v3_match=%d v3_review=%d v3_reject=%d",
+		counts["intersect_v3_role_reject"], counts["intersect_v3_decision_match"],
+		counts["intersect_v3_decision_review"], counts["intersect_v3_decision_reject"])
+	t.Logf("SAFE_LATTICE_AFTER_ON_INTERSECT v4_match=%d v4_review=%d v4_reject=%d rescued_to_match=%d rescued_to_review=%d still_reject_other=%d",
+		counts["intersect_v4_decision_match"], counts["intersect_v4_decision_review"],
+		counts["intersect_v4_decision_reject"], counts["rescued_to_match"],
+		counts["rescued_to_review"], counts["still_reject_other_gate"])
+	t.Logf("SAFE_LATTICE_DRY_RUN_ALL eligible=%d match=%d review=%d reject=%d v3_role_reject_all=%d",
+		counts["eligible"], counts["after_match"], counts["after_review"], counts["after_reject"], counts["v3_role_reject"])
+}
+
+func isAuditLeadershipTitle(title string) bool {
+	return regexp.MustCompile(`(?i)team[\s-]?lead|tech(?:nical)?[\s-]?lead|\blead[\s-]+(?:developer|engineer|front)|тим[\s-]?лид|тех[\s-]?лид|руководител|head[\s-]?of|\bcto\b|директор`).MatchString(title)
+}
+
+func emptyStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func looksLikeUUID(value string) bool {
+	return uuidRE.MatchString(strings.TrimSpace(value))
+}
+
+func looksLikeHHNumeric(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func traceHardFilterFunnel(v Vacancy, p Preferences, now time.Time, counts map[string]int) {
+	v.RoleIDs = officialRoleIDs(v)
+	if len(v.RoleIDs) == 0 {
+		counts["role_empty"]++
+	}
+	if contains(v.RoleIDs, "96") {
+		counts["role96"]++
+	}
+	if strings.TrimSpace(v.RoleID) != "" {
+		if _, ok := approvedRolePolicy[v.RoleID]; !ok && len(v.RoleIDs) == 0 {
+			counts["role_primary_unofficial"]++
+		}
+	}
+	skills := make(map[string]bool, len(v.Skills))
+	for _, s := range v.Skills {
+		skills[normalizeSkill(s)] = true
+	}
+	remaining := true
+	for _, excluded := range p.ExcludedSkills {
+		if skills[strings.ToLower(strings.TrimSpace(excluded))] {
+			counts["drop_excluded"]++
+			remaining = false
+			break
+		}
+	}
+	if remaining {
+		counts["after_excluded"]++
+	} else {
+		finalizeFunnelDecision(v, p, now, counts)
+		return
+	}
+
+	classification := ClassifyVacancy(v)
+	if classification.Leadership && !p.IncludeLeadership {
+		counts["drop_leadership"]++
+		finalizeFunnelDecision(v, p, now, counts)
+		return
+	}
+	counts["after_leadership"]++
+
+	if p.Specialization != "" {
+		switch {
+		case classification.Specialization == SpecializationUnknown:
+			counts["after_specialization"]++
+			counts["spec_unknown"]++
+		case classification.Specialization != p.Specialization:
+			counts["drop_specialization"]++
+			finalizeFunnelDecision(v, p, now, counts)
+			return
+		default:
+			counts["after_specialization"]++
+		}
+	} else {
+		counts["after_specialization"]++
+	}
+
+	switch {
+	case len(p.ApprovedRoles) == 0:
+		counts["after_role"]++
+		counts["role_pass"]++
+	case len(v.RoleIDs) > 0 && overlaps(p.ApprovedRoles, v.RoleIDs):
+		counts["after_role"]++
+		counts["role_pass"]++
+	case p.Specialization != "" && classification.Specialization == p.Specialization && specializationProven(classification):
+		counts["after_role"]++
+		counts["role_pass"]++
+		counts["role_bypassed_by_spec"]++
+	case p.Specialization != "":
+		counts["after_role"]++
+		counts["role_unknown"]++
+	case len(v.RoleIDs) == 0:
+		counts["after_role"]++
+		counts["role_unknown"]++
+	case contains(p.ApprovedRoles, "96") && classification.Specialization == SpecializationFrontend && specializationProven(classification):
+		counts["after_role"]++
+		counts["role_pass"]++
+		counts["role_bypassed_by_spec"]++
+	default:
+		counts["drop_role"]++
+		finalizeFunnelDecision(v, p, now, counts)
+		return
+	}
+
+	if p.MinSalaryRUB != nil {
+		if v.SalaryRUB == nil {
+			counts["after_salary"]++
+			counts["salary_unknown"]++
+		} else if *v.SalaryRUB < *p.MinSalaryRUB {
+			counts["drop_salary"]++
+			finalizeFunnelDecision(v, p, now, counts)
+			return
+		} else {
+			counts["after_salary"]++
+		}
+	} else {
+		counts["after_salary"]++
+	}
+
+	if len(p.Regions) > 0 {
+		if v.RegionID == "" {
+			counts["after_region"]++
+			counts["region_unknown"]++
+		} else if !contains(p.Regions, v.RegionID) {
+			counts["drop_region"]++
+			finalizeFunnelDecision(v, p, now, counts)
+			return
+		} else {
+			counts["after_region"]++
+		}
+	} else {
+		counts["after_region"]++
+	}
+
+	if p.RemoteOnly {
+		if v.IsRemote == nil {
+			counts["after_remote"]++
+			counts["remote_unknown"]++
+		} else if !*v.IsRemote {
+			counts["drop_remote"]++
+			finalizeFunnelDecision(v, p, now, counts)
+			return
+		} else {
+			counts["after_remote"]++
+		}
+	} else {
+		counts["after_remote"]++
+	}
+
+	requiredDropped := false
+	for _, required := range p.RequiredSkills {
+		normalized := normalizeSkill(required)
+		if hasExplicitSkill(v, normalized, skills) {
+			continue
+		}
+		if strings.TrimSpace(v.Title) == "" && len(v.Skills) == 0 && strings.TrimSpace(v.Description) == "" {
+			counts["required_unknown"]++
+			continue
+		}
+		counts["drop_required"]++
+		requiredDropped = true
+		break
+	}
+	if requiredDropped {
+		finalizeFunnelDecision(v, p, now, counts)
+		return
+	}
+	counts["after_required"]++
+	finalizeFunnelDecision(v, p, now, counts)
+}
+
+func finalizeFunnelDecision(v Vacancy, p Preferences, now time.Time, counts map[string]int) {
+	result := Match(v, p, now)
+	counts["det_"+string(result.Decision)]++
+	if result.Decision == DecisionReject {
+		counts["already_final_reject"]++
+	} else {
+		counts["ai_would_see"]++
+	}
 }

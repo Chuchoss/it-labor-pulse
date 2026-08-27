@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const SpecializationRulesVersion = "assistant-hard-gates-v3"
+const SpecializationRulesVersion = "assistant-hard-gates-v4"
 
 type Specialization string
 

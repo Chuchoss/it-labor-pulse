@@ -733,7 +733,8 @@ paths:
           description: >
             Текущие preference и ruleset. `decision=match` — все hard-критерии доказаны;
             `decision=review` — осталось проверить неизвестные факты. Суперседированные
-            запуски не входят в выдачу.
+            запуски не входят в выдачу. Повторный успешный снимок той же preference
+            не прячет ранее сохранённые match/review.
           content:
             application/json:
               schema:
@@ -1652,7 +1653,7 @@ components:
               items:
                 type: string
                 enum: ["96", "104", "148", "150", "156", "164", "124"]
-              description: Утверждённые official HH professional role IDs.
+              description: Утверждённые official HH professional role IDs. При выбранной specialization роль каталога — подсказка; решают название и навыки.
             specialization:
               type: string
               enum: [frontend, backend, fullstack, mobile, devops_platform, data_ml, other]

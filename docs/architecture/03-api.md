@@ -457,16 +457,25 @@ aliases из [runbook assistant](../runbooks/personal-assistant.md): извес�
 в `vacancy_preferences` не обновляется.
 
 Для широкой роли `96` клиент сохраняет отдельную `specialization`; отсутствие
-поля означает «не задано», а не Frontend. `include_leadership` по умолчанию
+поля означает «не задано», а не Frontend. `approved_roles` с `96` плюс
+`specialization=frontend` означает «frontend-разработчик»: официальный catalog
+ID HH — подсказка, а не обязательное совпадение. Доказанный Frontend по
+названию или навыкам проходит role gate даже без роли `96`; backend/fullstack
+по-прежнему `reject`. Неверный или отсутствующий catalog ID даёт `review`,
+только если сама специализация неизвестна. `include_leadership` по умолчанию
 `false` и скрывает только управленческие/people-lead роли (team/tech lead,
-руководитель, директор, CTO), а не senior/старший/ведущий IC.
+руководитель, директор, CTO, официальная роль `104`), а не senior/старший/ведущий IC.
 Известный legacy role может вернуть
 `legacy_specialization_suggestion`, но это не подтверждённый критерий до нового
 явного сохранения. `/assistant/matches` возвращает текущие preference и
 ruleset: `decision=match` (AI `stage=confirmed` или deterministic
 `stage=preliminary` при полностью доказанных hard-критериях) и
-`decision=review` для оставшихся неизвестных фактов. Любой `reject` той же
-ревизии исключает вакансию из выдачи.
+`decision=review` для оставшихся неизвестных фактов. В выдачу входят
+результаты текущего несуперседированного run и более ранних успешных run той
+же preference и ruleset, если уникальная строка ещё не перезаписана; любой
+`reject` той же ревизии и того же ruleset исключает вакансию. Суперседированные
+запуски остаются в истории. Смена ruleset скрывает старую выдачу без удаления
+строк.
 
 #### `/api/v1/assistant/analyze` и `/api/v1/assistant/status` (Phase 4)
 

@@ -95,18 +95,6 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 		r.Reasons = append(r.Reasons, "leadership_allowed")
 		r.Evidence = append(r.Evidence, "leadership:"+classification.Evidence)
 	}
-	if len(p.ApprovedRoles) > 0 {
-		if len(v.RoleIDs) == 0 {
-			r.Unknowns = append(r.Unknowns, "role")
-		} else if !overlaps(p.ApprovedRoles, v.RoleIDs) {
-			r.Decision = DecisionReject
-			r.Conflicts = append(r.Conflicts, "role")
-			return r
-		} else {
-			r.Reasons = append(r.Reasons, "approved_role")
-			r.Evidence = append(r.Evidence, "role")
-		}
-	}
 	if p.Specialization != "" {
 		switch {
 		case classification.Specialization == SpecializationUnknown:
@@ -123,6 +111,9 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 			r.Reasons = append(r.Reasons, "specialization:"+string(p.Specialization))
 			r.Evidence = append(r.Evidence, "specialization:"+classification.Evidence)
 		}
+	}
+	if !applyCatalogRoleGate(&r, v, p, classification) {
+		return r
 	}
 	if p.MinSalaryRUB != nil {
 		if v.SalaryRUB == nil {
@@ -187,7 +178,15 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 		}
 	}
 	w := p.normalizedWeights()
-	components := []float64{boolScore(len(v.RoleIDs) > 0, len(p.ApprovedRoles) == 0 || overlaps(p.ApprovedRoles, v.RoleIDs)), boolScore(v.SalaryRUB != nil, p.MinSalaryRUB == nil || (v.SalaryRUB != nil && *v.SalaryRUB >= *p.MinSalaryRUB)), boolScore(v.RegionID != "", len(p.Regions) == 0 || contains(p.Regions, v.RegionID)), skillScore(p.RequiredSkills, skills)}
+	rolePass := len(p.ApprovedRoles) == 0 || overlaps(p.ApprovedRoles, v.RoleIDs) ||
+		contains(r.Reasons, "approved_role") || contains(r.Reasons, "specialization_satisfies_role")
+	roleKnown := len(v.RoleIDs) > 0 || contains(r.Reasons, "specialization_satisfies_role") || len(p.ApprovedRoles) == 0
+	components := []float64{
+		boolScore(roleKnown, rolePass),
+		boolScore(v.SalaryRUB != nil, p.MinSalaryRUB == nil || (v.SalaryRUB != nil && *v.SalaryRUB >= *p.MinSalaryRUB)),
+		boolScore(v.RegionID != "", len(p.Regions) == 0 || contains(p.Regions, v.RegionID)),
+		skillScore(p.RequiredSkills, skills),
+	}
 	r.Score = math.Round((components[0]*w.Role+components[1]*w.Salary+components[2]*w.Region+components[3]*w.Skills)*100) / 100
 	if len(r.Unknowns) > 0 {
 		r.Decision = DecisionReview
@@ -198,12 +197,68 @@ func Match(v Vacancy, p Preferences, now time.Time) Result {
 	return r
 }
 
+func specializationProven(c Classification) bool {
+	return c.Specialization != SpecializationUnknown && (c.Evidence == "title" || c.Evidence == "skills")
+}
+
+func applyCatalogRoleGate(r *Result, v Vacancy, p Preferences, classification Classification) bool {
+	if len(p.ApprovedRoles) == 0 {
+		return true
+	}
+	if len(v.RoleIDs) > 0 && overlaps(p.ApprovedRoles, v.RoleIDs) {
+		r.Reasons = append(r.Reasons, "approved_role")
+		r.Evidence = append(r.Evidence, "role")
+		return true
+	}
+	specSet := p.Specialization != ""
+	if specSet && classification.Specialization == p.Specialization && specializationProven(classification) {
+		r.Reasons = append(r.Reasons, "specialization_satisfies_role")
+		r.Evidence = append(r.Evidence, "specialization:"+classification.Evidence)
+		return true
+	}
+	if specSet {
+		r.Unknowns = append(r.Unknowns, "role")
+		return true
+	}
+	if len(v.RoleIDs) == 0 {
+		r.Unknowns = append(r.Unknowns, "role")
+		return true
+	}
+	if contains(p.ApprovedRoles, "96") && classification.Specialization == SpecializationFrontend &&
+		specializationProven(classification) {
+		r.Reasons = append(r.Reasons, "specialization_satisfies_role")
+		r.Evidence = append(r.Evidence, "specialization:"+classification.Evidence)
+		return true
+	}
+	r.Decision = DecisionReject
+	r.Conflicts = append(r.Conflicts, "role")
+	return false
+}
+
+// catalogRoleHardRejectV3 is the superseded v3 catalog overlap gate.
+func catalogRoleHardRejectV3(v Vacancy, p Preferences) bool {
+	if len(p.ApprovedRoles) == 0 {
+		return false
+	}
+	ids := officialRoleIDs(v)
+	return len(ids) > 0 && !overlaps(p.ApprovedRoles, ids)
+}
+
 // ApplyHardGatePrecedence combines an untrusted AI classification with the
 // authoritative deterministic result.
 func ApplyHardGatePrecedence(deterministic Result, ai MatchOutput) MatchOutput {
 	if deterministic.Decision == DecisionReject {
 		ai.Decision = string(DecisionReject)
 		ai.Conflicts = appendUnique(ai.Conflicts, deterministic.Conflicts...)
+		return ai
+	}
+	if deterministic.Decision == DecisionMatch && len(deterministic.Unknowns) == 0 {
+		ai.Decision = string(DecisionMatch)
+		for criterion, proof := range ai.CriterionEvidence {
+			if proof.Pass {
+				ai.Evidence = appendUnique(ai.Evidence, "criterion:"+criterion+":"+proof.Source)
+			}
+		}
 		return ai
 	}
 	if ai.Decision != string(DecisionMatch) {
