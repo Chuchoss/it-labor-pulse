@@ -485,6 +485,13 @@ refresh, `processed/total`, deterministic `matched`, а отдельно
 `ai_completion_tokens` и `ai_cached_tokens` — безопасные usage-агрегаты без
 prompt/response content. У исторических singleton-запусков token counters
 равны нулю, а размер пакета читается как 1/unknown.
+
+Liveness worker отделена от пакетного прогресса: `worker_heartbeat_at` обновляется
+во время provider request/backoff и продлевает lease, а `last_checked_at` — только
+после durable-пакета. API вычисляет `worker_offline` после 45 секунд без heartbeat
+и `worker_stalled` после двух минут без пакетного прогресса. `worker_phase`,
+`worker_retry_category` и `worker_retry_until` содержат только безопасный
+операционный статус, без prompt/response и provider body.
 категории `rate_limit`, `timeout`, `invalid_response`, auth/quota/5xx/network,
 context/content-filter и invalid-request возвращаются отдельными счётчиками.
 `POST /analyze/supersede` принимает `run_id` незавершённого ручного снимка и

@@ -30,6 +30,16 @@ type ProviderCallStats struct {
 	Category                                     string
 }
 
+type ProviderActivity struct {
+	Phase         string
+	RetryCategory string
+	RetryUntil    *time.Time
+}
+
+type ObservableAIProvider interface {
+	SetActivityObserver(func(ProviderActivity))
+}
+
 type DetailedAIProvider interface {
 	CompleteDetailed(context.Context, Request) (MatchOutput, ProviderCallStats, error)
 }
@@ -87,10 +97,12 @@ type DeepSeekConfig struct {
 }
 
 type DeepSeek struct {
-	cfg    DeepSeekConfig
-	client *http.Client
-	mu     sync.Mutex
-	next   time.Time
+	cfg        DeepSeekConfig
+	client     *http.Client
+	mu         sync.Mutex
+	next       time.Time
+	observerMu sync.RWMutex
+	observer   func(ProviderActivity)
 }
 
 func NewDeepSeek(cfg DeepSeekConfig, client *http.Client) (*DeepSeek, error) {
@@ -141,6 +153,7 @@ func (d *DeepSeek) CompleteDetailed(ctx context.Context, input Request) (MatchOu
 	stats := ProviderCallStats{}
 	var lastErr error
 	for attempt := 1; attempt <= d.cfg.MaxAttempts; attempt++ {
+		d.notifyActivity(ProviderActivity{Phase: "provider_request"})
 		if err := d.waitForSlot(ctx); err != nil {
 			stats.Category = ProviderErrorCanceled
 			stats.Latency = time.Since(started)
@@ -164,6 +177,11 @@ func (d *DeepSeek) CompleteDetailed(ctx context.Context, input Request) (MatchOu
 		if delay <= 0 {
 			delay = backoffWithJitter(attempt)
 		}
+		delay = boundedRetryDelay(delay, d.cfg.Timeout)
+		retryUntil := time.Now().Add(delay)
+		d.notifyActivity(ProviderActivity{
+			Phase: "backoff", RetryCategory: category, RetryUntil: &retryUntil,
+		})
 		if err := sleepContext(ctx, delay); err != nil {
 			stats.Category = ProviderErrorCanceled
 			lastErr = &ProviderError{Category: ProviderErrorCanceled}
@@ -172,6 +190,21 @@ func (d *DeepSeek) CompleteDetailed(ctx context.Context, input Request) (MatchOu
 	}
 	stats.Latency = time.Since(started)
 	return MatchOutput{}, stats, lastErr
+}
+
+func (d *DeepSeek) SetActivityObserver(observer func(ProviderActivity)) {
+	d.observerMu.Lock()
+	defer d.observerMu.Unlock()
+	d.observer = observer
+}
+
+func (d *DeepSeek) notifyActivity(activity ProviderActivity) {
+	d.observerMu.RLock()
+	observer := d.observer
+	d.observerMu.RUnlock()
+	if observer != nil {
+		observer(activity)
+	}
 }
 
 func (d *DeepSeek) completeOnce(ctx context.Context, input Request) (MatchOutput, time.Duration, error) {
@@ -304,6 +337,17 @@ func backoffWithJitter(attempt int) time.Duration {
 	base := time.Duration(1<<min(attempt-1, 4)) * time.Second
 	jitter := time.Duration(rand.Int64N(int64(base/2) + 1))
 	return base + jitter
+}
+
+func boundedRetryDelay(delay, requestTimeout time.Duration) time.Duration {
+	limit := 30 * time.Second
+	if requestTimeout > 0 && requestTimeout < limit {
+		limit = requestTimeout
+	}
+	if delay > limit {
+		return limit
+	}
+	return delay
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) error {

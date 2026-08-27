@@ -83,6 +83,12 @@ type AnalysisStatus struct {
 	CurrentPreferenceVersion      int        `json:"current_preference_version,omitempty"`
 	SupersededByPreferenceVersion *int       `json:"superseded_by_preference_version,omitempty"`
 	SupersededFromState           string     `json:"superseded_from_state,omitempty"`
+	WorkerHeartbeatAt             *time.Time `json:"worker_heartbeat_at,omitempty"`
+	WorkerPhase                   string     `json:"worker_phase,omitempty"`
+	WorkerRetryCategory           *string    `json:"worker_retry_category,omitempty"`
+	WorkerRetryUntil              *time.Time `json:"worker_retry_until,omitempty"`
+	WorkerOffline                 bool       `json:"worker_offline"`
+	WorkerStalled                 bool       `json:"worker_stalled"`
 }
 
 type AssistantRun struct {
@@ -115,6 +121,10 @@ type AssistantRun struct {
 type AssistantRunStore interface {
 	ClaimAssistantRun(context.Context) (AssistantRun, bool, error)
 	CompleteAssistantRun(context.Context, string, string, WorkerStats, string) error
+}
+
+type AssistantRunHeartbeatStore interface {
+	HeartbeatAssistantRun(context.Context, string, string, string, *time.Time) error
 }
 
 type AssistantRunControlStore interface {
@@ -271,7 +281,8 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 		skipped, error_category, request_id,
 		cursor_source, cursor_observed_at, pending_candidates, provider, model, prompt_version,
 		run_preference.version, current_preference.version, superseding_preference.version,
-		COALESCE(ar.superseded_from_state, '')
+		COALESCE(ar.superseded_from_state, ''),
+		ar.worker_heartbeat_at, ar.worker_phase, ar.worker_retry_category, ar.worker_retry_until
 		FROM assistant_runs ar
 		JOIN vacancy_preferences run_preference ON run_preference.id=ar.preference_id
 		JOIN LATERAL (
@@ -292,7 +303,8 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 		&s.Skipped, &s.ErrorCategory, &s.RequestID, &s.CursorSource,
 		&cursorAt, &s.PendingCandidates, &s.Provider, &s.Model, &s.PromptVersion,
 		&s.PreferenceVersion, &s.CurrentPreferenceVersion, &s.SupersededByPreferenceVersion,
-		&s.SupersededFromState)
+		&s.SupersededFromState, &s.WorkerHeartbeatAt, &s.WorkerPhase,
+		&s.WorkerRetryCategory, &s.WorkerRetryUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		s.State = "never_run"
 		s.AIStatus = "not_run"
@@ -306,6 +318,10 @@ func (r *PostgresRepository) AnalysisStatus(ctx context.Context, userID string, 
 	}
 	s.CursorObservedAt = cursorAt
 	s.MethodVersion = SpecializationRulesVersion
+	if s.State == "queued" || s.State == "running" {
+		s.WorkerOffline = s.WorkerHeartbeatAt == nil || time.Since(*s.WorkerHeartbeatAt) > 45*time.Second
+		s.WorkerStalled = s.State == "running" && time.Since(s.LastCheckedAt) > 2*time.Minute
+	}
 	return s, nil
 }
 
@@ -377,7 +393,9 @@ func (r *PostgresRepository) ClaimAssistantRun(ctx context.Context) (AssistantRu
 	err := r.db.QueryRow(ctx, `
 		UPDATE assistant_runs
 		SET state = 'running', started_at = COALESCE(started_at, now()),
-			last_checked_at = now(), lease_until = now() + interval '10 minutes'
+			last_checked_at = now(), lease_until = now() + interval '10 minutes',
+			worker_heartbeat_at=now(), worker_phase='processing',
+			worker_retry_category=NULL, worker_retry_until=NULL
 		WHERE id = (
 			SELECT id FROM assistant_runs
 			WHERE state = 'queued' OR (state = 'running' AND lease_until < now())
@@ -491,7 +509,9 @@ func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, st
 			ai_rate_limit=$18, ai_timeouts=$19, ai_invalid_responses=$20, ai_auth=$21,
 			ai_quota=$22, ai_server=$23, ai_network=$24, ai_context_limit=$25,
 			ai_content_filter=$26, ai_invalid_request=$27, ai_batches=$28,
-			ai_prompt_tokens=$29, ai_completion_tokens=$30, ai_cached_tokens=$31
+			ai_prompt_tokens=$29, ai_completion_tokens=$30, ai_cached_tokens=$31,
+			worker_heartbeat_at=now(), worker_phase='idle',
+			worker_retry_category=NULL, worker_retry_until=NULL
 		WHERE id = $1::uuid AND state='running'
 	`, runID, state, stats.Processed, stats.Eligible, stats.Matched, stats.AICalls,
 		stats.AIMatches, stats.AIFailures, stats.AISkipped, stats.Skipped, errorCategory,
@@ -502,6 +522,32 @@ func (r *PostgresRepository) CompleteAssistantRun(ctx context.Context, runID, st
 		stats.AIPromptTokens, stats.AICompletionTokens, stats.AICachedTokens)
 	if err != nil {
 		return fmt.Errorf("complete assistant run: %w", err)
+	}
+	return nil
+}
+
+func (r *PostgresRepository) HeartbeatAssistantRun(
+	ctx context.Context,
+	runID, phase, retryCategory string,
+	retryUntil *time.Time,
+) error {
+	switch phase {
+	case "processing", "provider_request", "backoff", "stopping":
+	default:
+		phase = "processing"
+	}
+	tag, err := r.db.Exec(ctx, `
+		UPDATE assistant_runs
+		SET worker_heartbeat_at=now(), worker_phase=$2,
+			worker_retry_category=NULLIF($3, ''), worker_retry_until=$4,
+			lease_until=now() + interval '10 minutes'
+		WHERE id=$1::uuid AND state='running'
+	`, runID, phase, retryCategory, retryUntil)
+	if err != nil {
+		return fmt.Errorf("heartbeat assistant run: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("assistant run lease is no longer owned")
 	}
 	return nil
 }
@@ -1031,7 +1077,7 @@ func (r *PostgresRepository) UpdateAssistantRunProgress(
 		cursorAt = last.CreatedAt
 		cursorID = last.ID
 	}
-	_, err := r.db.Exec(ctx, `
+	tag, err := r.db.Exec(ctx, `
 		UPDATE assistant_runs SET processed=$2, eligible=$3, matched=$4, ai_calls=$5,
 			ai_matches=$6, ai_failures=$7, ai_skipped=$8, skipped=$9,
 			snapshot_cursor_created_at=COALESCE($10, snapshot_cursor_created_at),
@@ -1053,6 +1099,9 @@ func (r *PostgresRepository) UpdateAssistantRunProgress(
 		stats.AIPromptTokens, stats.AICompletionTokens, stats.AICachedTokens)
 	if err != nil {
 		return fmt.Errorf("update assistant run progress: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("assistant run lease is no longer owned")
 	}
 	return nil
 }

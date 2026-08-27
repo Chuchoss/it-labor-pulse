@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPackBatchItemsUsesCountAndTokenBudget(t *testing.T) {
@@ -30,6 +31,49 @@ func TestPackBatchItemsUsesCountAndTokenBudget(t *testing.T) {
 		if len(batch) > 5 {
 			t.Fatalf("max count exceeded: %d", len(batch))
 		}
+	}
+}
+
+func TestProviderHangIsBoundedAndObservable(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = 40 * time.Millisecond
+	provider, err := NewDeepSeek(DeepSeekConfig{
+		APIKey: "synthetic", BaseURL: server.URL, Timeout: 40 * time.Millisecond,
+		MaxAttempts: 1, MaxBatchSize: 5, MaxTokens: 3500,
+	}, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activities := make(chan ProviderActivity, 1)
+	provider.SetActivityObserver(func(activity ProviderActivity) { activities <- activity })
+	started := time.Now()
+	result, err := provider.CompleteBatchDetailed(context.Background(), BatchRequest{
+		Items: []BatchItem{{ID: "v1", Evidence: map[string]bool{}}},
+	})
+	if err != nil || result.Errors["v1"] != ProviderErrorTimeout {
+		t.Fatalf("err=%v result=%+v", err, result)
+	}
+	if time.Since(started) > 200*time.Millisecond {
+		t.Fatal("provider hang exceeded bounded timeout")
+	}
+	select {
+	case activity := <-activities:
+		if activity.Phase != "provider_request" {
+			t.Fatalf("activity=%+v", activity)
+		}
+	default:
+		t.Fatal("provider request activity was not emitted")
+	}
+}
+
+func TestRetryDelayIsBounded(t *testing.T) {
+	if got := boundedRetryDelay(10*time.Minute, 90*time.Second); got != 30*time.Second {
+		t.Fatalf("bounded delay=%s", got)
 	}
 }
 

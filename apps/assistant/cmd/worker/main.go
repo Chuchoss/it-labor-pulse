@@ -61,6 +61,8 @@ func main() {
 	batchSize := flag.Int("batch-size", 0, "override durable processing batch size")
 	maxSnapshotPages := flag.Int("max-snapshot-pages", 0, "pause a manual run after this many durable pages")
 	maxExternalHTTP := flag.Int("max-external-http", 0, "cap external HTTP calls for a controlled verification")
+	inspectRun := flag.String("inspect-run", "", "print safe runtime metadata for one assistant run")
+	recoverRun := flag.String("recover-run", "", "requeue one unfinished superseded run without resetting progress")
 	flag.Parse()
 	_ = godotenv.Overload()
 	log := logging.New(logging.Options{Service: "assistant-worker", Env: envOr("APP_ENV", "local"), Level: envOr("LOG_LEVEL", "info")})
@@ -84,6 +86,7 @@ func main() {
 		opts.MaxSnapshotPages = *maxSnapshotPages
 	}
 	var store assistant.WorkerStore = localStore{}
+	var pool *pgxpool.Pool
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
 		cfg, err := pgxpool.ParseConfig(dsn)
 		if err != nil {
@@ -93,7 +96,7 @@ func main() {
 		cfg.MaxConns = 3
 		cfg.ConnConfig.RuntimeParams["application_name"] = "lma-assistant-worker"
 		cfg.ConnConfig.RuntimeParams["statement_timeout"] = "10s"
-		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		pool, err = pgxpool.NewWithConfig(ctx, cfg)
 		if err != nil {
 			log.Error("assistant_worker_database_open_failed", "kind", "open")
 			os.Exit(1)
@@ -106,6 +109,28 @@ func main() {
 	} else {
 		log.Error("assistant_worker_store_missing", "kind", "persistent_store_required")
 		os.Exit(1)
+	}
+	if *inspectRun != "" || *recoverRun != "" {
+		if pool == nil {
+			log.Error("assistant_worker_inspect_failed", "category", "persistent_store_required")
+			os.Exit(1)
+		}
+		if *inspectRun != "" && *recoverRun != "" {
+			log.Error("assistant_worker_run_control_failed", "category", "conflicting_flags")
+			os.Exit(1)
+		}
+		if *recoverRun != "" {
+			if err := recoverAssistantRun(ctx, pool, *recoverRun, log); err != nil {
+				log.Error("assistant_worker_run_control_failed", "category", "database")
+				os.Exit(1)
+			}
+			return
+		}
+		if err := inspectAssistantRun(ctx, pool, *inspectRun, log); err != nil {
+			log.Error("assistant_worker_inspect_failed", "category", "database")
+			os.Exit(1)
+		}
+		return
 	}
 	if *pauseRun != "" || *resumeRun != "" {
 		if *pauseRun != "" && *resumeRun != "" {
@@ -159,6 +184,9 @@ func main() {
 			os.Exit(1)
 		}
 		opts.AIProvider = provider
+		if opts.BatchSize > cfg.AIMaxBatchSize {
+			opts.BatchSize = cfg.AIMaxBatchSize
+		}
 		log.Warn("assistant_worker_external_ai_enabled", "request_count", "unlimited")
 	}
 	if *probeExternal {
@@ -181,8 +209,18 @@ func main() {
 			"retries", stats.Retries, "latency_ms", stats.Latency.Milliseconds())
 		return
 	}
-	run := func() error {
-		runCtx, cancel := context.WithTimeout(ctx, durationEnv("ASSISTANT_RUN_TIMEOUT", 10*time.Minute))
+	run := func() (err error) {
+		defer func() {
+			if recover() != nil {
+				log.Error("assistant_worker_run_panic", "category", "panic")
+				err = fmt.Errorf("assistant worker run panic")
+			}
+		}()
+		runCtx := ctx
+		cancel := func() {}
+		if timeout := optionalDurationEnv("ASSISTANT_RUN_TIMEOUT"); timeout > 0 {
+			runCtx, cancel = context.WithTimeout(ctx, timeout)
+		}
 		defer cancel()
 		stats, err := assistant.RunOnce(runCtx, store, opts)
 		if err == nil {
@@ -217,6 +255,7 @@ func main() {
 		return
 	}
 	interval := durationEnv("ASSISTANT_WORKER_INTERVAL", 30*time.Minute)
+	log.Info("assistant_worker_started", "poll_interval_ms", interval.Milliseconds(), "batch_size", opts.BatchSize)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -266,4 +305,140 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return value
+}
+
+func optionalDurationEnv(key string) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return 0
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed < time.Second {
+		return 0
+	}
+	return parsed
+}
+
+func recoverAssistantRun(ctx context.Context, pool *pgxpool.Pool, runID string, log interface {
+	Info(string, ...any)
+}) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	var userID string
+	err = tx.QueryRow(ctx, `
+		SELECT user_id::text FROM assistant_runs
+		WHERE id=$1::uuid AND state='superseded'
+		  AND superseded_from_state='running' AND processed < snapshot_total
+		FOR UPDATE
+	`, runID).Scan(&userID)
+	if err != nil {
+		return err
+	}
+	disabled, err := tx.Exec(ctx, `
+		UPDATE assistant_runs
+		SET state='disabled', lease_until=NULL, finished_at=now(), last_checked_at=now(),
+			error_category='operator_recovered_previous_run', worker_phase='idle',
+			worker_retry_category=NULL, worker_retry_until=NULL
+		WHERE user_id=$1::uuid AND id<>$2::uuid AND state IN ('queued','running','paused')
+	`, userID, runID)
+	if err != nil {
+		return err
+	}
+	recovered, err := tx.Exec(ctx, `
+		UPDATE assistant_runs
+		SET state='queued', lease_until=NULL, finished_at=NULL, last_checked_at=now(),
+			error_category=NULL, superseded_at=NULL, superseded_by_preference_id=NULL,
+			superseded_from_state=NULL, worker_heartbeat_at=NULL, worker_phase='idle',
+			worker_retry_category=NULL, worker_retry_until=NULL
+		WHERE id=$1::uuid AND state='superseded'
+	`, runID)
+	if err != nil {
+		return err
+	}
+	if recovered.RowsAffected() != 1 {
+		return fmt.Errorf("assistant run is not recoverable")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	log.Info("assistant_worker_run_recovered", "run_id", runID,
+		"conflicting_runs_disabled", disabled.RowsAffected())
+	return nil
+}
+
+func inspectAssistantRun(ctx context.Context, pool *pgxpool.Pool, runID string, log interface {
+	Info(string, ...any)
+}) error {
+	var state, phase, supersededFrom string
+	var processed, total, aiCalls, aiSucceeded, aiFailures, httpAttempts, retries, batches int
+	var preferenceVersion, currentPreferenceVersion int
+	var progressAge, leaseRemaining, heartbeatAge *int
+	err := pool.QueryRow(ctx, `
+		SELECT r.state, r.processed, r.snapshot_total, r.ai_calls, r.ai_succeeded, r.ai_failures,
+			ai_http_attempts, ai_retries, ai_batches, worker_phase,
+			EXTRACT(EPOCH FROM now()-last_checked_at)::integer,
+			CASE WHEN lease_until IS NULL THEN NULL
+			     ELSE EXTRACT(EPOCH FROM lease_until-now())::integer END,
+			CASE WHEN worker_heartbeat_at IS NULL THEN NULL
+			     ELSE EXTRACT(EPOCH FROM now()-worker_heartbeat_at)::integer END,
+			run_preference.version, current_preference.version,
+			COALESCE(r.superseded_from_state, '')
+		FROM assistant_runs r
+		JOIN vacancy_preferences run_preference ON run_preference.id=r.preference_id
+		JOIN LATERAL (
+			SELECT version FROM vacancy_preferences
+			WHERE user_id=r.user_id AND archived_at IS NULL
+			ORDER BY version DESC LIMIT 1
+		) current_preference ON true
+		WHERE r.id=$1::uuid
+	`, runID).Scan(&state, &processed, &total, &aiCalls, &aiSucceeded, &aiFailures,
+		&httpAttempts, &retries, &batches, &phase, &progressAge, &leaseRemaining, &heartbeatAge,
+		&preferenceVersion, &currentPreferenceVersion, &supersededFrom)
+	if err != nil {
+		return err
+	}
+	var advisoryHolders, blockedSessions, aiAttempts, aiComplete, activeRuns int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)::integer FROM pg_locks
+		WHERE locktype='advisory' AND granted AND objid=549004802
+	`).Scan(&advisoryHolders); err != nil {
+		return err
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)::integer FROM pg_stat_activity WHERE wait_event_type='Lock'
+	`).Scan(&blockedSessions); err != nil {
+		return err
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(sum(j.attempts),0)::integer,
+		       count(*) FILTER (WHERE j.status='complete')::integer
+		FROM assistant_ai_jobs j
+		JOIN assistant_runs r ON r.user_id=j.user_id AND r.preference_id=j.preference_id
+		WHERE r.id=$1::uuid
+	`, runID).Scan(&aiAttempts, &aiComplete); err != nil {
+		return err
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)::integer
+		FROM assistant_runs active
+		WHERE active.user_id=(SELECT user_id FROM assistant_runs WHERE id=$1::uuid)
+		  AND active.state IN ('queued','running','paused')
+	`, runID).Scan(&activeRuns); err != nil {
+		return err
+	}
+	log.Info("assistant_worker_run_metadata",
+		"run_id", runID, "state", state, "processed", processed, "total", total,
+		"ai_calls", aiCalls, "ai_succeeded", aiSucceeded, "ai_failures", aiFailures,
+		"ai_http_attempts", httpAttempts, "ai_retries", retries, "ai_batches", batches,
+		"worker_phase", phase, "progress_age_seconds", progressAge,
+		"lease_remaining_seconds", leaseRemaining, "heartbeat_age_seconds", heartbeatAge,
+		"preference_version", preferenceVersion, "current_preference_version", currentPreferenceVersion,
+		"superseded_from_state", supersededFrom,
+		"advisory_lock_holders", advisoryHolders, "blocked_sessions", blockedSessions,
+		"active_runs_for_user", activeRuns,
+		"ai_job_attempts", aiAttempts, "ai_jobs_complete", aiComplete)
+	return nil
 }

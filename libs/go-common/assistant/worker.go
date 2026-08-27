@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -169,6 +170,9 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 		}
 		if claimed {
 			claimedRunID = run.ID
+			var stopHeartbeat func()
+			ctx, stopHeartbeat = startRunHeartbeat(ctx, store, run.ID, opts.AIProvider, opts.Log)
+			defer stopHeartbeat()
 			if scoped, ok := store.(ScopedWorkerStore); ok {
 				users, err = scoped.UsersForAssistantRun(ctx, run)
 				if err != nil {
@@ -205,7 +209,7 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 				if len(candidates) == 0 {
 					break
 				}
-				if err = processCandidates(ctx, store, opts, users, candidates, &stats, true); err != nil {
+				if err = processCandidatesSafely(ctx, store, opts, users, candidates, &stats, true); err != nil {
 					return stats, err
 				}
 				var last *WorkerCandidate
@@ -249,7 +253,7 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 	if err != nil {
 		return stats, err
 	}
-	if err = processCandidates(ctx, store, opts, users, candidates, &stats, false); err != nil {
+	if err = processCandidatesSafely(ctx, store, opts, users, candidates, &stats, false); err != nil {
 		return stats, err
 	}
 	if len(candidates) > 0 {
@@ -266,6 +270,89 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 		opts.Log.Info("assistant_worker_complete", "stats", stats)
 	}
 	return stats, nil
+}
+
+func startRunHeartbeat(
+	ctx context.Context,
+	store WorkerStore,
+	runID string,
+	provider AIProvider,
+	log *slog.Logger,
+) (context.Context, func()) {
+	heartbeat, ok := store.(AssistantRunHeartbeatStore)
+	if !ok {
+		return ctx, func() {}
+	}
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	var activityMu sync.RWMutex
+	activity := ProviderActivity{Phase: "processing"}
+	if observable, ok := provider.(ObservableAIProvider); ok {
+		observable.SetActivityObserver(func(next ProviderActivity) {
+			activityMu.Lock()
+			activity = next
+			activityMu.Unlock()
+		})
+		deferObserver := observable
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-heartbeatCtx.Done()
+			deferObserver.SetActivityObserver(nil)
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			activityMu.RLock()
+			current := activity
+			activityMu.RUnlock()
+			beatCtx, beatCancel := context.WithTimeout(context.WithoutCancel(heartbeatCtx), 5*time.Second)
+			err := heartbeat.HeartbeatAssistantRun(
+				beatCtx, runID, current.Phase, current.RetryCategory, current.RetryUntil,
+			)
+			beatCancel()
+			if err != nil && log != nil {
+				log.Warn("assistant_worker_heartbeat_failed", "run_id", runID, "category", "database")
+			}
+			if err != nil {
+				cancel()
+				return
+			}
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return heartbeatCtx, func() {
+		cancel()
+		wg.Wait()
+	}
+}
+
+func processCandidatesSafely(
+	ctx context.Context,
+	store WorkerStore,
+	opts WorkerOptions,
+	users []WorkerUser,
+	candidates []WorkerCandidate,
+	stats *WorkerStats,
+	manual bool,
+) (err error) {
+	defer func() {
+		if recover() != nil {
+			if opts.Log != nil {
+				opts.Log.Error("assistant_worker_batch_panic", "run_id", stats.RunID, "category", "panic")
+			}
+			err = errors.New("assistant worker batch panic")
+		}
+	}()
+	return processCandidates(ctx, store, opts, users, candidates, stats, manual)
 }
 
 func processCandidates(

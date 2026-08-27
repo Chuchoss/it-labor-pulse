@@ -143,6 +143,7 @@ func (d *DeepSeek) completeBatchWithRetries(
 	stats := ProviderCallStats{}
 	var lastErr error
 	for attempt := 1; attempt <= d.cfg.MaxAttempts; attempt++ {
+		d.notifyActivity(ProviderActivity{Phase: "provider_request"})
 		if err := d.waitForSlot(ctx); err != nil {
 			stats.Category = ProviderErrorCanceled
 			stats.Latency = time.Since(started)
@@ -168,6 +169,11 @@ func (d *DeepSeek) completeBatchWithRetries(
 		if delay <= 0 {
 			delay = backoffWithJitter(attempt)
 		}
+		delay = boundedRetryDelay(delay, d.cfg.Timeout)
+		retryUntil := time.Now().Add(delay)
+		d.notifyActivity(ProviderActivity{
+			Phase: "backoff", RetryCategory: stats.Category, RetryUntil: &retryUntil,
+		})
 		if err := sleepContext(ctx, delay); err != nil {
 			lastErr = err
 			break

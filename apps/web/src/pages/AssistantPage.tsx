@@ -247,6 +247,8 @@ export function AssistantPage() {
         ai_skipped: 0,
         skipped: 0,
         pending_candidates: false,
+        worker_offline: false,
+        worker_stalled: false,
       }))
     },
     onSuccess: (result) => {
@@ -372,6 +374,20 @@ export function AssistantPage() {
             <Typography>Подготавливаем список вакансий…</Typography>
           </Stack>}
           {status.data?.state === 'running' && <Typography>Анализируем все текущие вакансии…</Typography>}
+          {status.data?.worker_offline && (
+            <Alert severity="error">Worker не отправляет heartbeat и считается недоступным.</Alert>
+          )}
+          {!status.data?.worker_offline && status.data?.worker_stalled && (
+            <Alert severity="warning">Worker доступен, но прогресс пакетов задерживается.</Alert>
+          )}
+          {status.data?.worker_phase === 'backoff' && (
+            <Alert severity="info">
+              Временная ошибка провайдера: повтор
+              {status.data.worker_retry_until
+                ? ` после ${new Date(status.data.worker_retry_until).toLocaleTimeString('ru-RU')}`
+                : ' с безопасной задержкой'}.
+            </Alert>
+          )}
           <Typography>
             Проверено по критериям: {metric(status.data?.processed)} из {metric(status.data?.total)}
             {' · '}Предварительно подходят: {metric(status.data?.matched)}
@@ -418,6 +434,9 @@ export function AssistantPage() {
           {status.data?.finished_at && <Typography variant="body2">Последний анализ: {new Date(status.data.finished_at).toLocaleString('ru-RU')}</Typography>}
           {status.data?.last_checked_at && <Typography variant="caption" color="text.secondary">
             Обновлено: {new Date(status.data.last_checked_at).toLocaleTimeString('ru-RU')}
+          </Typography>}
+          {status.data?.worker_heartbeat_at && <Typography variant="caption" color="text.secondary">
+            Heartbeat worker: {new Date(status.data.worker_heartbeat_at).toLocaleTimeString('ru-RU')}
           </Typography>}
           <Button type="button" variant="contained" disabled={run.isPending || preferences.isLoading} onClick={startRun}>
             {run.isPending

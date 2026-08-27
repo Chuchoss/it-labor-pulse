@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -470,6 +471,7 @@ type queuedWorkerFake struct {
 	*workerFake
 	run       AssistantRun
 	completed string
+	beats     atomic.Int32
 }
 
 type queuedAIWorkerFake struct {
@@ -546,6 +548,10 @@ func (f *queuedWorkerFake) SnapshotCandidates(_ context.Context, run AssistantRu
 func (f *queuedWorkerFake) UpdateAssistantRunProgress(context.Context, string, WorkerStats, *WorkerCandidate) error {
 	return nil
 }
+func (f *queuedWorkerFake) HeartbeatAssistantRun(context.Context, string, string, string, *time.Time) error {
+	f.beats.Add(1)
+	return nil
+}
 
 func TestWorkerClaimsAndCompletesQueuedRunWithoutAI(t *testing.T) {
 	fake := &queuedWorkerFake{
@@ -558,6 +564,37 @@ func TestWorkerClaimsAndCompletesQueuedRunWithoutAI(t *testing.T) {
 	stats, err := RunOnce(context.Background(), fake, WorkerOptions{BatchSize: 1})
 	if err != nil || stats.RunID != "run-1" || fake.completed != "succeeded" || stats.AICalls != 0 {
 		t.Fatalf("queued run: %+v, completed=%q, err=%v", stats, fake.completed, err)
+	}
+	if fake.beats.Load() == 0 {
+		t.Fatal("queued run emitted no worker heartbeat")
+	}
+}
+
+type panicAIProvider struct{}
+
+func (panicAIProvider) Complete(context.Context, Request) (MatchOutput, error) {
+	panic("synthetic provider panic")
+}
+
+func TestWorkerRecoversBatchPanicAndMarksRunFailed(t *testing.T) {
+	fake := &queuedAIWorkerFake{
+		aiWorkerFake: &aiWorkerFake{
+			workerFake: &workerFake{
+				users: []WorkerUser{{ID: "u1", Preference: PreferenceRecord{Version: 1}}},
+				candidates: []WorkerCandidate{{
+					ID: "v1", Source: "hh", ExternalID: "1", Revision: 1, Vacancy: Vacancy{ID: "v1"},
+				}},
+			},
+			settings: map[string]AutomationSettings{"u1": {AIEnabled: true}},
+		},
+		run: AssistantRun{ID: "run-panic", UserID: "u1"},
+	}
+
+	_, err := RunOnce(context.Background(), fake, WorkerOptions{
+		BatchSize: 1, AIProvider: panicAIProvider{},
+	})
+	if err == nil || fake.completed != "failed" {
+		t.Fatalf("err=%v completed=%q", err, fake.completed)
 	}
 }
 

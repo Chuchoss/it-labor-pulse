@@ -259,6 +259,12 @@ export interface AssistantStatus {
   current_preference_version?: number
   superseded_by_preference_version?: number
   superseded_from_state?: 'queued' | 'running' | 'paused' | 'succeeded' | 'failed'
+  worker_heartbeat_at?: string
+  worker_phase?: 'idle' | 'processing' | 'provider_request' | 'backoff' | 'stopping'
+  worker_retry_category?: string
+  worker_retry_until?: string
+  worker_offline: boolean
+  worker_stalled: boolean
 }
 
 export interface AssistantMatch {

@@ -1702,7 +1702,7 @@ components:
 
     AssistantStatus:
       type: object
-      required: [ai_configured, ai_status, state, processed, total, eligible, matched, ai_eligible, ai_calls, ai_succeeded, ai_matches, ai_failures, ai_skipped, ai_http_attempts, ai_retries, ai_batches, ai_prompt_tokens, ai_completion_tokens, ai_cached_tokens, ai_rate_limit, ai_timeouts, ai_invalid_responses, ai_auth, ai_quota, ai_server, ai_network, ai_context_limit, ai_content_filter, ai_invalid_request, skipped, pending_candidates]
+      required: [ai_configured, ai_status, state, processed, total, eligible, matched, ai_eligible, ai_calls, ai_succeeded, ai_matches, ai_failures, ai_skipped, ai_http_attempts, ai_retries, ai_batches, ai_prompt_tokens, ai_completion_tokens, ai_cached_tokens, ai_rate_limit, ai_timeouts, ai_invalid_responses, ai_auth, ai_quota, ai_server, ai_network, ai_context_limit, ai_content_filter, ai_invalid_request, skipped, pending_candidates, worker_offline, worker_stalled]
       properties:
         run_id: { type: string, format: uuid }
         ai_configured: { type: boolean }
@@ -1767,6 +1767,17 @@ components:
         model: { type: [string, "null"] }
         prompt_version: { type: [string, "null"] }
         method_version: { type: string }
+        worker_heartbeat_at:
+          type: [string, "null"]
+          format: date-time
+          description: Последний heartbeat worker; не является отметкой прогресса пакета.
+        worker_phase:
+          type: [string, "null"]
+          enum: [idle, processing, provider_request, backoff, stopping, null]
+        worker_retry_category: { type: [string, "null"] }
+        worker_retry_until: { type: [string, "null"], format: date-time }
+        worker_offline: { type: boolean }
+        worker_stalled: { type: boolean }
 
     AssistantMatch:
       type: object
