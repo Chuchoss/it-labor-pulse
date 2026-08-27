@@ -232,6 +232,8 @@ describe('AssistantPage', () => {
         if (statusAfterRun === 1) return HttpResponse.json({
           ai_configured: true, ai_status: 'running', state: 'running', processed: 10, total: 22,
           eligible: 10, matched: 1, ai_calls: 4, ai_succeeded: 3, ai_matches: 1, ai_failures: 1,
+          ai_http_attempts: 1, ai_batches: 1, ai_retries: 0,
+          ai_prompt_tokens: 1200, ai_completion_tokens: 240, ai_cached_tokens: 500,
           ai_skipped: 0, skipped: 9, pending_candidates: false, last_checked_at: '2026-08-27T01:00:00Z',
         })
         return HttpResponse.json({
@@ -253,7 +255,7 @@ describe('AssistantPage', () => {
     renderPage(<AssistantPage />)
     expect(await screen.findByText(/25 из 151/)).toBeInTheDocument()
     expect(screen.getByText(/Новые вакансии будут автоматически анализироваться AI по полному описанию/)).toBeInTheDocument()
-    expect(screen.getByText(/каждая подходящая вакансия может создать платный AI-запрос/i)).toBeInTheDocument()
+    expect(screen.getByText(/Вакансии отправляются небольшими пакетами для снижения повторяющегося контекста/)).toBeInTheDocument()
     expect(screen.queryByText(/20.*запрос|лимит 20/i)).not.toBeInTheDocument()
     expect(screen.getByText(/AI-анализ: не выполнялся · Совпадения: — · Ошибки: 0 · Пропущено AI: 25/)).toBeInTheDocument()
     const runButton = screen.getByRole('button', { name: 'Проверить текущие вакансии' })
@@ -266,7 +268,8 @@ describe('AssistantPage', () => {
 
     releaseRequest()
     expect(await screen.findByText(/10 из 22/)).toBeInTheDocument()
-    expect(screen.getByText(/AI-вакансий отправлено: 4 .* Успешно: 3 · Финальных ошибок: 1/)).toBeInTheDocument()
+    expect(screen.getByText(/AI проверено: 3 вакансий .* Ошибки: 1/)).toBeInTheDocument()
+    expect(screen.getByText(/Токены: вход 1200 · выход 240 · из кэша 500/)).toBeInTheDocument()
     expect(await screen.findByText('Проверка завершена, но часть AI-запросов не удалась.')).toBeInTheDocument()
     expect(screen.getByText(/22 из 22/)).toBeInTheDocument()
     expect(requests).toBe(1)

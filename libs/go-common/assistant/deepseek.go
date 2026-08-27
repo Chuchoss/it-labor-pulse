@@ -24,10 +24,10 @@ type AIProvider interface {
 }
 
 type ProviderCallStats struct {
-	HTTPAttempts int
-	Retries      int
-	Latency      time.Duration
-	Category     string
+	HTTPAttempts, Retries, Batches               int
+	PromptTokens, CompletionTokens, CachedTokens int
+	Latency                                      time.Duration
+	Category                                     string
 }
 
 type DetailedAIProvider interface {
@@ -82,6 +82,8 @@ type DeepSeekConfig struct {
 	MaxTokens              int
 	MaxAttempts            int
 	MinInterval            time.Duration
+	MaxBatchSize           int
+	InputTokenBudget       int
 }
 
 type DeepSeek struct {
@@ -108,14 +110,20 @@ func NewDeepSeek(cfg DeepSeekConfig, client *http.Client) (*DeepSeek, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 20 * time.Second
 	}
-	if cfg.MaxTokens <= 0 || cfg.MaxTokens > 2000 {
-		cfg.MaxTokens = 1800
+	if cfg.MaxTokens <= 0 || cfg.MaxTokens > 10000 {
+		cfg.MaxTokens = 3500
 	}
 	if cfg.MaxAttempts < 1 || cfg.MaxAttempts > 5 {
 		cfg.MaxAttempts = 3
 	}
 	if cfg.MinInterval < 0 {
 		cfg.MinInterval = 0
+	}
+	if cfg.MaxBatchSize < 1 || cfg.MaxBatchSize > 25 {
+		cfg.MaxBatchSize = defaultAIBatchSize
+	}
+	if cfg.InputTokenBudget < 4000 {
+		cfg.InputTokenBudget = defaultAIInputTokenBudget
 	}
 	if client == nil {
 		client = &http.Client{Timeout: cfg.Timeout}
@@ -312,7 +320,7 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func decodeBoundedJSONObject(content string, output *MatchOutput) error {
+func decodeBoundedJSONObject(content string, output any) error {
 	content = strings.TrimSpace(content)
 	if len(content) == 0 || len(content) > 32*1024 {
 		return errors.New("invalid JSON output bounds")

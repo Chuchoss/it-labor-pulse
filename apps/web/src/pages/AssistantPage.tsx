@@ -299,8 +299,9 @@ export function AssistantPage() {
         <Stack spacing={1}>
           <Typography variant="h6">Автоматизация</Typography>
           <Typography variant="body2" color="text.secondary">
-            Новые вакансии будут автоматически анализироваться AI по полному описанию. Каждая подходящая
-            вакансия может создать платный AI-запрос; количество запросов может быть большим. Telegram включается отдельно.
+            Новые вакансии будут автоматически анализироваться AI по полному описанию. Вакансии отправляются
+            небольшими пакетами для снижения повторяющегося контекста; общее количество вакансий не ограничено.
+            Telegram включается отдельно.
           </Typography>
           <Stack direction="row" sx={{ alignItems: 'center' }}>
             <Switch checked={automation.data?.ai_enabled ?? false} disabled={!status.data?.ai_configured || updateAutomation.isPending}
@@ -336,10 +337,16 @@ export function AssistantPage() {
           <Typography>
             {(status.data?.ai_calls ?? 0) === 0
               ? 'AI-анализ: не выполнялся · Совпадения: —'
-              : `AI-вакансий отправлено: ${status.data?.ai_calls ?? 0} · HTTP-запросов: ${status.data?.ai_http_attempts ?? status.data?.ai_calls ?? 0} · Повторных запросов: ${status.data?.ai_retries ?? 0} · Успешно: ${status.data?.ai_succeeded ?? 0} · Финальных ошибок: ${status.data?.ai_failures ?? 0} · Совпадений: ${status.data?.ai_matches ?? 0}`}
+              : `AI проверено: ${status.data?.ai_succeeded ?? 0} вакансий · DeepSeek HTTP-запросов: ${status.data?.ai_http_attempts ?? status.data?.ai_calls ?? 0} · Средний пакет: ${((status.data?.ai_calls ?? 0) / Math.max(status.data?.ai_batches ?? status.data?.ai_http_attempts ?? 1, 1)).toFixed(1)} · Повторы: ${status.data?.ai_retries ?? 0} · Ошибки: ${status.data?.ai_failures ?? 0} · Совпадения: ${status.data?.ai_matches ?? 0}`}
             {(status.data?.ai_calls ?? 0) === 0 && ` · Ошибки: ${status.data?.ai_failures ?? 0}`}
             {' · '}Пропущено AI: {status.data?.ai_skipped ?? 0}
           </Typography>
+          {(status.data?.ai_prompt_tokens ?? 0) + (status.data?.ai_completion_tokens ?? 0) > 0 && (
+            <Typography variant="body2" color="text.secondary">
+              Токены: вход {status.data?.ai_prompt_tokens ?? 0} · выход {status.data?.ai_completion_tokens ?? 0}
+              {(status.data?.ai_cached_tokens ?? 0) > 0 ? ` · из кэша ${status.data?.ai_cached_tokens}` : ''}
+            </Typography>
+          )}
           {aiFailureSummary.length > 0 && (
             <Alert severity="warning">
               Категории финальных ошибок: {aiFailureSummary.map(([label, count]) => `${label} — ${count}`).join('; ')}.

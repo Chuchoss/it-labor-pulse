@@ -56,16 +56,24 @@ deterministic assessment дал `reject`; такой результат хран
 использует текущий opt-in и те же server-side flags, но намеренно охватывает
 исторический снимок.
 
-Количество AI-запросов не ограничивается ни на запуск, ни на пользователя в
-час: каждый элемент ручного снимка и каждый допустимый новый outbox item может
-создать платный запрос. Это осознанный cost-risk. Оператор управляет расходами
+Количество AI-вакансий не ограничивается ни на запуск, ни на пользователя в
+час. Worker объединяет ещё не обработанные вакансии одной версии preferences в
+адаптивные пакеты: максимум 5 и не более настроенного оценочного token budget.
+Общий контекст и preferences передаются один раз на пакет; каждое решение
+сохраняется отдельно. Это осознанный cost-risk. Оператор управляет расходами
 остановкой единственного worker, снятием `-allow-external`, отключением
 `ASSISTANT_AI_ENABLED`/`ASSISTANT_AI_LIVE_TEST` или пользовательского opt-in.
 Ограничение batch size и provider rate limiting управляют пропускной
-способностью, но не общим числом запросов. Идемпотентность AI:
+способностью, но не общим числом вакансий. Идемпотентность AI:
 `(user, preference, vacancy, vacancy_revision)`; provider failures повторяются
 до пяти раз и затем переходят в dead-letter. Ошибка/отсутствие AI не отменяет
 сохранённый deterministic результат.
+
+Batch-ответ — JSON-объект с ровно одним решением на каждый opaque
+`vacancy_id`. Duplicate/unknown ID отклоняет пакет; missing item остаётся
+retryable. Context-limit, truncation, malformed и partial output рекурсивно
+делят только неразрешённые элементы до singleton fallback. Счётчики вакансий
+отделены от HTTP attempts, batches, retries и provider-reported token usage.
 
 Ручной snapshot и outbox не создают отдельные копии вакансий. Если одна вакансия
 попала в оба пути, unique key результата `(user, preference, vacancy, method, …)`

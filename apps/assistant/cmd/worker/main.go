@@ -4,8 +4,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,6 +19,23 @@ import (
 
 // localStore is an explicit test-only fallback.
 type localStore struct{}
+
+type limitedTransport struct {
+	mu        sync.Mutex
+	remaining int
+	base      http.RoundTripper
+}
+
+func (t *limitedTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	t.mu.Lock()
+	if t.remaining <= 0 {
+		t.mu.Unlock()
+		return nil, fmt.Errorf("controlled external request limit reached")
+	}
+	t.remaining--
+	t.mu.Unlock()
+	return t.base.RoundTrip(request)
+}
 
 func (localStore) TryLock(context.Context) (func() error, bool, error) {
 	return func() error { return nil }, true, nil
@@ -40,6 +59,8 @@ func main() {
 	probeExternal := flag.Bool("probe-external", false, "make exactly one synthetic provider health call")
 	providerTimeout := flag.Duration("provider-timeout", 0, "override provider timeout for this worker")
 	batchSize := flag.Int("batch-size", 0, "override durable processing batch size")
+	maxSnapshotPages := flag.Int("max-snapshot-pages", 0, "pause a manual run after this many durable pages")
+	maxExternalHTTP := flag.Int("max-external-http", 0, "cap external HTTP calls for a controlled verification")
 	flag.Parse()
 	_ = godotenv.Overload()
 	log := logging.New(logging.Options{Service: "assistant-worker", Env: envOr("APP_ENV", "local"), Level: envOr("LOG_LEVEL", "info")})
@@ -58,6 +79,9 @@ func main() {
 	}
 	if *batchSize > 0 && *batchSize <= 100 {
 		opts.BatchSize = *batchSize
+	}
+	if *maxSnapshotPages > 0 {
+		opts.MaxSnapshotPages = *maxSnapshotPages
 	}
 	var store assistant.WorkerStore = localStore{}
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -117,11 +141,19 @@ func main() {
 		if *providerTimeout > 0 {
 			cfg.Timeout = *providerTimeout
 		}
+		var providerClient *http.Client
+		if *maxExternalHTTP > 0 {
+			providerClient = &http.Client{
+				Timeout:   cfg.Timeout,
+				Transport: &limitedTransport{remaining: *maxExternalHTTP, base: http.DefaultTransport},
+			}
+		}
 		provider, err := assistant.NewDeepSeek(assistant.DeepSeekConfig{
 			APIKey: cfg.DeepSeekAPIKey, BaseURL: cfg.DeepSeekBaseURL,
-			Model: cfg.DeepSeekModel, Timeout: cfg.Timeout, MaxTokens: 1800,
+			Model: cfg.DeepSeekModel, Timeout: cfg.Timeout, MaxTokens: cfg.AIMaxOutputTokens,
 			MaxAttempts: 3, MinInterval: time.Second,
-		}, nil)
+			MaxBatchSize: cfg.AIMaxBatchSize, InputTokenBudget: cfg.AIInputTokenBudget,
+		}, providerClient)
 		if err != nil {
 			log.Error("assistant_worker_ai_config_failed", "kind", "provider_not_configured")
 			os.Exit(1)

@@ -231,6 +231,10 @@ export interface AssistantStatus {
   ai_skipped: number
   ai_http_attempts?: number
   ai_retries?: number
+  ai_batches?: number
+  ai_prompt_tokens?: number
+  ai_completion_tokens?: number
+  ai_cached_tokens?: number
   ai_rate_limit?: number
   ai_timeouts?: number
   ai_invalid_responses?: number

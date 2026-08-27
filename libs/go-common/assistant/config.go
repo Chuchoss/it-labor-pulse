@@ -11,21 +11,25 @@ type Config struct {
 	Enabled, AIEnabled, TelegramEnabled, DevAuthEnabled              bool
 	DeepSeekAPIKey, DeepSeekBaseURL, DeepSeekModel, TelegramBotToken string
 	BatchSize                                                        int
+	AIMaxBatchSize, AIInputTokenBudget, AIMaxOutputTokens            int
 	Timeout                                                          time.Duration
 }
 
 func LoadConfig() Config {
 	return Config{
-		Enabled:          envBool("ASSISTANT_ENABLED", false),
-		AIEnabled:        envBool("ASSISTANT_AI_ENABLED", false),
-		TelegramEnabled:  envBool("ASSISTANT_TELEGRAM_ENABLED", false),
-		DevAuthEnabled:   envBool("ASSISTANT_DEV_AUTH_ENABLED", false),
-		DeepSeekAPIKey:   strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")),
-		DeepSeekBaseURL:  strings.TrimSpace(os.Getenv("DEEPSEEK_BASE_URL")),
-		DeepSeekModel:    strings.TrimSpace(os.Getenv("DEEPSEEK_MODEL")),
-		TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
-		BatchSize:        envInt("ASSISTANT_BATCH_SIZE", 25, 1, 100),
-		Timeout:          time.Duration(envInt("ASSISTANT_TIMEOUT_SEC", 90, 10, 300)) * time.Second,
+		Enabled:            envBool("ASSISTANT_ENABLED", false),
+		AIEnabled:          envBool("ASSISTANT_AI_ENABLED", false),
+		TelegramEnabled:    envBool("ASSISTANT_TELEGRAM_ENABLED", false),
+		DevAuthEnabled:     envBool("ASSISTANT_DEV_AUTH_ENABLED", false),
+		DeepSeekAPIKey:     strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")),
+		DeepSeekBaseURL:    strings.TrimSpace(os.Getenv("DEEPSEEK_BASE_URL")),
+		DeepSeekModel:      strings.TrimSpace(os.Getenv("DEEPSEEK_MODEL")),
+		TelegramBotToken:   strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
+		BatchSize:          envInt("ASSISTANT_BATCH_SIZE", 25, 1, 100),
+		AIMaxBatchSize:     envInt("ASSISTANT_AI_MAX_BATCH_SIZE", 5, 1, 25),
+		AIInputTokenBudget: envInt("ASSISTANT_AI_INPUT_TOKEN_BUDGET", 24000, 4000, 900000),
+		AIMaxOutputTokens:  envInt("ASSISTANT_AI_MAX_OUTPUT_TOKENS", 3500, 700, 10000),
+		Timeout:            time.Duration(envInt("ASSISTANT_TIMEOUT_SEC", 90, 10, 300)) * time.Second,
 	}
 }
 func envBool(key string, fallback bool) bool {

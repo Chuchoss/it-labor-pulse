@@ -78,21 +78,31 @@ type WorkerDelivery struct {
 	PreferenceVersion int
 }
 
+type aiJob struct {
+	candidate WorkerCandidate
+	user      WorkerUser
+	match     WorkerMatch
+	request   Request
+	shared    string
+}
+
 type WorkerOptions struct {
-	Source          string
-	Cutoff          time.Time
-	BatchSize       int
-	Now             time.Time
-	Log             *slog.Logger
-	AIProvider      AIProvider
-	AIThreshold     float64
-	TelegramEnabled bool
+	Source           string
+	Cutoff           time.Time
+	BatchSize        int
+	Now              time.Time
+	Log              *slog.Logger
+	AIProvider       AIProvider
+	AIThreshold      float64
+	TelegramEnabled  bool
+	MaxSnapshotPages int
 }
 
 type WorkerStats struct {
 	Users, Processed, Eligible, Matched, Notified, Skipped, AICalls int
 	AIEligible, AISucceeded, AIMatches, AIFailures, AISkipped       int
-	AIHTTPAttempts, AIRetries                                       int
+	AIHTTPAttempts, AIRetries, AIBatches                            int
+	AIPromptTokens, AICompletionTokens, AICachedTokens              int
 	AIRateLimit, AITimeouts, AIInvalidResponses, AIAuth             int
 	AIQuota, AIServer, AINetwork, AIContextLimit, AIContentFilter   int
 	AIInvalidRequest                                                int
@@ -108,6 +118,8 @@ func (s WorkerStats) LogValue() slog.Value {
 		slog.Int("ai_matches", s.AIMatches), slog.Int("ai_failures", s.AIFailures),
 		slog.Int("ai_skipped", s.AISkipped), slog.String("ai_status", s.AIStatus),
 		slog.Int("ai_http_attempts", s.AIHTTPAttempts), slog.Int("ai_retries", s.AIRetries),
+		slog.Int("ai_batches", s.AIBatches), slog.Int("ai_prompt_tokens", s.AIPromptTokens),
+		slog.Int("ai_completion_tokens", s.AICompletionTokens), slog.Int("ai_cached_tokens", s.AICachedTokens),
 		slog.Int("ai_rate_limit", s.AIRateLimit), slog.Int("ai_timeouts", s.AITimeouts),
 		slog.Int("ai_invalid_responses", s.AIInvalidResponses),
 		slog.String("ai_skip_reason", s.AISkipReason),
@@ -168,6 +180,8 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 				AIEligible: run.AIEligible, AISucceeded: run.AISucceeded,
 				AIMatches: run.AIMatches, AIFailures: run.AIFailures, AISkipped: run.AISkipped,
 				AIHTTPAttempts: run.AIHTTPAttempts, AIRetries: run.AIRetries,
+				AIBatches: run.AIBatches, AIPromptTokens: run.AIPromptTokens,
+				AICompletionTokens: run.AICompletionTokens, AICachedTokens: run.AICachedTokens,
 				AIRateLimit: run.AIRateLimit, AITimeouts: run.AITimeouts,
 				AIInvalidResponses: run.AIInvalidResponses, AIAuth: run.AIAuth, AIQuota: run.AIQuota,
 				AIServer: run.AIServer, AINetwork: run.AINetwork, AIContextLimit: run.AIContextLimit,
@@ -181,6 +195,7 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 			if !ok {
 				return stats, errors.New("assistant snapshot store is not configured")
 			}
+			pages := 0
 			for {
 				candidates, candidateErr := snapshot.SnapshotCandidates(ctx, run, opts.BatchSize)
 				if candidateErr != nil {
@@ -201,9 +216,21 @@ func RunOnce(ctx context.Context, store WorkerStore, opts WorkerOptions) (stats 
 				if err = snapshot.UpdateAssistantRunProgress(ctx, run.ID, stats, last); err != nil {
 					return stats, err
 				}
+				pages++
 				if last != nil {
 					run.CursorCreatedAt = &last.CreatedAt
 					run.CursorVacancyID = last.ID
+				}
+				if opts.MaxSnapshotPages > 0 && pages >= opts.MaxSnapshotPages {
+					control, ok := store.(AssistantRunControlStore)
+					if !ok {
+						return stats, errors.New("assistant run control store is not configured")
+					}
+					if err := control.PauseAssistantRun(ctx, run.ID); err != nil {
+						return stats, err
+					}
+					claimedRunID = ""
+					return stats, nil
 				}
 			}
 			return stats, nil
@@ -249,6 +276,8 @@ func processCandidates(
 	stats *WorkerStats,
 	manual bool,
 ) error {
+	jobs := make([]aiJob, 0, len(candidates))
+	candidateFailed := make(map[string]bool, len(candidates))
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -256,7 +285,6 @@ func processCandidates(
 		if !candidate.AIRetry {
 			stats.Processed++
 		}
-		candidateFailed := false
 		for _, user := range users {
 			settings := AutomationSettings{}
 			if settingsStore, ok := store.(AutomationStore); ok {
@@ -339,75 +367,33 @@ func processCandidates(
 				"salary":                 candidate.SalaryText,
 				"deterministic_decision": string(result.Decision),
 				"deterministic_score":    strconv.FormatFloat(result.Score, 'f', 2, 64),
-				"preferences":            preferenceSnapshot(user.Preference),
 				"description_truncated":  strconv.FormatBool(candidate.DescriptionTruncated),
 			}
 			input := MinimizedInput(candidate.Title, candidate.Description, facts, evidence)
+			shared := "PREFERENCES_JSON:\n" + preferenceSnapshot(user.Preference)
 			match := WorkerMatch{
 				UserID: user.ID, VacancyID: candidate.ID, PreferenceVersion: user.Preference.Version,
 				VacancyRevision: candidate.Revision, Result: result, Method: "ai", Provider: "deepseek",
-				PromptVersion: "description-v1", InputSnapshotHash: sha256Bytes(input),
+				PromptVersion: "batch-v2", InputSnapshotHash: sha256Bytes(shared + "\n" + input),
 			}
-			request := Request{InputSnapshot: input, Evidence: evidence}
-			var output MatchOutput
-			providerStats := ProviderCallStats{HTTPAttempts: 1}
-			var providerErr error
-			if detailed, ok := opts.AIProvider.(DetailedAIProvider); ok {
-				output, providerStats, providerErr = detailed.CompleteDetailed(ctx, request)
-			} else {
-				output, providerErr = opts.AIProvider.Complete(ctx, request)
-			}
-			if candidate.AIRetry {
-				stats.AIRetries += providerStats.HTTPAttempts
-			} else {
-				stats.AICalls++
-				stats.AIRetries += providerStats.Retries
-			}
-			stats.AIHTTPAttempts += providerStats.HTTPAttempts
-			if providerErr != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				if !candidate.AIRetry {
-					stats.AIFailures++
-				}
-				candidateFailed = true
-				category := providerStats.Category
-				if category == "" {
-					category = providerErrorCategory(providerErr)
-				}
-				countProviderFailure(stats, category)
-				if opts.Log != nil {
-					opts.Log.Warn("assistant_ai_inference_failed",
-						"run_id", stats.RunID, "category", category,
-						"http_attempts", providerStats.HTTPAttempts,
-						"retries", providerStats.Retries,
-						"latency_ms", providerStats.Latency.Milliseconds())
-				}
-				if err := durable.SaveAIFailure(ctx, match, category); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := durable.SaveAIResult(ctx, match, output); err != nil {
-				return err
-			}
-			if candidate.AIRetry && stats.AIFailures > 0 {
-				stats.AIFailures--
-			}
-			stats.AISucceeded++
-			if output.Decision == string(DecisionMatch) {
-				stats.AIMatches++
-			}
+			jobs = append(jobs, aiJob{
+				candidate: candidate, user: user, match: match, shared: shared,
+				request: Request{InputSnapshot: input, Evidence: evidence},
+			})
 		}
-		if !manual {
-			workItems, ok := store.(WorkItemStore)
-			if ok {
+	}
+	if len(jobs) > 0 {
+		if err := processAIJobs(ctx, store.(AIStore), opts, jobs, stats, candidateFailed); err != nil {
+			return err
+		}
+	}
+	if !manual {
+		if workItems, ok := store.(WorkItemStore); ok {
+			for _, candidate := range candidates {
 				var itemErr error
-				if candidateFailed {
-					itemErr = workItems.RetryWorkItem(
-						ctx, candidate.Source, candidate.ExternalID, candidate.Revision, "ai_provider_failed",
-					)
+				if candidateFailed[candidate.ID] {
+					itemErr = workItems.RetryWorkItem(ctx, candidate.Source, candidate.ExternalID,
+						candidate.Revision, "ai_provider_failed")
 				} else {
 					itemErr = workItems.CompleteWorkItem(ctx, candidate.Source, candidate.ExternalID, candidate.Revision)
 				}
@@ -415,6 +401,120 @@ func processCandidates(
 					return itemErr
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func processAIJobs(
+	ctx context.Context,
+	store AIStore,
+	opts WorkerOptions,
+	jobs []aiJob,
+	stats *WorkerStats,
+	candidateFailed map[string]bool,
+) error {
+	recordStats := func(call ProviderCallStats) {
+		stats.AIHTTPAttempts += call.HTTPAttempts
+		stats.AIRetries += call.Retries
+		stats.AIBatches += call.Batches
+		stats.AIPromptTokens += call.PromptTokens
+		stats.AICompletionTokens += call.CompletionTokens
+		stats.AICachedTokens += call.CachedTokens
+	}
+	finish := func(job aiJob, output MatchOutput, category string) error {
+		if !job.candidate.AIRetry {
+			stats.AICalls++
+		} else {
+			stats.AIRetries++
+		}
+		if category != "" {
+			if !job.candidate.AIRetry {
+				stats.AIFailures++
+			}
+			candidateFailed[job.candidate.ID] = true
+			countProviderFailure(stats, category)
+			if opts.Log != nil {
+				opts.Log.Warn("assistant_ai_inference_failed", "run_id", stats.RunID, "category", category)
+			}
+			return store.SaveAIFailure(ctx, job.match, category)
+		}
+		if err := store.SaveAIResult(ctx, job.match, output); err != nil {
+			return err
+		}
+		if job.candidate.AIRetry && stats.AIFailures > 0 {
+			stats.AIFailures--
+		}
+		stats.AISucceeded++
+		if output.Decision == string(DecisionMatch) {
+			stats.AIMatches++
+		}
+		return nil
+	}
+
+	if batchProvider, ok := opts.AIProvider.(BatchAIProvider); ok {
+		groups := map[string][]aiJob{}
+		order := make([]string, 0)
+		for _, job := range jobs {
+			if _, exists := groups[job.shared]; !exists {
+				order = append(order, job.shared)
+			}
+			groups[job.shared] = append(groups[job.shared], job)
+		}
+		for _, shared := range order {
+			group := groups[shared]
+			items := make([]BatchItem, 0, len(group))
+			for _, job := range group {
+				items = append(items, BatchItem{
+					ID: job.candidate.ID, InputSnapshot: job.request.InputSnapshot, Evidence: job.request.Evidence,
+				})
+			}
+			result, err := batchProvider.CompleteBatchDetailed(ctx, BatchRequest{
+				SharedPreferences: shared, Items: items,
+			})
+			recordStats(result.Stats)
+			if err != nil {
+				return err
+			}
+			for _, job := range group {
+				output, ok := result.Outputs[job.candidate.ID]
+				category := result.Errors[job.candidate.ID]
+				if !ok && category == "" {
+					category = ProviderErrorInvalidResponse
+				}
+				if err := finish(job, output, category); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for _, job := range jobs {
+		request := job.request
+		request.InputSnapshot = job.shared + "\n" + request.InputSnapshot
+		var output MatchOutput
+		call := ProviderCallStats{HTTPAttempts: 1, Batches: 1}
+		var err error
+		if detailed, ok := opts.AIProvider.(DetailedAIProvider); ok {
+			output, call, err = detailed.CompleteDetailed(ctx, request)
+			call.Batches = 1
+		} else {
+			output, err = opts.AIProvider.Complete(ctx, request)
+		}
+		recordStats(call)
+		category := ""
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			category = call.Category
+			if category == "" {
+				category = providerErrorCategory(err)
+			}
+		}
+		if err := finish(job, output, category); err != nil {
+			return err
 		}
 	}
 	return nil

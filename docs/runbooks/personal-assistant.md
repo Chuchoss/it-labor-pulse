@@ -89,6 +89,16 @@ DeepSeek использует официальный OpenAI-compatible endpoint
 [Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion).
 Проверяйте актуальные модели и цены перед включением billing.
 
+Проверено по официальной документации 2026-08-27: модели V4 имеют context
+window 1M и max output 384K, JSON Output поддерживается через
+`response_format=json_object`, а disk context cache включён автоматически.
+Usage содержит `prompt_tokens`, `completion_tokens`,
+`prompt_cache_hit_tokens` и `prompt_cache_miss_tokens`. Ограничения описаны как
+account concurrency (Flash — 2500); отдельный discounted async Batch API в
+официальном контракте не опубликован, поэтому worker использует обычный
+`/chat/completions`. Локальный safety limit намеренно существенно ниже:
+24 000 оценочных input tokens, максимум 5 вакансий и 3 500 output tokens.
+
 Telegram использует только официальный Bot API: [sendMessage и
 getUpdates](https://core.telegram.org/bots/api/). Webhook и long polling
 взаимоисключающие. Команда `go run ./apps/assistant/cmd/telegram-linker`
@@ -115,15 +125,20 @@ outbox-пути; ручной snapshot намеренно анализирует
 AI-идемпотентность включает пользователя, immutable preference, вакансию и её
 analysis revision. Автоматический режим не backfill-ит вакансии до
 `activation_at`, но повторно ставит содержательно изменившуюся ревизию.
-Лимитов количества AI-запросов на запуск и на пользователя в час нет. Каждый
-элемент снимка или допустимый новый outbox item может создать платный запрос;
-batch size/rate limiting ограничивают только скорость. Provider
+Лимитов количества AI-вакансий на запуск и на пользователя в час нет.
+Preferences передаются один раз на адаптивный пакет, а вакансии — отдельными
+недоверенными records с opaque ID. `ASSISTANT_AI_MAX_BATCH_SIZE`,
+`ASSISTANT_AI_INPUT_TOKEN_BUDGET` и `ASSISTANT_AI_MAX_OUTPUT_TOKENS` ограничивают
+один HTTP-запрос; rate limiting ограничивает только скорость. Provider
 429/5xx/network/timeout повторяются до трёх HTTP-попыток с экспоненциальной
 задержкой и jitter; `Retry-After` имеет приоритет. Некорректный JSON/схема
 получает один repair retry, auth/quota/invalid-request не повторяются. Timeout
 одного запроса по умолчанию 90 секунд. Счётчики отдельно показывают отправленные
 AI-вакансии, все HTTP-попытки, retries и финальные ошибки по безопасным
-категориям без provider body.
+категориям без provider body. Partial/malformed/truncated/context-limit пакет
+делится пополам; успешно валидированные IDs не переотправляются, а singleton
+использует прежний устойчивый путь. UI показывает вакансии, HTTP requests,
+средний batch, retries и provider-reported tokens без сырого content.
 
 Чтобы немедленно остановить новые расходы, завершите единственный worker.
 После аварийной остановки зафиксируйте resumable-состояние:

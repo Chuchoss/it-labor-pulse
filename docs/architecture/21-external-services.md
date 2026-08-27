@@ -40,7 +40,7 @@
 | Remotive API | remotive.com | **later** | Remote jobs | TBD | ToS / API docs провайдера | Target; официальный API only |
 | Kafka (messaging) | TBD (local: Redpanda) | **later** (Phase 2) | Async pipeline raw→normalized | `KAFKA_BROKERS`, consumer groups | [07-messaging.md](./07-messaging.md), ADR 003 | Провайдер managed Kafka — TBD; local — Redpanda optional |
 | ClickHouse (OLAP) | TBD | **later** (Phase 2) | Trends / тяжёлая аналитика | `CLICKHOUSE_*` | [05-data-model.md](./05-data-model.md), ADR 005 | Провайдер TBD |
-| AI provider | TBD | **later** (Phase 4) | AI-анализ / inference | TBD | [08-integrations…](./08-integrations-and-extensibility.md) | Не раньше Phase 4 |
+| AI provider | [DeepSeek API](https://api-docs.deepseek.com/) | **выбрано** (Phase 4) | Опциональный персональный анализ вакансий | `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL` | [ADR 015](./adr/015-personal-assistant-ai-telegram.md), [runbook](../runbooks/personal-assistant.md) | Только server-side opt-in; обычный Chat Completions с адаптивными пакетами, отдельный async Batch API не заявлен |
 | Edu platform (курсы) | Stepik | **кандидат** (Phase 5) | Learning-interest signals для «Тенденции» | TBD | ToS / API docs провайдера | API availability **не проверена**; аккаунта/ключа нет. Только официальный API |
 | Edu platform (курсы) | Coursera | **кандидат** (Phase 5) | Каталог / proxies интереса к обучению | TBD | Partner/API docs | Доступ к API часто партнёрский — статус TBD; без scraping |
 | Edu platform (курсы) | Skillbox | **кандидат** (Phase 5) | RU learning signals | TBD | ToS / публичные данные | API **unknown**; не утверждать наличие контракта |

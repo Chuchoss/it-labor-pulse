@@ -472,6 +472,10 @@ refresh, `processed/total`, deterministic `matched`, а отдельно
 `ai_matches`, `ai_failures` и `ai_skipped`. `ai_calls` означает уникальные
 отправки вакансий, `ai_http_attempts` — все HTTP-попытки, а `ai_retries` —
 повторные запросы. `ai_failures` считает только вакансии с финальной ошибкой;
+`ai_batches` считает логические пакеты, а `ai_prompt_tokens`,
+`ai_completion_tokens` и `ai_cached_tokens` — безопасные usage-агрегаты без
+prompt/response content. У исторических singleton-запусков token counters
+равны нулю, а размер пакета читается как 1/unknown.
 категории `rate_limit`, `timeout`, `invalid_response`, auth/quota/5xx/network,
 context/content-filter и invalid-request возвращаются отдельными счётчиками.
 Состояние `paused` сохраняет cursor и разрешает продолжить тот же run. Нулевые `ai_calls` означают
